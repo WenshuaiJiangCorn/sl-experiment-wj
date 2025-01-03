@@ -1,4 +1,4 @@
-"""This module provides ModuleInterface implementations for the hardware used by the Sun lab VR-mesoscope."""
+"""This module provides ModuleInterface implementations for the hardware used by the Sun lab VR-Mesoscope system."""
 
 from json import dumps
 import math
@@ -507,35 +507,6 @@ class BreakInterface(ModuleInterface):
         """Not used."""
         return
 
-    def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
-        """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
-        to the break hardware by the BreakModule.
-
-        Use this method to convert the desired breaking torque into the PWM value that can be submitted to the
-        BreakModule via the set_parameters() class method.
-
-        Args:
-            target_torque_n_cm: Desired torque in Newtons centimeter at the edge of the object.
-
-        Returns:
-            The byte PWM value that would generate the desired amount of torque.
-
-        Raises:
-            ValueError: If the input force is not within the valid range for the BreakModule.
-        """
-        if self._maximum_break_strength < target_torque_n_cm or self._minimum_break_strength > target_torque_n_cm:
-            message = (
-                f"The requested torque {target_torque_n_cm} N cm is outside the valid range for the BreakModule "
-                f"{self._module_id}. Valid breaking torque range is from {self._minimum_break_strength} to "
-                f"{self._maximum_break_strength}."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Calculates PWM using the pre-computed torque_per_pwm conversion factor
-        pwm_value = np.uint8(round((target_torque_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
-
-        return pwm_value
-
     def set_parameters(self, breaking_strength: np.uint8 = np.uint8(255)) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the BreakModule instance.
 
@@ -613,6 +584,35 @@ class BreakInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
+    def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
+        """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
+        to the break hardware by the BreakModule.
+
+        Use this method to convert the desired breaking torque into the PWM value that can be submitted to the
+        BreakModule via the set_parameters() class method.
+
+        Args:
+            target_torque_n_cm: Desired torque in Newtons centimeter at the edge of the object.
+
+        Returns:
+            The byte PWM value that would generate the desired amount of torque.
+
+        Raises:
+            ValueError: If the input force is not within the valid range for the BreakModule.
+        """
+        if self._maximum_break_strength < target_torque_n_cm or self._minimum_break_strength > target_torque_n_cm:
+            message = (
+                f"The requested torque {target_torque_n_cm} N cm is outside the valid range for the BreakModule "
+                f"{self._module_id}. Valid breaking torque range is from {self._minimum_break_strength} to "
+                f"{self._maximum_break_strength}."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Calculates PWM using the pre-computed torque_per_pwm conversion factor
+        pwm_value = np.uint8(round((target_torque_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
+
+        return pwm_value
+
     @property
     def torque_per_pwm(self) -> np.float64:
         """Returns the conversion factor to translate break pwm levels into breaking torque in Newton centimeters."""
@@ -647,8 +647,11 @@ class ValveInterface(ModuleInterface):
             this data using the ValveModule.
 
     Attributes:
-        _microliters_per_microsecond: The conversion factor from desired fluid volume in microliters to the pulse
-            valve duration in microseconds.
+        _microliters_per_microsecond: The conversion factor that maps the valve open time, in microseconds, to the
+            volume of dispensed fluid, in microliters.
+        _intercept; The intercept of the valve calibration curve. This is used to account for the fact that some valves
+            may have a minimum open time or dispensed fluid volume, which is captured by the intercept. This improves
+            the precision of fluid-volume-to-valve-open-time conversions.
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
     """
 
@@ -674,10 +677,12 @@ class ValveInterface(ModuleInterface):
         pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
         fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
 
-        # Computes the conversion factor by finding the slope of the calibration curve.
-        # Rounds to 12 decimal places for consistency and to ensure repeatability
-        slope: np.float64 = polyfit(x=pulse_durations, y=fluid_volumes, deg=1)[0]  # type: ignore
+        # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
+        slope: np.float64
+        intercept: np.float64
+        slope, intercept = np.polyfit(pulse_durations, fluid_volumes, deg=1)  # type: ignore
         self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
+        self._intercept: np.float64 = np.round(a=intercept, decimals=12)
 
         # Stores the reward topic separately to make it accessible via property
         self._reward_topic = "Gimbl/Reward/"
@@ -690,34 +695,21 @@ class ValveInterface(ModuleInterface):
     ) -> None:
         # Since the only data code that requires further processing is code 54 (kCalibrated), this method statically
         # puts 'calibrated' into the queue as a one-element tuple.
-        mp_queue.put(('Calibrated',))
+        if message.event == 54:
+            mp_queue.put(('Calibrated',))
 
     def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
         # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
         # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
         # desired amount of water reward.
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
-        )
-
-    def get_duration_from_volume(self, volume: float) -> np.uint32:
-        """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
-        will use to deliver that fluid volume.
-
-        Use this method to convert the desired fluid volume into the pulse_duration value that can be submitted to the
-        ValveModule via the set_parameters() class method.
-
-        Args:
-            volume: Desired fluid volume in microliters.
-
-        Returns:
-            The microsecond pulse duration that would be used to deliver the specified volume.
-        """
-        return np.uint32(np.round(volume / self._microliters_per_microsecond))
+        if topic == self._reward_topic:
+            return OneOffModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
+            )
 
     def set_parameters(
             self,
@@ -846,6 +838,32 @@ class ValveInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
+    def get_duration_from_volume(self, target_volume: float) -> np.uint32:
+        """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
+        will use to deliver that fluid volume.
+
+        Use this method to convert the desired fluid volume into the pulse_duration value that can be submitted to the
+        ValveModule via the set_parameters() class method.
+
+        Args:
+            target_volume: Desired fluid volume in microliters.
+
+        Raises:
+            ValueError: If the desired fluid volume is too small to be reliably dispensed by the valve, based on its
+                calibration data.
+
+        Returns:
+            The microsecond pulse duration that would be used to deliver the specified volume.
+        """
+        if target_volume < self._intercept:
+            message = (
+                f"The requested volume {target_volume} uL is too small to be reliably dispensed by the ValveModule "
+                f"{self._module_id}. Specifically, the smallest volume of fluid the valve can reliably dispense is "
+                f"{self._intercept} uL."
+            )
+            console.error(message=message, error=ValueError)
+        return np.uint32(np.round(target_volume / self._microliters_per_microsecond + self._intercept))
+
     @property
     def mqtt_topic(self) -> str:
         """Returns the MQTT topic monitored by the module to receive reward commands from Unity."""
@@ -856,6 +874,11 @@ class ValveInterface(ModuleInterface):
         """Returns the conversion factor to translate valve open time, in microseconds, into the volume of dispensed
         fluid, in microliters."""
         return self._microliters_per_microsecond
+
+    @property
+    def minimum_dispensed_volume(self) -> np.float64:
+        """Returns the minimum volume that the valve can reliably dispense."""
+        return self._intercept
 
 
 class LickInterface(ModuleInterface):
@@ -890,7 +913,7 @@ class LickInterface(ModuleInterface):
     Attributes:
         _sensor_topic: Stores the output MQTT topic.
         _lick_threshold: The threshold voltage for detecting a tongue contact.
-        _volt_per_adc: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
+        _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
     """
 
@@ -914,7 +937,7 @@ class LickInterface(ModuleInterface):
         self._lick_threshold: np.uint16 = np.uint16(lick_threshold)
 
         # Statically computes the voltage resolution of each analog step, assuming a 3.3V ADC with 12-bit resolution.
-        self._volt_per_adc = np.round(
+        self._volt_per_adc_unit = np.round(
             a=np.float64(3.3 / (2 ** 12)),
             decimals=12
         )
@@ -951,7 +974,7 @@ class LickInterface(ModuleInterface):
 
         Notes:
             All threshold parameters are inclusive! if you need help determining appropriate threshold levels for
-            specific targeted voltages, use convert_to_adc() method of the interface instance.
+            specific targeted voltages, use get_adc_units_from_volts() method of the interface instance.
 
         Args:
             lower_threshold: The minimum voltage level, in raw analog units of 12-bit Analog-to-Digital-Converter (ADC),
@@ -978,23 +1001,6 @@ class LickInterface(ModuleInterface):
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(upper_threshold, lower_threshold, delta_threshold, averaging_pool_size),
         )
-
-    def get_adc_from_volts(self, voltage: int | float) -> np.uint16:
-        """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
-
-        Use this method to determine the appropriate raw analog units for the threshold arguments of the
-        set_parameters() method, based on the desired voltage thresholds.
-
-        Notes:
-            This method assumes a 3.3V ADC with 12-bit resolution.
-
-        Args:
-            voltage: The voltage to convert to raw analog units, in Volts.
-
-        Returns:
-            The raw analog units of 12-bit ADC for the input voltage.
-        """
-        return np.uint16(np.round(voltage / self._volt_per_adc))
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
         """ Returns the voltage signal detected by the analog pin monitored by the LickModule.
@@ -1034,28 +1040,46 @@ class LickInterface(ModuleInterface):
             cycle_delay=repetition_delay,
         )
 
+    def get_adc_units_from_volts(self, voltage: int | float) -> np.uint16:
+        """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
+
+        Use this method to determine the appropriate raw analog units for the threshold arguments of the
+        set_parameters() method, based on the desired voltage thresholds.
+
+        Notes:
+            This method assumes a 3.3V ADC with 12-bit resolution.
+
+        Args:
+            voltage: The voltage to convert to raw analog units, in Volts.
+
+        Returns:
+            The raw analog units of 12-bit ADC for the input voltage.
+        """
+        return np.uint16(np.round(voltage / self._volt_per_adc_unit))
+
     @property
     def mqtt_topic(self) -> str:
         """Returns the MQTT topic used to transfer lick events from the interface to Unity."""
         return self._sensor_topic
 
     @property
-    def volts_per_adc(self) -> np.float64:
+    def volts_per_adc_unit(self) -> np.float64:
         """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into voltage in
         Volts."""
-        return self._volt_per_adc
+        return self._volt_per_adc_unit
 
 
 class TorqueInterface(ModuleInterface):
     """Interfaces with TorqueModule instances running on Ataraxis MicroControllers.
 
-    TorqueModule interfaces with a bipolar torque sensor. The sensor uses bipolar coding in the millivolt range to
-    communicate torque in the CW and the CCW direction. To convert and amplify the output of the torque sensor, it is
-    wired to an AD620 microvolt amplifier instrument, that converts the output signal into a positive vector and
-    amplifies its strength to Volts range.
+    TorqueModule interfaces with a differential torque sensor. The sensor uses differential coding in the millivolt
+    range to communicate torque in the CW and the CCW direction. To convert and amplify the output of the torque sensor,
+    it is wired to an AD620 microvolt amplifier instrument, that converts the output signal into a single positive
+    vector and amplifies its strength to Volts range.
 
-    The TorqueModule further refines the signal by converting it to a range from 0 to baseline, ensuring that CCW and
-    CW torque signals behave identically (go from 0 up to baseline as the torque increases).
+    The TorqueModule further refines the sensor data by ensuring that CCW and CW torque signals behave identically.
+    Specifically, it adjusts the signal to scale from 0 to baseline proportionally to the detected torque, regardless
+    of torque direction.
 
     Notes:
         This interface receives torque as a positive uint16_t value from 0 to at most 2046 raw analog units of 3.3v
@@ -1074,19 +1098,23 @@ class TorqueInterface(ModuleInterface):
             to get this value is to measure the positive voltage level after applying the maximum CW (positive) torque.
             At most, this value can be 4095 (~3.3 V).
         sensor_capacity: The maximum torque detectable by the sensor, in grams centimeter (g cm).
+        object_diameter: The diameter of the rotating object connected to the torque sensor, in centimeters. This is
+            used to calculate the force at the edge of the object associated with the measured torque at the sensor.
 
     Attributes:
         _newton_per_gram_centimeter: Stores the hardcoded conversion factor from gram centimeter to Newton centimeter.
         _capacity_in_newtons_cm: The maximum torque detectable by the sensor in Newtons centimeter.
-        _torque_per_adc: The conversion factor to translate raw analog 3.3v 12-bit ADC values to torque in Newtons
+        _torque_per_adc_unit: The conversion factor to translate raw analog 3.3v 12-bit ADC values to torque in Newtons
             centimeter.
+        _force_per_adc_unit: The conversion factor to translate raw analog 3.3v 12-bit ADC values to force in Newtons.
     """
 
     def __init__(
             self,
-            baseline_voltage: np.uint16 = np.uint16(2046),
-            maximum_voltage: np.uint16 = np.uint16(4095),
-            sensor_capacity: np.float64 = np.float64(720.0779)  # 10 oz in
+            baseline_voltage: int = 2046,
+            maximum_voltage: int = 4095,
+            sensor_capacity: float = 720.0779,  # 10 oz in
+            object_diameter: float = 15.0333
     ) -> None:
         # data_codes = {np.uint8(51), np.uint8(52)}  # kCCWTorque, kCWTorque
 
@@ -1100,23 +1128,27 @@ class TorqueInterface(ModuleInterface):
             error_codes=None
         )
 
-        # Hardcodes the conversion factor used to translate torque force in g cm to N cm
-        self._newton_per_gram_centimeter: float = 0.0000981
+        # Hardcodes the conversion factor used to translate torque in g cm to N cm
+        self._newton_per_gram_centimeter: np.float64 = np.float64(0.00981)
 
         # Determines the capacity of the torque sensor in Newtons centimeter.
         self._capacity_in_newtons_cm: np.float64 = np.round(
-            a=sensor_capacity / self._newton_per_gram_centimeter,
+            a=np.float64(sensor_capacity) * self._newton_per_gram_centimeter,
             decimals=12,
         )
 
-        # Determines the conversion factor to go from ADC raw units to volts.
-        volts_per_adc = np.float64(3.3 / (2 ** 12))
-
         # Computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
-        # unidirectional torque force in Newton centimeter. Rounds to 12 decimal places for consistency and to ensure
+        # torque in Newton centimeter. Rounds to 12 decimal places for consistency and to ensure
         # repeatability.
-        self._torque_per_adc = np.round(
-            a=((self._capacity_in_newtons_cm / (maximum_voltage - baseline_voltage)) / volts_per_adc),
+        self._torque_per_adc_unit = np.round(
+            a=(self._capacity_in_newtons_cm / (maximum_voltage - baseline_voltage)),
+            decimals=12,
+        )
+
+        # Also computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
+        # force in Newtons.
+        self._force_per_adc_unit = np.round(
+            a=self._torque_per_adc_unit / (object_diameter / 2),
             decimals=12,
         )
 
@@ -1149,7 +1181,7 @@ class TorqueInterface(ModuleInterface):
 
         Notes:
             All threshold parameters are inclusive! If you need help determining appropriate threshold levels for
-            specific targeted torque levels, use convert_to_adc() method of the interface instance.
+            specific targeted torque levels, use get_adc_units_from_torque() method of the interface instance.
 
         Args:
             report_ccw: Determines whether the sensor should report torque in the CounterClockwise (CCW) direction.
@@ -1221,7 +1253,7 @@ class TorqueInterface(ModuleInterface):
             cycle_delay=repetition_delay,
         )
 
-    def convert_to_adc(self, torque: int | float) -> np.uint16:
+    def get_adc_units_from_torque(self, target_torque: int | float) -> np.uint16:
         """Converts the input torque to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
 
         Use this method to determine the appropriate raw analog units for the threshold arguments of the
@@ -1231,15 +1263,21 @@ class TorqueInterface(ModuleInterface):
             This method assumes a 3.3V ADC with 12-bit resolution.
 
         Args:
-            torque: The vtarget torque in Newton centimeter, to convert to an ADC threshold.
+            target_torque: The target torque in Newton centimeter, to convert to an ADC threshold.
 
         Returns:
             The raw analog units of 12-bit ADC for the input torque.
         """
-        return np.uint16(np.round(torque / self._torque_per_adc))
+        return np.uint16(np.round(target_torque / self._torque_per_adc_unit))
 
     @property
-    def torque_per_adc(self) -> np.float64:
+    def torque_per_adc_unit(self) -> np.float64:
         """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into torque in
         Newton centimeter."""
-        return self._torque_per_adc
+        return self._torque_per_adc_unit
+
+    @property
+    def force_per_adc_unit(self) -> np.float64:
+        """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into force in
+        Newtons."""
+        return self._force_per_adc_unit
