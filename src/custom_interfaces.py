@@ -1,7 +1,4 @@
-"""This module provides ModuleInterface implementations for the default hardware modules shipped with the
-AtaraxisMicroController library. Primarily, these classes are intended to serve as examples for how to implement
-custom module Interfaces.
-"""
+"""This module provides ModuleInterface implementations for the hardware used by the Sun lab VR-mesoscope."""
 
 from json import dumps
 import math

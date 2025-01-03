@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sl-mesoscope"
 version = "1.0.0"
-description = "Provides classes and methods that facilitate experimental data acquisition via Sun Lab's Mesoscope and Virtual Reality system."
+description = "Aggregates the software assets used to acquire experimental data via Sun lab Mesoscope and Virtual Reality systems."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.13"  # Limited to 3.11 and 3.12 until 3.13 support is added for numba
