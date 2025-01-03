@@ -428,7 +428,7 @@ class BreakInterface(ModuleInterface):
         The break will notify the PC about its initial state (Engaged or Disengaged) after setup.
 
         This class is explicitly designed to work with an 8-bit Pulse Width Modulation (PWM) resolution. Specifically,
-        it assumes that there is a total of 255 intervals covered by the whole PWM range when it calculates conversion
+        it assumes that there are a total of 255 intervals covered by the whole PWM range when it calculates conversion
         factors to go from PWM levels to torque and force.
 
     Args:
@@ -680,7 +680,7 @@ class ValveInterface(ModuleInterface):
         # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
         slope: np.float64
         intercept: np.float64
-        slope, intercept = np.polyfit(pulse_durations, fluid_volumes, deg=1)  # type: ignore
+        slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)  # type: ignore
         self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
         self._intercept: np.float64 = np.round(a=intercept, decimals=12)
 
@@ -887,7 +887,7 @@ class LickInterface(ModuleInterface):
     LickModule allows interfacing with conductive lick sensors used in the Sun Lab to detect mouse interaction with
     water dispensing tubes. The sensor works by sending a small direct current through the mouse, which is picked up by
     the sensor connected to the metal lick tube. When the mouse completes the circuit by making the contact with the
-    tube, the sensor determines whether the resultant voltage matches the threshold expected for a tongue contact and,
+    tube, the sensor determines whether the resultant voltage matches the threshold expected for a torque contact and,
     if so, notifies the PC about the contact.
 
     Notes:
@@ -906,13 +906,13 @@ class LickInterface(ModuleInterface):
         a non-zero detected value, it can be safely assumed that the sensor detects the voltage of 0.
 
     Args:
-        lick_threshold: The threshold voltage, in raw analog units recorded by a 12-bit ADC, for detecting the tongue
+        lick_threshold: The threshold voltage, in raw analog units recorded by a 12-bit ADC, for detecting the torque
             contact. Note, 12-bit ADC only supports values between 0 and 4095, so setting the threshold above 4095 will
             result in no licks being reported to Unity.
 
     Attributes:
         _sensor_topic: Stores the output MQTT topic.
-        _lick_threshold: The threshold voltage for detecting a tongue contact.
+        _lick_threshold: The threshold voltage for detecting a torque contact.
         _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
     """
@@ -1091,7 +1091,7 @@ class TorqueInterface(ModuleInterface):
 
     Args:
         baseline_voltage: The voltage level, in raw analog units measured by 3.3v ADC at 12-bit resolution after the
-            AD620 amplifier, that corresponds to 0 torque readout. Usually, for a 3.3v ADC, this would be around
+            AD620 amplifier, that corresponds to no (0) torque readout. Usually, for a 3.3v ADC, this would be around
             2046 (the midpoint, ~1.65 V).
         maximum_voltage: The voltage level, in raw analog units measured by 3.3v ADC at 12-bit resolution after the
             AD620 amplifier, that corresponds to the absolute maximum torque detectable by the sensor. The best way
