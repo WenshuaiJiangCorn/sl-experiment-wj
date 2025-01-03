@@ -41,7 +41,7 @@ class EncoderInterface(ModuleInterface):
             encoder.
         object_diameter: The diameter of the rotating object connected to the encoder, in centimeters. This is used to
             convert encoder pulses into rotated distance in cm.
-        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the circular object
+        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the connected object
              into Unity units. This value works together with object_diameter and encoder_ppr to translate raw
              encoder pulses received from the microcontroller into Unity-compatible units.
 
@@ -427,23 +427,32 @@ class BreakInterface(ModuleInterface):
     Notes:
         The break will notify the PC about its initial state (Engaged or Disengaged) after setup.
 
+        This class is explicitly designed to work with an 8-bit Pulse Width Modulation (PWM) resolution. Specifically,
+        it assumes that there is a total of 255 intervals covered by the whole PWM range when it calculates conversion
+        factors to go from PWM levels to torque and force.
+
     Args:
         minimum_break_strength: The minimum torque applied by the break in gram centimeter. This is the torque the
             break delivers at minimum voltage (break is disabled).
         maximum_break_strength: The maximum torque applied by the break in gram centimeter. This is the torque the
             break delivers at maximum voltage (break is fully engaged).
+        object_diameter: The diameter of the rotating object connected to the break, in centimeters. This is used to
+            calculate the force at the end of the object associated with each torque level of the break.
 
     Attributes:
-        _minimum_break_strength: The minimum torque the break delivers at minimum voltage (break is disabled).
-        _maximum_break_strength: The maximum torque the break delivers at maximum voltage (break is fully engaged).
         _newton_per_gram_centimeter: Conversion factor from torque force in g cm to torque force in N cm.
-        _torque_per_pwm: Conversion factor from break pwm levels to breaking force in N cm.
+        _minimum_break_strength: The minimum torque the break delivers at minimum voltage (break is disabled) in N cm.
+        _maximum_break_strength: The maximum torque the break delivers at maximum voltage (break is fully engaged) in N
+            cm.
+        _torque_per_pwm: Conversion factor from break pwm levels to breaking torque in N cm.
+        _force_per_pwm: Conversion factor from break pwm levels to breaking force in N at the edge of the object.
     """
 
     def __init__(
             self,
             minimum_break_strength: float = 43.2047,  # 0.6 in iz
             maximum_break_strength: float = 1152.1246,  # 16 in oz
+            object_diameter: float = 15.0333
     ) -> None:
         error_codes = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kEngaged, kDisengaged, kVariable
@@ -459,23 +468,29 @@ class BreakInterface(ModuleInterface):
         )
 
         # Hardcodes the conversion factor used to translate torque force in g cm to N cm
-        self._newton_per_gram_centimeter: float = 0.0000981
+        self._newton_per_gram_centimeter: float = 0.00981
 
-        # Stores additional data into class attributes. Rounds to 12 decimal places for consistency and to ensure
-        # repeatability.
+        # Converts minimum and maximum break strength into Newton centimeter
         self._minimum_break_strength: np.float64 = np.round(
-            a=minimum_break_strength / self._newton_per_gram_centimeter,
+            a=minimum_break_strength * self._newton_per_gram_centimeter,
             decimals=12,
         )
         self._maximum_break_strength: np.float64 = np.round(
-            a=maximum_break_strength / self._newton_per_gram_centimeter,
+            a=maximum_break_strength * self._newton_per_gram_centimeter,
             decimals=12,
         )
 
-        # Computes the conversion factor to translate break pwm levels into breaking force in Newtons cm. Rounds
+        # Computes the conversion factor to translate break pwm levels into breaking torque in Newtons cm. Rounds
         # to 12 decimal places for consistency and to ensure repeatability.
         self._torque_per_pwm = np.round(
             a=(self._maximum_break_strength - self._minimum_break_strength) / 255,
+            decimals=12,
+        )
+
+        # Also computes the conversion factor to translate break pwm levels into force in Newtons. TO overcome the
+        # breaking torque, the object has to experience that much force applied to its edge.
+        self._force_per_pwm = np.round(
+            a=self._torque_per_pwm / (object_diameter / 2),
             decimals=12,
         )
 
@@ -492,15 +507,15 @@ class BreakInterface(ModuleInterface):
         """Not used."""
         return
 
-    def get_pwm_from_force(self, target_force_n_cm: float) -> np.uint8:
-        """Converts the desired breaking force in Newtons centimeter to the required PWM value (0-255) to be delivered
+    def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
+        """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
         to the break hardware by the BreakModule.
 
-        Use this method to convert the desired breaking force into the PWM value that can be submitted to the
+        Use this method to convert the desired breaking torque into the PWM value that can be submitted to the
         BreakModule via the set_parameters() class method.
 
         Args:
-            target_force_n_cm: Desired force in Newtons centimeter at the edge of the object.
+            target_torque_n_cm: Desired torque in Newtons centimeter at the edge of the object.
 
         Returns:
             The byte PWM value that would generate the desired amount of torque.
@@ -508,16 +523,16 @@ class BreakInterface(ModuleInterface):
         Raises:
             ValueError: If the input force is not within the valid range for the BreakModule.
         """
-        if self._maximum_break_strength > target_force_n_cm or self._minimum_break_strength < target_force_n_cm:
+        if self._maximum_break_strength < target_torque_n_cm or self._minimum_break_strength > target_torque_n_cm:
             message = (
-                f"The requested force {target_force_n_cm} N cm is outside the valid range for the BreakModule "
-                f"{self._module_id}. Valid breaking force range is from {self._minimum_break_strength} to "
+                f"The requested torque {target_torque_n_cm} N cm is outside the valid range for the BreakModule "
+                f"{self._module_id}. Valid breaking torque range is from {self._minimum_break_strength} to "
                 f"{self._maximum_break_strength}."
             )
             console.error(message=message, error=ValueError)
 
         # Calculates PWM using the pre-computed torque_per_pwm conversion factor
-        pwm_value = np.uint8(round((target_force_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
+        pwm_value = np.uint8(round((target_torque_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
 
         return pwm_value
 
@@ -534,7 +549,7 @@ class BreakInterface(ModuleInterface):
         Args:
             breaking_strength: The Pulse-Width-Modulation (PWM) value to use when the BreakModule delivers adjustable
                 breaking power. Depending on this value, the breaking power can be adjusted from none (0) to maximum
-                (255). Use get_pwm_from_force() to translate desired breaking force into the required PWM value.
+                (255). Use get_pwm_from_force() to translate desired breaking torque into the required PWM value.
 
         Returns:
             The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
@@ -599,9 +614,14 @@ class BreakInterface(ModuleInterface):
         )
 
     @property
-    def force_per_pwm(self) -> np.float64:
-        """Returns the conversion factor to translate break pwm levels into breaking force in Newtons centimeter."""
+    def torque_per_pwm(self) -> np.float64:
+        """Returns the conversion factor to translate break pwm levels into breaking torque in Newton centimeters."""
         return self._torque_per_pwm
+
+    @property
+    def force_per_pwm(self) -> np.float64:
+        """Returns the conversion factor to translate break pwm levels into breaking force in Newtons."""
+        return self._force_per_pwm
 
 
 class ValveInterface(ModuleInterface):
@@ -629,7 +649,7 @@ class ValveInterface(ModuleInterface):
     Attributes:
         _microliters_per_microsecond: The conversion factor from desired fluid volume in microliters to the pulse
             valve duration in microseconds.
-        _reward_topic: Stores the topic used by Unity to issue reward commadns to the module.
+        _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
     """
 
     def __init__(
