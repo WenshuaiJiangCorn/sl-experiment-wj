@@ -4,10 +4,11 @@ from dask.diagnostics import ProgressBar
 from pathlib import Path
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import hashlib
 import zipfile
-
+from tqdm import tqdm
 
 def extract_frames_from_tiff_stack(image_directory: Path, stack_size: int = 500, remove_sources: bool = False) -> None:
     """Loops over all multi-frame .tiff files in the input directory and extracts all individual frames as .tiff files.
@@ -101,6 +102,42 @@ def extract_frames_from_tiff_stack(image_directory: Path, stack_size: int = 500,
         console.echo(res, level=LogLevel.SUCCESS)
 
 
+def process_file(file: Path) -> int:
+    """Reads a TIFF file and returns its stack size (if it's a 3D stack)."""
+    img: np.ndarray = tifffile.imread(str(file))
+
+    # If the file is a stack (3D), return the stack size (the first dimension of the shape)
+    if len(img.shape) == 3:
+        return img.shape[0]
+    return 0
+
+
+def find_max_stack_size(root_directory: Path) -> int:
+    # Recursively find all subdirectories
+    subdirectories = [d for d in root_directory.rglob('*') if d.is_dir()]
+
+    tiff_files = []
+
+    # Collect up to 3 .tif files from each subdirectory
+    for subdirectory in subdirectories:
+        tiff_files_in_subdir = list(subdirectory.glob("*.tif"))[:3]
+        tiff_files.extend(tiff_files_in_subdir)
+
+    console.echo(message=f"Found {len(tiff_files)} candidate .tif files.", level=LogLevel.INFO)
+
+    # Use ThreadPoolExecutor to process all the TIFF files in parallel
+    with ThreadPoolExecutor() as executor:
+        # Use tqdm to track the progress in parallel processing
+        stack_sizes = list(
+            tqdm(executor.map(process_file, tiff_files), total=len(tiff_files), desc="Processing files", unit="file"))
+
+    # Get the maximum stack size from all the results
+    max_stack_size = max(stack_sizes)
+
+    # Returns the maximum size found
+    return max_stack_size
+
+
 def calculate_directory_md5(directory: Path) -> str:
     """Calculate MD5 hash of all files in directory and subdirectories."""
     md5_hash = hashlib.md5()
@@ -157,6 +194,8 @@ def unzip_directory(zip_path: Path, output_dir: Path) -> None:
 
 if __name__ == "__main__":
     console.enable()
-    input_dir = Path("/home/cybermouse/Desktop/Data/2022_01_25/1")
-
-    extract_frames_from_tiff_stack(input_dir, stack_size=500, remove_sources=True)
+    print()
+    print(find_max_stack_size(Path("/mnt/nearline/Tyche")))
+    # input_dir = Path("/home/cybermouse/Desktop/Data/2022_01_25/1")
+    #
+    # extract_frames_from_tiff_stack(input_dir, stack_size=500, remove_sources=True)

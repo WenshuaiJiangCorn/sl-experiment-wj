@@ -45,7 +45,9 @@ dependencies = [
     "ataraxis-base-utilities>=3,<4",
     "ataraxis-data-structures>=2,<3",
     "ataraxis-transport-layer-pc>=1,<2",
-    "ataraxis-communication-interface>=1,<2"
+    "ataraxis-communication-interface>=1,<2",
+    "tifffile>=2024,<2025",
+    "dask>=2024,<2025",
 ]
 
 [project.urls]
@@ -61,6 +63,8 @@ Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy>=2,<3",
+    "tifffile>=2024,<2025",
+    "dask>=2024,<2025",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
