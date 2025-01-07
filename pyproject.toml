@@ -47,7 +47,10 @@ dependencies = [
     "ataraxis-transport-layer-pc>=1,<2",
     "ataraxis-communication-interface>=1,<2",
     "tifffile>=2024,<2025",
-    "dask>=2024,<2025",
+    "paramiko>=3,<4",
+    "smbprotocol>=1,<2",
+    "tqdm>=4,<5",
+    "xxhash>=3,<4",
 ]
 
 [project.urls]
@@ -64,7 +67,10 @@ Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
 condarun = [
     "numpy>=2,<3",
     "tifffile>=2024,<2025",
-    "dask>=2024,<2025",
+    "paramiko>=3,<4",
+    "smbprotocol>=1,<2",
+    "tqdm>=4,<5",
+
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
