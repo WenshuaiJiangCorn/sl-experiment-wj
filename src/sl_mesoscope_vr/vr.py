@@ -12,6 +12,8 @@ from .module_interfaces import (
 )
 from pathlib import Path
 import numpy as np
+from .packaging_tools import calculate_directory_checksum
+from .mesoscope_preprocessing import extract_frames_from_stack
 
 
 class VR:
@@ -158,3 +160,60 @@ class VR:
         # the mesoscope will not acquire frames.
         # noinspection PyTypeChecker
         self._actor.send_message(self._actor_interfaces[0].toggle(False))
+
+
+class ExperimentData:
+    def __init__(self, output_directory: Path) -> None:
+        pass
+
+
+def convert_old_data(
+        root_directory: Path,
+        remove_sources: bool = False,
+        num_processes: int = None
+) -> None:
+    """A temporary function used to convert old Tyche data to our new format."""
+
+    # Resolves the number of processes to use for processing the data.
+    if num_processes is None:
+        num_processes = max(1, os.cpu_count() - 4)  # Keeps 4 cores free for other tasks
+
+    # Recursively finds all subdirectories inside the root directory, excluding 'mesoscope_frames'
+    subdirectories = [
+        directory for directory in root_directory.rglob('*')
+        if directory.is_dir() and directory.name != 'mesoscope_frames'  # Exclude already processed frames.
+    ]
+
+    # Collects the paths to each directory with TIFF files OR that has a mesoscope_frames subdirectory. This is used as
+    # a heuristic to discover folders with Tyche cohort session data.
+    session_directories = set()
+    for subdirectory in subdirectories:
+        tiff_files_in_subdir = list(subdirectory.glob("*.tif")) + list(subdirectory.glob("*.tiff"))
+
+        # Check for mesoscope_frames subdirectory. This directory would exist in already processed session directories
+        has_mesoscope_frames = (subdirectory / "mesoscope_frames").exists()
+
+        if tiff_files_in_subdir or has_mesoscope_frames:
+            session_directories.add(subdirectory)
+
+    # Processes each directory in parallel
+    for directory in tqdm(session_directories, desc="Processing mesoscope frames for session directories", unit="dir"):
+        extract_frames_from_stack(
+            directory,
+            num_processes,
+            remove_sources,
+            batch=True,
+        )
+
+    # Calculates the checksum for each processed directory
+    for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="dir"):
+        calculate_directory_checksum(
+            directory,
+            num_processes,
+            batch=True,
+        )
+
+
+if __name__ == "__main__":
+    target = Path("/media/Data/2022_01_25")
+    convert_old_data(root_directory=target, remove_sources=True)
