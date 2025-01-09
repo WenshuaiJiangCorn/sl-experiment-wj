@@ -2,7 +2,7 @@
 
 from ataraxis_data_structures import DataLogger
 from ataraxis_communication_interface import MicroControllerInterface
-from .module_interfaces import (
+from module_interfaces import (
     TTLInterface,
     EncoderInterface,
     BreakInterface,
@@ -12,9 +12,10 @@ from .module_interfaces import (
 )
 from pathlib import Path
 import numpy as np
-from .packaging_tools import calculate_directory_checksum
-from .mesoscope_preprocessing import extract_frames_from_stack
-
+from packaging_tools import calculate_directory_checksum
+from mesoscope_preprocessing import extract_frames_from_stack
+from tqdm import tqdm
+import os
 
 class VR:
     def __init__(self, output_directory: Path) -> None:
@@ -215,5 +216,5 @@ def convert_old_data(
 
 
 if __name__ == "__main__":
-    target = Path("/media/Data/2022_01_25")
+    target = Path("/media/Data/Tyche-A2")
     convert_old_data(root_directory=target, remove_sources=True)

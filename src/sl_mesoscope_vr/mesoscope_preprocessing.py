@@ -3,11 +3,12 @@ preprocessing is to prepare the data for storage and further processing in the S
 
 import tifffile
 from pathlib import Path
-from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+from ataraxis_base_utilities import console, ensure_directory_exists
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 from functools import partial
+from tqdm import tqdm
 
 
 def _check_stack_size(file: Path) -> int:
@@ -154,11 +155,11 @@ def extract_frames_from_stack(image_directory: Path, num_processes: int,
         # Processes each tiff stack in parallel
         with ProcessPoolExecutor(max_workers=num_processes) as executor:
             # Submits all tasks
-            future_to_file = {executor.submit(process_func, file): file for file in valid_tiff_files}
+            future_to_file = {executor.submit(process_func, file): file for file in tiff_files}
 
             if not batch:
                 # Shows progress with tqdm when not in batch mode
-                with tqdm(total=len(valid_tiff_files), desc="Processing TIFF stacks", unit="files") as pbar:
+                with tqdm(total=len(tiff_files), desc="Processing TIFF stacks", unit="files") as pbar:
                     for future in as_completed(future_to_file):
                         future.result()  # Gets result to ensure completion
                         pbar.update(1)
