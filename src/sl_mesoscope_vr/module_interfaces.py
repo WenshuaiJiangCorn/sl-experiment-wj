@@ -699,10 +699,14 @@ class ValveInterface(ModuleInterface):
             mp_queue.put(('Calibrated',))
 
     def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
+
+        console.echo(f"OUT: Reward")
+
         # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
         # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
         # desired amount of water reward.
         if topic == self._reward_topic:
+
             return OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
@@ -919,7 +923,7 @@ class LickInterface(ModuleInterface):
 
     def __init__(
             self,
-            lick_threshold: int = 2000,
+            lick_threshold: int = 200,
     ) -> None:
         data_codes = {np.uint8(51)}  # kChanged
 
@@ -962,10 +966,10 @@ class LickInterface(ModuleInterface):
 
     def set_parameters(
             self,
-            lower_threshold: np.uint16 = np.uint16(1000),
+            lower_threshold: np.uint16 = np.uint16(100),
             upper_threshold: np.uint16 = np.uint16(4095),
-            delta_threshold: np.uint16 = np.uint16(500),
-            averaging_pool_size: np.uint8 = np.uint8(50),
+            delta_threshold: np.uint16 = np.uint16(50),
+            averaging_pool_size: np.uint8 = np.uint8(0),
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the LickModule instance.
 
