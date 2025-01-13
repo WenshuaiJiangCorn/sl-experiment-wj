@@ -699,14 +699,10 @@ class ValveInterface(ModuleInterface):
             mp_queue.put(('Calibrated',))
 
     def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-
-        console.echo(f"OUT: Reward")
-
         # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
         # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
         # desired amount of water reward.
         if topic == self._reward_topic:
-
             return OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
