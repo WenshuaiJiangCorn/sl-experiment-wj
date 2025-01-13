@@ -16,6 +16,8 @@ from packaging_tools import calculate_directory_checksum
 from mesoscope_preprocessing import extract_frames_from_stack
 from tqdm import tqdm
 import os
+from ataraxis_time import PrecisionTimer
+
 
 class VR:
     def __init__(self, output_directory: Path) -> None:
@@ -215,6 +217,41 @@ def convert_old_data(
         )
 
 
+def test_runtime() -> None:
+    temp_dir = Path(tempfile.mkdtemp())
+    data_logger = DataLogger(output_directory=temp_dir, instance_name="test_logger")
+
+    encoder = EncoderInterface()
+    brake = BreakInterface()
+    interfaces = (brake,)
+
+    controller_id = np.uint8(222)  # Matches the microcontroller ID defined in the microcontroller's main.cpp file
+    microcontroller_serial_buffer_size = 8192
+    baudrate = 115200
+    port = "/dev/ttyACM1"
+
+    mc_interface = MicroControllerInterface(
+        controller_id=controller_id,
+        data_logger=data_logger,
+        module_interfaces=interfaces,
+        microcontroller_serial_buffer_size=microcontroller_serial_buffer_size,
+        microcontroller_usb_port=port,
+        baudrate=baudrate,
+    )
+
+    timer = PrecisionTimer('s')
+
+    data_logger.start()
+    mc_interface.start()
+
+    mc_interface.unlock_controller()
+    brake.toggle(state=False)  # Disengage the break
+    #mc_interface.send_message(encoder.check_state(repetition_delay=np.uint32(100)))
+    #timer.delay_noblock(delay=30)
+
+
 if __name__ == "__main__":
-    target = Path("/media/Data/Tyche-A2")
-    convert_old_data(root_directory=target, remove_sources=True)
+    test_runtime()
+
+    # target = Path("/media/Data/Tyche-A2")
+    # convert_old_data(root_directory=target, remove_sources=True)
