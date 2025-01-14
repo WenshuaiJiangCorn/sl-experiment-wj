@@ -1,8 +1,7 @@
 """This module provides the main VR class that abstracts working with Sun lab's mesoscope-VR system"""
 
 from ataraxis_data_structures import DataLogger
-from ataraxis_communication_interface import MicroControllerInterface
-from ataraxis_communication_interface import UnityCommunication
+from ataraxis_communication_interface import MicroControllerInterface, UnityCommunication
 from module_interfaces import (
     TTLInterface,
     EncoderInterface,
@@ -18,10 +17,22 @@ from mesoscope_preprocessing import extract_frames_from_stack
 from tqdm import tqdm
 import os
 from ataraxis_time import PrecisionTimer
+from ataraxis_time.time_helpers import get_timestamp
 import tempfile
+from ataraxis_base_utilities import ensure_directory_exists, console, LogLevel
 
 
-class VR:
+class MesoscopeExperiment:
+    """The base class for all Sun lab Mesoscope experiment runtimes.
+
+    This class provides methods for conducting experiments in the Sun lab using the Mesoscope-VR system. This class
+    abstracts most low-level interactions with the VR system and the mesoscope and enables lab members to use a simple
+    high-level API for writing their own experiment procedures without worrying about specific hardware interactions.
+
+    Args:
+        output_directory: The directory where all experiment data should be saved. Typically, this is the output of the
+            ExperimentData class create_session() method.
+    """
     def __init__(self, output_directory: Path) -> None:
 
         self._started: bool = False
@@ -168,15 +179,58 @@ class VR:
 
 
 class ExperimentData:
-    def __init__(self, output_directory: Path) -> None:
-        pass
+    """Provides methods for managing the experimental data acquired by all Sun lab pipelines.
+
+    This class functions as the central hub for managing the data across all destinations: The PCs tht acquire the data,
+    the NAS, and the data analysis server(s).
+    """
+
+    def __init__(self, project_directory: Path, animal_name: str) -> None:
+
+        # Combines project directory and animal name to get the animal directory path
+        self._animal_directory = project_directory.joinpath(animal_name)
+
+        # Loops over the input directory and resolves available session folders. If the directory does not exist,
+        # sets the variable to an empty tuple and generates the animal directory
+        self._sessions: tuple[str, ...]
+        if self._animal_directory.exists():
+            session: Path
+            self._sessions = tuple(
+                [str(session.stem) for session in project_directory.glob("*") if session.is_dir()]
+            )
+        else:
+            ensure_directory_exists(self._animal_directory)
+            self._sessions = tuple()
+
+    def create_session(self) -> Path:
+        """Creates a new session directory within the broader project-animal data structure.
+
+        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
+        name within the broader project-animal structure has a unique name that accurately preserves the order of the
+        sessions.
+
+        Notes:
+            You can use the 'stem' property of the returned path to get the session name.
+
+        Returns:
+            The Path to the newly created session directory.
+        """
+
+        # Generates a unique name for the session, based on the current timestamp. Since the timestamp is accurate
+        # to microseconds, this method is guaranteed to provide unique timestamp-based names across all our
+        # use cases.
+        session_name: str = get_timestamp(time_separator="-")
+        session_path = self._animal_directory.joinpath(session_name)
+
+        # Precreates the 'raw' and the 'processed' directories within the session directory
+        ensure_directory_exists(session_path.joinpath('raw'))
+        ensure_directory_exists(session_path.joinpath('processed'))
+
+        self._sessions += (session_name,)  # Updates the sessions tuple with the new session name
+        return session_path
 
 
-def convert_old_data(
-        root_directory: Path,
-        remove_sources: bool = False,
-        num_processes: int = None
-) -> None:
+def convert_old_data(root_directory: Path, remove_sources: bool = False, num_processes: int = None) -> None:
     """A temporary function used to convert old Tyche data to our new format."""
 
     # Resolves the number of processes to use for processing the data.
@@ -185,8 +239,9 @@ def convert_old_data(
 
     # Recursively finds all subdirectories inside the root directory, excluding 'mesoscope_frames'
     subdirectories = [
-        directory for directory in root_directory.rglob('*')
-        if directory.is_dir() and directory.name != 'mesoscope_frames'  # Exclude already processed frames.
+        directory
+        for directory in root_directory.rglob("*")
+        if directory.is_dir() and directory.name != "mesoscope_frames"  # Exclude already processed frames.
     ]
 
     # Collects the paths to each directory with TIFF files OR that has a mesoscope_frames subdirectory. This is used as
@@ -224,6 +279,7 @@ def test_runtime() -> None:
     data_logger = DataLogger(output_directory=temp_dir, instance_name="test_logger")
 
     from ataraxis_base_utilities import console
+
     console.enable()
 
     encoder = EncoderInterface()
@@ -264,12 +320,11 @@ def test_runtime() -> None:
         baudrate=115200,
     )
 
-    timer = PrecisionTimer('s')
+    timer = PrecisionTimer("s")
 
     # cue_topic = 'CueSequence/'
     # unity_communication = UnityCommunication(monitored_topics=cue_topic)
     # unity_communication.connect()
-
 
     # unity_communication.send_data("Display/Blank/")
     # timer.delay_noblock(5)
@@ -282,13 +337,10 @@ def test_runtime() -> None:
 
     # sequence: bytes = unity_communication.get_data()
 
-
     data_logger._vacate_shared_memory_buffer()
     actor_interface.vacate_shared_memory_buffer()
     sensor_interface.vacate_shared_memory_buffer()
     encoder_interface.vacate_shared_memory_buffer()
-
-
 
     data_logger.start()
 
@@ -309,8 +361,10 @@ def test_runtime() -> None:
 
     # Starts reward delivery
     actor_interface.send_message(
-        valve.set_parameters(pulse_duration=np.uint32(4000000), calibration_delay=np.uint32(10000),
-                             calibration_count=np.uint16(100)))  # 1 second
+        valve.set_parameters(
+            pulse_duration=np.uint32(4000000), calibration_delay=np.uint32(10000), calibration_count=np.uint16(100)
+        )
+    )  # 1 second
 
     timer.delay_noblock(delay=120)
 
