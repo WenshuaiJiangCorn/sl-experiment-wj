@@ -1,14 +1,16 @@
 """This module provides the methods used to preprocess mesoscope data after acquisition. The primary purpose of this
-preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster."""
+preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
+"""
 
-import tifffile
-from pathlib import Path
-from ataraxis_base_utilities import console, ensure_directory_exists
-import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
+from pathlib import Path
 from functools import partial
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from tqdm import tqdm
+import numpy as np
+import tifffile
+from ataraxis_base_utilities import console, ensure_directory_exists
 
 
 def _check_stack_size(file: Path) -> int:
@@ -57,7 +59,6 @@ def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_so
         stack_size: The size of each TIFF stack.
         remove_sources: Determines whether to remove original TIFF stacks after processing.
     """
-
     # Loads the stack into RAM
     img = tifffile.imread(str(tiff_path))
 
@@ -76,10 +77,10 @@ def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_so
         tifffile.imwrite(
             output_path,
             frame,
-            compression='lerc',
-            compressionargs={'level': 0.0},  # Lossless
+            compression="lerc",
+            compressionargs={"level": 0.0},  # Lossless
             predictor=True,
-            resolutionunit='NONE'  # Remove unnecessary metadata
+            resolutionunit="NONE",  # Remove unnecessary metadata
         )
 
         # Loads the newly compressed frame and verifies that it matches the original frame
@@ -93,8 +94,9 @@ def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_so
         tiff_path.unlink()  # Removes the original tiff file after it has been processed
 
 
-def extract_frames_from_stack(image_directory: Path, num_processes: int,
-                              remove_sources: bool = False, batch: bool = False) -> None:
+def extract_frames_from_stack(
+    image_directory: Path, num_processes: int, remove_sources: bool = False, batch: bool = False
+) -> None:
     """Loops over all multi-frame TIFF stacks in the input directory and extracts individual frames as efficiently
     compressed TIFF files.
 
@@ -141,16 +143,14 @@ def extract_frames_from_stack(image_directory: Path, num_processes: int,
             tiff_files.remove(file)  # Removes non-stack files from further processing
 
         # If any stack has a larger size than the current maximum, updates the maximum size
-        if stack_size > maximum_stack_size:
-            maximum_stack_size = stack_size
+        maximum_stack_size = max(stack_size, maximum_stack_size)
 
     # If there are TIFFs to process, executes frame extraction
     if len(tiff_files) > 0:
         # Uses partial to bind the constant arguments
-        process_func = partial(_process_stack,
-                               output_dir=output_dir,
-                               stack_size=maximum_stack_size,
-                               remove_sources=remove_sources)
+        process_func = partial(
+            _process_stack, output_dir=output_dir, stack_size=maximum_stack_size, remove_sources=remove_sources
+        )
 
         # Processes each tiff stack in parallel
         with ProcessPoolExecutor(max_workers=num_processes) as executor:

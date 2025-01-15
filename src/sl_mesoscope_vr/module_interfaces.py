@@ -8,15 +8,14 @@ import numpy as np
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
 from numpy.polynomial.polynomial import polyfit
-
 from ataraxis_communication_interface import (
     ModuleData,
     ModuleState,
+    ModuleInterface,
     ModuleParameters,
     UnityCommunication,
     OneOffModuleCommand,
     RepeatedModuleCommand,
-    ModuleInterface
 )
 
 
@@ -54,10 +53,10 @@ class EncoderInterface(ModuleInterface):
     """
 
     def __init__(
-            self,
-            encoder_ppr: int = 8192,
-            object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
-            cm_per_unity_unit: float = 10.0,
+        self,
+        encoder_ppr: int = 8192,
+        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+        cm_per_unity_unit: float = 10.0,
     ) -> None:
         data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
 
@@ -67,7 +66,7 @@ class EncoderInterface(ModuleInterface):
             mqtt_communication=True,
             data_codes=data_codes,
             unity_command_topics=None,
-            error_codes=None
+            error_codes=None,
         )
 
         # Saves additional data to class attributes.
@@ -84,12 +83,11 @@ class EncoderInterface(ModuleInterface):
         )
 
     def process_received_data(
-            self,
-            message: ModuleState | ModuleData,
-            unity_communication: UnityCommunication,
-            mp_queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleState | ModuleData,
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
-
         # If the incoming message is the PPR report, sends the data to the output queue
         if message.event == 53:
             topic = "encoder ppr"
@@ -124,10 +122,10 @@ class EncoderInterface(ModuleInterface):
         return
 
     def set_parameters(
-            self,
-            report_ccw: np.bool | bool = np.bool(True),
-            report_cw: np.bool | bool = np.bool(True),
-            delta_threshold: np.uint32 | int = np.uint32(10),
+        self,
+        report_ccw: np.bool | bool = np.bool(True),
+        report_cw: np.bool | bool = np.bool(True),
+        delta_threshold: np.uint32 | int = np.uint32(10),
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the EncoderModule instance.
 
@@ -269,7 +267,6 @@ class TTLInterface(ModuleInterface):
     """
 
     def __init__(self) -> None:
-
         error_codes = {np.uint8(51), np.uint8(54)}  # kOutputLocked, kInvalidPinMode
 
         # kInputOn, kInputOff, kOutputOn, kOutputOff
@@ -281,14 +278,14 @@ class TTLInterface(ModuleInterface):
             mqtt_communication=False,
             data_codes=None,  # None of the data codes needs additional processing, so statically set to None
             unity_command_topics=None,
-            error_codes=error_codes
+            error_codes=error_codes,
         )
 
     def process_received_data(
-            self,
-            message: ModuleData | ModuleState,
-            unity_communication: UnityCommunication,
-            mp_queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -298,7 +295,7 @@ class TTLInterface(ModuleInterface):
         return
 
     def set_parameters(
-            self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
+        self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the TTLModule instance.
 
@@ -324,7 +321,7 @@ class TTLInterface(ModuleInterface):
         )
 
     def send_pulse(
-            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
+        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
 
@@ -449,10 +446,10 @@ class BreakInterface(ModuleInterface):
     """
 
     def __init__(
-            self,
-            minimum_break_strength: float = 43.2047,  # 0.6 in iz
-            maximum_break_strength: float = 1152.1246,  # 16 in oz
-            object_diameter: float = 15.0333
+        self,
+        minimum_break_strength: float = 43.2047,  # 0.6 in iz
+        maximum_break_strength: float = 1152.1246,  # 16 in oz
+        object_diameter: float = 15.0333,
     ) -> None:
         error_codes = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kEngaged, kDisengaged, kVariable
@@ -464,7 +461,7 @@ class BreakInterface(ModuleInterface):
             mqtt_communication=False,
             data_codes=None,  # None of the data codes need additional processing, so set to None.
             unity_command_topics=None,
-            error_codes=error_codes
+            error_codes=error_codes,
         )
 
         # Hardcodes the conversion factor used to translate torque force in g cm to N cm
@@ -495,10 +492,10 @@ class BreakInterface(ModuleInterface):
         )
 
     def process_received_data(
-            self,
-            message: ModuleData | ModuleState,
-            unity_communication: UnityCommunication,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        unity_communication: UnityCommunication,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -655,10 +652,7 @@ class ValveInterface(ModuleInterface):
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
     """
 
-    def __init__(
-            self,
-            valve_calibration_data: tuple[tuple[int | float, int | float], ...]
-    ) -> None:
+    def __init__(self, valve_calibration_data: tuple[tuple[int | float, int | float], ...]) -> None:
         error_codes = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
         data_codes = {np.uint8(54)}  # The only code that requires additional processing is kCalibrated
@@ -670,7 +664,7 @@ class ValveInterface(ModuleInterface):
             mqtt_communication=True,
             data_codes=data_codes,
             unity_command_topics=unity_command_topics,
-            error_codes=error_codes
+            error_codes=error_codes,
         )
 
         # Extracts pulse durations and fluid volumes into separate arrays
@@ -688,15 +682,15 @@ class ValveInterface(ModuleInterface):
         self._reward_topic = "Gimbl/Reward/"
 
     def process_received_data(
-            self,
-            message: ModuleData | ModuleState,
-            unity_communication: UnityCommunication,
-            mp_queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
         # Since the only data code that requires further processing is code 54 (kCalibrated), this method statically
         # puts 'calibrated' into the queue as a one-element tuple.
         if message.event == 54:
-            mp_queue.put(('Calibrated',))
+            mp_queue.put(("Calibrated",))
 
     def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
         # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
@@ -712,10 +706,10 @@ class ValveInterface(ModuleInterface):
             )
 
     def set_parameters(
-            self,
-            pulse_duration: np.uint32 = np.uint32(10000),
-            calibration_delay: np.uint32 = np.uint32(10000),
-            calibration_count: np.uint16 = np.uint16(100),
+        self,
+        pulse_duration: np.uint32 = np.uint32(10000),
+        calibration_delay: np.uint32 = np.uint32(10000),
+        calibration_count: np.uint16 = np.uint16(100),
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
@@ -745,7 +739,7 @@ class ValveInterface(ModuleInterface):
         )
 
     def send_pulse(
-            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
+        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
         repetitively (recurrently).
@@ -872,7 +866,8 @@ class ValveInterface(ModuleInterface):
     @property
     def microliter_per_microsecond(self) -> np.float64:
         """Returns the conversion factor to translate valve open time, in microseconds, into the volume of dispensed
-        fluid, in microliters."""
+        fluid, in microliters.
+        """
         return self._microliters_per_microsecond
 
     @property
@@ -918,8 +913,8 @@ class LickInterface(ModuleInterface):
     """
 
     def __init__(
-            self,
-            lick_threshold: int = 200,
+        self,
+        lick_threshold: int = 200,
     ) -> None:
         data_codes = {np.uint8(51)}  # kChanged
 
@@ -930,28 +925,23 @@ class LickInterface(ModuleInterface):
             mqtt_communication=True,
             data_codes=data_codes,
             unity_command_topics=None,
-            error_codes=None
+            error_codes=None,
         )
 
         self._sensor_topic: str = "LickPort/"
         self._lick_threshold: np.uint16 = np.uint16(lick_threshold)
 
         # Statically computes the voltage resolution of each analog step, assuming a 3.3V ADC with 12-bit resolution.
-        self._volt_per_adc_unit = np.round(
-            a=np.float64(3.3 / (2 ** 12)),
-            decimals=12
-        )
+        self._volt_per_adc_unit = np.round(a=np.float64(3.3 / (2**12)), decimals=12)
 
     def process_received_data(
-            self,
-            message: ModuleData | ModuleState,
-            unity_communication: UnityCommunication,
-            mp_queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
-
         # Currently, the only data_code that requires additional processing is code 51 (sensor readout change code).
         if message.event == 51 and message.data_object >= self._lick_threshold:  # Threshold is inclusive
-
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
             # which acts as a binary lick trigger.
             unity_communication.send_data(topic=self._sensor_topic, payload=None)
@@ -961,11 +951,11 @@ class LickInterface(ModuleInterface):
         return
 
     def set_parameters(
-            self,
-            lower_threshold: np.uint16 = np.uint16(100),
-            upper_threshold: np.uint16 = np.uint16(4095),
-            delta_threshold: np.uint16 = np.uint16(50),
-            averaging_pool_size: np.uint8 = np.uint8(0),
+        self,
+        lower_threshold: np.uint16 = np.uint16(100),
+        upper_threshold: np.uint16 = np.uint16(4095),
+        delta_threshold: np.uint16 = np.uint16(50),
+        averaging_pool_size: np.uint8 = np.uint8(0),
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the LickModule instance.
 
@@ -1003,7 +993,7 @@ class LickInterface(ModuleInterface):
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
-        """ Returns the voltage signal detected by the analog pin monitored by the LickModule.
+        """Returns the voltage signal detected by the analog pin monitored by the LickModule.
 
         If there has been a significant change in the detected voltage level and the level is within the reporting
         thresholds, reports the change to the PC. It is highly advised to issue this command to repeat (recur) at a
@@ -1040,7 +1030,7 @@ class LickInterface(ModuleInterface):
             cycle_delay=repetition_delay,
         )
 
-    def get_adc_units_from_volts(self, voltage: int | float) -> np.uint16:
+    def get_adc_units_from_volts(self, voltage: float) -> np.uint16:
         """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
 
         Use this method to determine the appropriate raw analog units for the threshold arguments of the
@@ -1065,7 +1055,8 @@ class LickInterface(ModuleInterface):
     @property
     def volts_per_adc_unit(self) -> np.float64:
         """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into voltage in
-        Volts."""
+        Volts.
+        """
         return self._volt_per_adc_unit
 
 
@@ -1110,11 +1101,11 @@ class TorqueInterface(ModuleInterface):
     """
 
     def __init__(
-            self,
-            baseline_voltage: int = 2046,
-            maximum_voltage: int = 4095,
-            sensor_capacity: float = 720.0779,  # 10 oz in
-            object_diameter: float = 15.0333
+        self,
+        baseline_voltage: int = 2046,
+        maximum_voltage: int = 4095,
+        sensor_capacity: float = 720.0779,  # 10 oz in
+        object_diameter: float = 15.0333,
     ) -> None:
         # data_codes = {np.uint8(51), np.uint8(52)}  # kCCWTorque, kCWTorque
 
@@ -1125,7 +1116,7 @@ class TorqueInterface(ModuleInterface):
             mqtt_communication=False,
             data_codes=None,
             unity_command_topics=None,
-            error_codes=None
+            error_codes=None,
         )
 
         # Hardcodes the conversion factor used to translate torque in g cm to N cm
@@ -1153,10 +1144,10 @@ class TorqueInterface(ModuleInterface):
         )
 
     def process_received_data(
-            self,
-            message: ModuleData | ModuleState,
-            unity_communication: UnityCommunication,
-            mp_queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -1166,13 +1157,13 @@ class TorqueInterface(ModuleInterface):
         return
 
     def set_parameters(
-            self,
-            report_ccw: np.bool = np.bool(True),
-            report_cw: np.bool = np.bool(True),
-            lower_threshold: np.uint16 = np.uint16(200),
-            upper_threshold: np.uint16 = np.uint16(2046),
-            delta_threshold: np.uint16 = np.uint16(100),
-            averaging_pool_size: np.uint8 = np.uint8(50)
+        self,
+        report_ccw: np.bool = np.bool(True),
+        report_cw: np.bool = np.bool(True),
+        lower_threshold: np.uint16 = np.uint16(200),
+        upper_threshold: np.uint16 = np.uint16(2046),
+        delta_threshold: np.uint16 = np.uint16(100),
+        averaging_pool_size: np.uint8 = np.uint8(50),
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the TorqueModule instance.
 
@@ -1208,7 +1199,13 @@ class TorqueInterface(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(
-                report_ccw, report_cw, upper_threshold, lower_threshold, delta_threshold, averaging_pool_size),
+                report_ccw,
+                report_cw,
+                upper_threshold,
+                lower_threshold,
+                delta_threshold,
+                averaging_pool_size,
+            ),
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
@@ -1253,7 +1250,7 @@ class TorqueInterface(ModuleInterface):
             cycle_delay=repetition_delay,
         )
 
-    def get_adc_units_from_torque(self, target_torque: int | float) -> np.uint16:
+    def get_adc_units_from_torque(self, target_torque: float) -> np.uint16:
         """Converts the input torque to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
 
         Use this method to determine the appropriate raw analog units for the threshold arguments of the
@@ -1273,11 +1270,13 @@ class TorqueInterface(ModuleInterface):
     @property
     def torque_per_adc_unit(self) -> np.float64:
         """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into torque in
-        Newton centimeter."""
+        Newton centimeter.
+        """
         return self._torque_per_adc_unit
 
     @property
     def force_per_adc_unit(self) -> np.float64:
         """Returns the conversion factor to translate the raw analog values recorded by the 12-bit ADC into force in
-        Newtons."""
+        Newtons.
+        """
         return self._force_per_adc_unit

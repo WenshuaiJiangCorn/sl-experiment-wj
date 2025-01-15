@@ -1,12 +1,14 @@
 """This module provides methods for packaging experimental session data for transmission to the NAS or Sun lab
-data cluster. The methods from this module work in tandem with methods offered by transfer_tools.py."""
+data cluster. The methods from this module work in tandem with methods offered by transfer_tools.py.
+"""
 
-import xxhash
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import partial
-from pathlib import Path
-from tqdm import tqdm
 import os
+from pathlib import Path
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from tqdm import tqdm
+import xxhash
 
 
 def _calculate_file_checksum(base_directory: Path, file_path: Path) -> tuple[str, bytes]:
@@ -24,7 +26,6 @@ def _calculate_file_checksum(base_directory: Path, file_path: Path) -> tuple[str
         A tuple with two elements. The first element is the path to the file relative to the base directory. The second
         element is the xxhash3-128 checksum that covers the relative path and the contents of the file.
     """
-
     # Initializes the hashsum object.
     checksum = xxhash.xxh3_128()
 
@@ -77,7 +78,6 @@ def calculate_directory_checksum(directory: Path, num_processes: int | None = No
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
             to optimize progress reporting to avoid cluttering the terminal.
     """
-
     # Determines the number of parallel processes to use.
     if num_processes is None:
         num_processes = max(1, os.cpu_count() - 4)
@@ -87,7 +87,7 @@ def calculate_directory_checksum(directory: Path, num_processes: int | None = No
     files = sorted(
         path
         for path in directory.rglob("*")
-        if path.is_file() and not path.stem == "ax_checksum" and not path.suffix == ".txt"  # Excludes checksum files
+        if path.is_file() and path.stem != "ax_checksum" and path.suffix != ".txt"  # Excludes checksum files
     )
 
     # Precreates the directory checksum

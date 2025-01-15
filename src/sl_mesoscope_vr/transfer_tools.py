@@ -1,20 +1,22 @@
 """This module provides methods for moving data between the local machine, the NAS drive (SMB protocol) and the Sun lab
-BioHPC cluster (SFTP protocol)."""
+BioHPC cluster (SFTP protocol).
+"""
 
-import paramiko
-from smbclient import register_session, scandir, mkdir, open_file, shutil
-from pathlib import Path
-from tqdm import tqdm
 import hashlib
+from pathlib import Path
+
+from tqdm import tqdm
+import paramiko
+from smbclient import mkdir, shutil, scandir, open_file, register_session
 
 
-def setup_ssh_client(hostname: str, username: str, password: str = None,
-                     key_filename: str = None) -> paramiko.SSHClient:
+def setup_ssh_client(
+    hostname: str, username: str, password: str = None, key_filename: str = None
+) -> paramiko.SSHClient:
     """Setup SSH client with either password or key authentication"""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(hostname, username=username, password=password,
-                   key_filename=key_filename)
+    client.connect(hostname, username=username, password=password, key_filename=key_filename)
     return client
 
 
@@ -23,17 +25,17 @@ def sftp_operations(hostname: str, username: str, password: str = None):
         sftp = ssh.open_sftp()
 
         # Upload
-        sftp.put('local_file.txt', '/remote/path/file.txt')
+        sftp.put("local_file.txt", "/remote/path/file.txt")
 
         # Download
-        sftp.get('/remote/path/file.txt', 'local_file.txt')
+        sftp.get("/remote/path/file.txt", "local_file.txt")
 
         # List directory
-        for entry in sftp.listdir_attr('/remote/path'):
+        for entry in sftp.listdir_attr("/remote/path"):
             print(f"{entry.filename}: {entry.st_size} bytes")
 
         # Remove file
-        sftp.remove('/remote/path/file.txt')
+        sftp.remove("/remote/path/file.txt")
 
         sftp.close()
 
@@ -90,16 +92,17 @@ def download_from_nas(remote_path: Path, local_path: Path, chunk_size: int = 102
 
         # Files less than 1GB are downloaded in one go
         if file_size < 1024 * 1024 * 1024:  # 1GB
-            with open_file(remote_path, mode='rb') as remote_file:
-                with open(local_path, 'wb') as local_file:
+            with open_file(remote_path, mode="rb") as remote_file:
+                with open(local_path, "wb") as local_file:
                     local_file.write(remote_file.read())
             return
 
         # Larger files are broken into chunks
-        with open_file(remote_path, mode='rb') as remote_file:
-            with open(local_path, 'wb') as local_file:
-                with tqdm(total=file_size, unit='B', unit_scale=True,
-                          desc=f"Downloading {Path(remote_path).name}:") as pbar:
+        with open_file(remote_path, mode="rb") as remote_file:
+            with open(local_path, "wb") as local_file:
+                with tqdm(
+                    total=file_size, unit="B", unit_scale=True, desc=f"Downloading {Path(remote_path).name}:"
+                ) as pbar:
                     while True:
                         chunk = remote_file.read(chunk_size)
                         if not chunk:
@@ -147,15 +150,15 @@ def upload_to_nas(local_path: Path, remote_path: Path, chunk_size: int = 1024 * 
 
         # Files less than 1GB are uploaded in one go
         if file_size < 1024 * 1024 * 1024:  # 1GB
-            with open(local_path, 'rb') as local_file:
-                with open_file(remote_path, mode='wb') as remote_file:
+            with open(local_path, "rb") as local_file:
+                with open_file(remote_path, mode="wb") as remote_file:
                     remote_file.write(local_file.read())
             return
 
         # Larger files are broken into chunks
-        with open(local_path, 'rb') as local_file:
-            with open_file(remote_path, mode='wb') as remote_file:
-                with tqdm(total=file_size, unit='B', unit_scale=True, desc=f"Uploading {local_path.name}:") as pbar:
+        with open(local_path, "rb") as local_file:
+            with open_file(remote_path, mode="wb") as remote_file:
+                with tqdm(total=file_size, unit="B", unit_scale=True, desc=f"Uploading {local_path.name}:") as pbar:
                     while True:
                         chunk = local_file.read(chunk_size)
                         if not chunk:
@@ -196,7 +199,6 @@ def calculate_nas_checksum(remote_path: Path, chunk_size: int = 1024 * 1024 * 32
     Returns:
         MD5 checksum has.
     """
-
     # Pre-initializes the checksum
     md5_hash = hashlib.md5()
 
@@ -214,7 +216,7 @@ def calculate_nas_checksum(remote_path: Path, chunk_size: int = 1024 * 1024 * 32
                 md5_hash.update(str(entry.name).encode())
 
                 # Adds file contents to hash
-                with open_file(full_path, 'rb') as f:
+                with open_file(full_path, "rb") as f:
                     while True:
                         chunk = f.read(chunk_size)
                         if not chunk:
@@ -227,7 +229,7 @@ def calculate_nas_checksum(remote_path: Path, chunk_size: int = 1024 * 1024 * 32
 
     # For file inputs, directly calculates the checksum for the file.
     except NotADirectoryError:
-        with open_file(remote_path, 'rb') as f:
+        with open_file(remote_path, "rb") as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
@@ -235,6 +237,7 @@ def calculate_nas_checksum(remote_path: Path, chunk_size: int = 1024 * 1024 * 32
                 md5_hash.update(chunk)
 
     return md5_hash.hexdigest()
+
 
 # Example usage:
 # server = "//YOUR_NAS_IP"  # e.g., "//192.168.1.100"
