@@ -13,7 +13,7 @@ from ataraxis_communication_interface import (
     ModuleState,
     ModuleInterface,
     ModuleParameters,
-    UnityCommunication,
+    MQTTCommunication,
     OneOffModuleCommand,
     RepeatedModuleCommand,
 )
@@ -65,7 +65,7 @@ class EncoderInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=True,
             data_codes=data_codes,
-            unity_command_topics=None,
+            mqtt_command_topics=None,
             error_codes=None,
         )
 
@@ -85,7 +85,7 @@ class EncoderInterface(ModuleInterface):
     def process_received_data(
         self,
         message: ModuleState | ModuleData,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         mp_queue: MPQueue,  # type: ignore
     ) -> None:
         # If the incoming message is the PPR report, sends the data to the output queue
@@ -115,9 +115,9 @@ class EncoderInterface(ModuleInterface):
         byte_array = json_string.encode("utf-8")
 
         # Publishes the motion to the appropriate MQTT topic.
-        unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
+        mqtt_communication.send_data(topic=self._motion_topic, payload=byte_array)
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
@@ -277,20 +277,20 @@ class TTLInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=False,
             data_codes=None,  # None of the data codes needs additional processing, so statically set to None
-            unity_command_topics=None,
+            mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
     def process_received_data(
         self,
         message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         mp_queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
@@ -460,7 +460,7 @@ class BreakInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=False,
             data_codes=None,  # None of the data codes need additional processing, so set to None.
-            unity_command_topics=None,
+            mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
@@ -494,13 +494,13 @@ class BreakInterface(ModuleInterface):
     def process_received_data(
         self,
         message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
@@ -656,14 +656,14 @@ class ValveInterface(ModuleInterface):
         error_codes = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
         data_codes = {np.uint8(54)}  # The only code that requires additional processing is kCalibrated
-        unity_command_topics = {"Gimbl/Reward/"}
+        mqtt_command_topics = {"Gimbl/Reward/"}
 
         super().__init__(
             module_type=np.uint8(5),
             module_id=np.uint8(1),
             mqtt_communication=True,
             data_codes=data_codes,
-            unity_command_topics=unity_command_topics,
+            mqtt_command_topics=mqtt_command_topics,
             error_codes=error_codes,
         )
 
@@ -684,7 +684,7 @@ class ValveInterface(ModuleInterface):
     def process_received_data(
         self,
         message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         mp_queue: MPQueue,  # type: ignore
     ) -> None:
         # Since the only data code that requires further processing is code 54 (kCalibrated), this method statically
@@ -692,7 +692,7 @@ class ValveInterface(ModuleInterface):
         if message.event == 54:
             mp_queue.put(("Calibrated",))
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
         # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
         # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
         # desired amount of water reward.
@@ -924,7 +924,7 @@ class LickInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=True,
             data_codes=data_codes,
-            unity_command_topics=None,
+            mqtt_command_topics=None,
             error_codes=None,
         )
 
@@ -937,16 +937,16 @@ class LickInterface(ModuleInterface):
     def process_received_data(
         self,
         message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         mp_queue: MPQueue,  # type: ignore
     ) -> None:
         # Currently, the only data_code that requires additional processing is code 51 (sensor readout change code).
         if message.event == 51 and message.data_object >= self._lick_threshold:  # Threshold is inclusive
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
             # which acts as a binary lick trigger.
-            unity_communication.send_data(topic=self._sensor_topic, payload=None)
+            mqtt_communication.send_data(topic=self._sensor_topic, payload=None)
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
@@ -1115,7 +1115,7 @@ class TorqueInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=False,
             data_codes=None,
-            unity_command_topics=None,
+            mqtt_command_topics=None,
             error_codes=None,
         )
 
@@ -1146,13 +1146,13 @@ class TorqueInterface(ModuleInterface):
     def process_received_data(
         self,
         message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
+        mqtt_communication: MQTTCommunication,
         mp_queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
 
-    def parse_unity_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
@@ -1280,3 +1280,95 @@ class TorqueInterface(ModuleInterface):
         Newtons.
         """
         return self._force_per_adc_unit
+
+
+class ScreenInterface(ModuleInterface):
+    """Interfaces with ScreenModule instances running on Ataraxis MicroControllers.
+
+    ScreenModule is specifically designed to interface with the HDMI converter boards used in Sun lab's Virtual Reality
+    setup. The ScreenModule communicates with the boards to toggle the screen displays on and off, without interfering
+    with their setup on the host PC.
+
+    Notes:
+        Since the current VR setup uses 3 screens, the current implementation of ScreenModule is designed to interface
+        with all 3 screens at the same time. In the future, the module may be refactored to allow addressing individual
+        screens.
+
+        The physical wiring of the module also allows manual screen manipulation via the buttons on the control panel
+        if the ScreenModule is not actively delivering a toggle pulse. However, changing the state of the screen
+        manually is strongly discouraged, as it interferes with tracking the state of the screen via software.
+    """
+
+    def __init__(self) -> None:
+        error_codes = {np.uint8(51)}  # kOutputLocked
+
+        # kOn, kOff
+        # data_codes = {np.uint8(52), np.uint8(53)}
+
+        super().__init__(
+            module_type=np.uint8(7),
+            module_id=np.uint8(1),
+            mqtt_communication=False,
+            data_codes=None,  # None of the data codes needs additional processing, so statically set to None
+            mqtt_command_topics=None,
+            error_codes=error_codes,
+        )
+
+    def process_received_data(
+        self,
+        message: ModuleData | ModuleState,
+        mqtt_communication: MQTTCommunication,
+        mp_queue: MPQueue,  # type: ignore
+    ) -> None:
+        """Not used."""
+        return
+
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
+        """Not used."""
+        return
+
+    def set_parameters(self, pulse_duration: np.uint32 = np.uint32(1000000)) -> ModuleParameters:
+        """Changes the PC-addressable runtime parameters of the ScreenModule instance.
+
+        Use this method to package and apply new PC-addressable parameters to the ScreenModule instance managed by
+        this Interface class.
+
+        Args:
+            pulse_duration: The duration, in microseconds, of each emitted screen toggle pulse HIGH phase. This is
+                equivalent to the duration of the control panel POWER button press. The main criterion for this
+                parameter is to be long enough for the converter board to register the press.
+
+        Returns:
+            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
+        """
+        return ModuleParameters(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            parameter_data=(pulse_duration,),
+        )
+
+    def toggle(self) -> OneOffModuleCommand:
+        """Triggers the ScreenModule to briefly simulate pressing the POWER button of the scree control board.
+
+        This command is used to turn the connected display on or off. The new state of the display depends on the
+        current state of the display when the command is issued. Since the displays can also be controller manually
+        (via the physical control board buttons), the state of the display can also be changed outside this interface,
+        although it is highly advised to NOT change screen states manually.
+
+        Notes:
+            It is highly recommended to use this command to manipulate display sates, as it ensures that display state
+            changes are logged for further data analysis.
+
+        Returns:
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
+            MicroControllerInterface class.
+        """
+        return OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(1),
+            noblock=np.bool(False),
+        )
