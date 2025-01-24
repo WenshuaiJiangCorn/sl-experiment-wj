@@ -11,6 +11,8 @@ import numpy as np
 import tifffile
 import json
 from ataraxis_base_utilities import console, ensure_directory_exists
+import matplotlib.pyplot as plt
+from suite2p.io.binary import BinaryFile
 
 import re
 import os
@@ -174,108 +176,28 @@ def extract_frames_from_stack(
                 [future.result() for future in as_completed(future_to_file)]
 
 
-def extract_metadata_to_json(input_tif, output_json='metadata.json'):
+def extract_metadata_to_json(target_stack, output_json="metadata.json"):
     """
     Extract all TIFF tags from the first page of 'input_tif' and save
     them as JSON in 'output_json'.
     """
-    with tifffile.TiffFile(input_tif) as tf:
-        # Access the first page
-        first_page = tf.pages[0]
+    file_path = Path('/Users/natalieyeung/Downloads/Tyche-F2_2023_02_27_1__00001_00001.tif')
+    absolute_path = file_path.resolve()
 
-        # Prepare a dictionary: {tag_name: tag_value_as_string}
-        metadata = {}
-        for code, tifftag in first_page.tags.items():
-            # tifftag.name is a human-readable name (e.g. "ImageDescription", "Software")
-            tag_name = tifftag.name
+    with tifffile.TiffFile(absolute_path) as tiff:
+        # metadata = {tag.name: tag.value for tag in tiff.pages[0].tags.values()}
+        metadata = tiff.scanimage_metadata
 
-            # tifftag.value can be str, bytes, int, float, list, etc.
-            value = tifftag.value
-            if isinstance(value, bytes):
-                try:
-                    value = value.decode("utf-8", errors="replace")
-                except:
-                    pass  # leave as bytes if decoding fails
+    print(metadata)
 
-            # Convert to a standard Python type suitable for JSON
-            metadata[tag_name] = value
+    output_directory = Path('/Users/natalieyeung/Documents/GitHub/sl-mesoscope/misc')
+    metadata_json = output_directory / 'metadata.json'
 
-    # Write all tag/value pairs to a JSON file
-    with open(output_json, "w", encoding="utf-8") as f:
-        # indent=4 for readability; ensure_ascii=False so UTF-8 characters remain
-        json.dump(metadata, f, indent=4, ensure_ascii=False)
-
-    print(f"Extracted metadata from {input_tif} (first page) to {output_json}")
+    with open(metadata_json, 'w') as json_file:
+        json.dump(metadata, json_file, indent=4)
 
 
-def export_metadata_only(input_tif, output_tif='metadata.tif'):
-    """
-    Extract all tags from the first page of `input_tif` and store them in a new
-    TIFF file `output_tif`. The new file contains a minimal 1×1 dummy image plus
-    the copied metadata tags.
-
-    Parameters
-    ----------
-    input_tif : str
-        Path to the original multi-page TIFF file (or single-page TIFF).
-    output_tif : str, optional
-        Path for the output "metadata-only" TIFF. Defaults to 'metadata.tif'.
-    """
-
-    # 1) Open the original TIFF and gather tags from the first page
-    with tifffile.TiffFile(input_tif) as tf:
-        first_page = tf.pages[0]  # get the first page
-
-        # We'll collect extratags that are NOT automatically managed by TiffWriter
-        # (ImageWidth, ImageLength, BitsPerSample, etc. are set by tifffile itself)
-        auto_tags = {
-            256,  # ImageWidth
-            257,  # ImageLength
-            258,  # BitsPerSample
-            259,  # Compression
-            262,  # Photometric
-            273,  # StripOffsets
-            277,  # SamplesPerPixel
-            278,  # RowsPerStrip
-            279,  # StripByteCounts
-            280,  # MinSampleValue
-            282,  # XResolution
-            283,  # YResolution
-            284,  # PlanarConfiguration
-            296,  # ResolutionUnit
-            305,  # Software
-            306,  # DateTime
-            315,  # Artist
-            330,  # SubIFDs
-            339,  # SampleFormat
-            531,  # ReferenceBlackWhite
-        }
-
-        extratags = []
-        for code, tifftag in first_page.tags.items():
-            if code in auto_tags:
-                # Skip tags that TiffWriter will overwrite or that conflict with new image shape
-                continue
-
-            # TiffTag attributes: .name, .value, .count, .dtype
-            extratags.append((code, tifftag.dtype, tifftag.count, tifftag.value, False))
-
-    # 2) Create a minimal 1x1 dummy image
-    dummy_img = np.zeros((1, 1), dtype=np.uint8)
-
-    # 3) Write the new TIFF with extratags
-    with tifffile.TiffWriter(output_tif, bigtiff=True) as tw:
-        # We let TiffWriter automatically set the standard tags for a 1×1, 8-bit image
-        # and we attach our extratags to store the original metadata
-        tw.write(dummy_img, extratags=extratags)
-
-    print(f"Extracted metadata from first page of '{input_tif}' into '{output_tif}'.")
-
-
-def generate_ops_from_metadata(
-    metadata_json_path,
-    output_ops_json="ops.json"
-):
+def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
     """
     Generate ops.json from the metadata in metadata_json_path (extracted TIFF tags).
     If `tiff_path` is provided and `stack_first_frame=True`, we will load the first
@@ -289,7 +211,7 @@ def generate_ops_from_metadata(
     # 0) Load the extracted metadata from JSON
     #    The JSON is assumed to have keys like "Software", "Artist", etc.
     # ----------------------------------------------------------------
-    with open(metadata_json_path, 'r', encoding='utf-8') as f:
+    with open(metadata_json_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
 
     # For convenience, we'll do:
@@ -314,7 +236,7 @@ def generate_ops_from_metadata(
     for line in lines_software:
         # e.g., "SI.hRoiManager.scanVolumeRate = 5"
         if "SI.hRoiManager.scanVolumeRate" in line:
-            parts = line.split('=')
+            parts = line.split("=")
             if len(parts) > 1:
                 try:
                     fs = float(parts[1].strip())
@@ -323,7 +245,7 @@ def generate_ops_from_metadata(
         # e.g., "SI.hFastZ.userZs = [0 15 30]"
         if "SI.hFastZ.userZs" in line:
             # parse array
-            match_z = re.search(r'\[(.*)\]', line)
+            match_z = re.search(r"\[(.*)\]", line)
             if match_z:
                 zs_str = match_z.group(1).strip()
                 zs_vals = zs_str.split()
@@ -345,7 +267,7 @@ def generate_ops_from_metadata(
 
     si_rois = []
     # try to find the trailing brace if there's extra content
-    match = re.search(r'(.*\})', artist_tag)
+    match = re.search(r"(.*\})", artist_tag)
     if match:
         trimmed_json = match.group(1)
     else:
@@ -370,8 +292,8 @@ def generate_ops_from_metadata(
         sf0 = sf[0] if isinstance(sf, list) else sf
 
         pixel_res_xy = sf0.get("pixelResolutionXY", [0, 0])
-        center_xy    = sf0.get("centerXY", [0, 0])
-        size_xy      = sf0.get("sizeXY", [0, 0])
+        center_xy = sf0.get("centerXY", [0, 0])
+        size_xy = sf0.get("sizeXY", [0, 0])
 
         # MATLAB does:
         # Ly(k,1) = .pixelResolutionXY(2)
@@ -493,9 +415,9 @@ def generate_ops_from_metadata(
 
 
 def diff_ops_files_json(ops_path1, ops_path2):
-    with open(ops_path1, 'r', encoding='utf-8') as f1:
+    with open(ops_path1, "r", encoding="utf-8") as f1:
         data1 = json.load(f1)
-    with open(ops_path2, 'r', encoding='utf-8') as f2:
+    with open(ops_path2, "r", encoding="utf-8") as f2:
         data2 = json.load(f2)
 
     # Convert back to JSON with sorted keys, so differences are consistent
@@ -504,11 +426,7 @@ def diff_ops_files_json(ops_path1, ops_path2):
 
     # Compare line by line
     diff = difflib.unified_diff(
-        json1.splitlines(),
-        json2.splitlines(),
-        fromfile=ops_path1,
-        tofile=ops_path2,
-        lineterm=''
+        json1.splitlines(), json2.splitlines(), fromfile=ops_path1, tofile=ops_path2, lineterm=""
     )
 
     # Print the diff
@@ -520,16 +438,107 @@ def diff_ops_files_json(ops_path1, ops_path2):
         print("No differences found! The JSON content is identical.")
 
 
-if __name__ == "__main__":
-    input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
-    extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
-    export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
+def compare_mesoscope_frames(
+    tiff_path: Path, bin_path: Path, ops_path: Path, tiff_index: int, plane_index: int, render_dpi: int
+) -> None:
+    """Generates a side-by-side plot of the raw mesoscope plane and the registered mesoscope plane data.
 
-    generate_ops_from_metadata(
-        metadata_json_path="/media/Data/Tyche-A2/2022_01_25/1/metadata.json",
-        output_ops_json="ops.json"
-    )
+    This function allows comparing raw and registered mesoscope frames. In addition to extracting and showing both
+    planes side-by-side, it also generates a plot of difference between the two image pixels and plots it in-line with
+    the visual data.
+
+    Notes:
+        This function assumes that the mesoscope images multiple ROIs (rectangles) as different planes. It also assumes
+        that images of each plane are stacked into a single 'frame' tiff file and that multiple 'frames' are
+        concatenated into a single tiff 'stack' during imaging.
+
+        At this time, this function does not support saving the generated images to disk. It is designed for quick
+        data inspection by a human researcher.
+
+    Args:
+        tiff_path: The path to the raw stack of mesoscope frames acquired by the mesoscope. Each frame can have one or
+            more planes (ROIs).
+        bin_path: The path to the binary file containing the registered mesoscope plane data.
+        ops_path: The path to the ops.json file generated by suite2p helpers or sl_mesoscope helpers. This file is used
+            to get the indices of frame rows occupied by each plane.
+        tiff_index: The index of the specific tiff file within the input tiff stack to process. This specifies the
+            frame to process and is relative to each stack with index 0 being the first frame in the stack.
+        plane_index: The index of the specific section within the registered data.bin file to process. This specifies
+            the plane (frame) to process and is relative to each bin file with index 0 being the first plane in the
+            bin file. This index assumes that the binary file only stores the data for a single plane.
+        render_dpi: The resolution at which to render the comparison figures. Since mesoscope frames are fairly large,
+            it is beneficial to use larger DPIs to render comparison figures.
+    """
+    # Reads the specified tiff frame (page) into RAM.
+    with tifffile.TiffFile(tiff_path) as tif:
+        raw_frame = tif.asarray(key=tiff_index)
+
+    # Uses ops.json to determine the indices for the rows occupied by the targeted plane
+    with open(ops_path, "r") as file:
+        plane_data = json.load(file)
+        lines = plane_data["lines"]
+
+    # Computes the dimensions of the plane using 'lines' as height and the width of the original frame tiff.
+    width = raw_frame.shape[1]
+    height = len(lines[plane_index])
+
+    raw_plane = raw_frame[lines[plane_index]]  # Extracts the plane data from the raw frame array
+
+    # Extracts the registered plane data for the matching frame
+    registered_plane = BinaryFile(Lx=width, Ly=height, filename=str(bin_path))[plane_index]
+
+    # Computes the difference between frames
+    difference = raw_plane - registered_plane
+
+    # Applies rendering dpi
+    plt.rcParams["figure.dpi"] = render_dpi
+
+    # Creates a figure with three subplots side by side
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6), dpi=render_dpi)
+
+    # Plots raw frame
+    im1 = ax1.imshow(raw_plane, cmap="gray")
+    ax1.set_title("Raw Frame")
+
+    # Plots registered frame
+    im2 = ax2.imshow(registered_plane, cmap="gray")
+    ax2.set_title("Registered Frame")
+
+    # Plots difference
+    # Uses 'bwr' colormap where blue is negative, white is zero, red is positive
+    im3 = ax3.imshow(difference, cmap="bwr")
+    ax3.set_title("Difference (Raw - Registered)")
+    plt.colorbar(im3, ax=ax3)
+
+    # Adjusts layout to prevent overlap
+    plt.tight_layout()
+
+    # Shows the plot
+    plt.show()
+
+
+if __name__ == "__main__":
+    # input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
+    # extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
+    # export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
+    #
+    # generate_ops_from_metadata(
+    #     metadata_json_path="/media/Data/Tyche-A2/2022_01_25/1/metadata.json", output_ops_json="ops.json"
+    # )
 
     # ops_1 = "/media/Data/2022_01_25/1/ops.json"
     # ops_2 = "/media/Data/Tyche-A2/2022_01_25/1/ops.json"
     # diff_ops_files_json(ops_1, ops_2)
+
+    # tiff_path = Path(
+    #     "/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/Tyche-F2_2023_02_27_1__00001_00001.tif"
+    # )  # Raw
+    # bin_path = Path("/home/cyberaxolotl/Desktop/processed/Tyche-F2/2023_02_27/1/suite2p/plane0/data.bin")  # Registered
+    # ops_path = Path("/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/ops.json")  #
+    # tiff_index = 250
+    # bin_index = 250
+    # plane_index = 0
+    # render_dpi = 300
+    #
+    # # Generates and displays the difference between the raw and registered frame
+    # compare_mesoscope_frames(tiff_path, bin_path, ops_path, tiff_index, plane_index, render_dpi=300)
