@@ -141,7 +141,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/ataraxis_communication_interface", "examples"]
+packages = ["src/sl_mesoscope_vr", "examples"]
 
 # Ruff Configuration.
 [tool.ruff]
