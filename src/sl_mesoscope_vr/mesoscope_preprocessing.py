@@ -176,25 +176,116 @@ def extract_frames_from_stack(
                 [future.result() for future in as_completed(future_to_file)]
 
 
-def extract_metadata_to_json(target_stack, output_json="metadata.json"):
-    """
-    Extract all TIFF tags from the first page of 'input_tif' and save
-    them as JSON in 'output_json'.
-    """
-    file_path = Path('/Users/natalieyeung/Downloads/Tyche-F2_2023_02_27_1__00001_00001.tif')
-    absolute_path = file_path.resolve()
+##extracting tags
+from pathlib import Path
+import tifffile
 
+def extract_metadata_to_json(target_stack: Path):
+    """
+    Extract unique metadata tags from a multi-page TIFF stack and print them.
+
+    Args:
+        target_stack (Path): Path to the input multi-page TIFF stack.
+    """
+    # Resolve the absolute path of the target stack
+    absolute_path = target_stack.resolve()
+
+    # Set to store unique metadata labels
+    unique_labels = set()
+
+    # Opening the tiff stack and iterate over pages to extract metadata
     with tifffile.TiffFile(absolute_path) as tiff:
-        # metadata = {tag.name: tag.value for tag in tiff.pages[0].tags.values()}
-        metadata = tiff.scanimage_metadata
+        for i, page in enumerate(tiff.pages):
+            # Extract tags from each page
+            for tag in page.tags.values():
+                label = tag.name
+                unique_labels.add(label)
+            # Optional: Add progress information
+            if i % 50 == 0:  # Log every 50 pages
+                print(f"Processed {i+1}/{len(tiff.pages)} pages...")
 
-    print(metadata)
+    # Print the unique metadata labels
+    print("\nUnique Metadata Labels:")
+    for label in sorted(unique_labels):
+        print(label)
 
-    output_directory = Path('/Users/natalieyeung/Documents/GitHub/sl-mesoscope/misc')
-    metadata_json = output_directory / 'metadata.json'
 
-    with open(metadata_json, 'w') as json_file:
-        json.dump(metadata, json_file, indent=4)
+# Example usage
+if __name__ == "__main__":
+    # Update the path to point directly to the correct location of `tyche.tif`
+    tiff_stack_path = Path("/Users/katlynn/Documents/portfolio/sl-mesoscope/src/sl_mesoscope_vr/tyche.tif")
+
+    # Extract metadata and print unique labels
+    extract_metadata_to_json(tiff_stack_path)
+
+##sorting stable and unstable tags
+def analyze_stable_and_unstable_tags(target_stack: Path):
+    """
+    Analyze stable and unstable metadata tags in a multi-page TIFF stack.
+
+    Args:
+        target_stack (Path): Path to the input multi-page TIFF stack.
+    """
+    # Resolve the absolute path of the target stack
+    absolute_path = target_stack.resolve()
+
+    # Dictionary to store the last known value for each tag
+    tag_values_memory = {}
+
+    # Set to store unstable tags
+    unstable_tags = set()
+
+    # Dictionary to track the history of unstable tags
+    unstable_history = {}
+
+    # Open the TIFF stack and iterate over pages
+    with tifffile.TiffFile(absolute_path) as tiff:
+        for i, page in enumerate(tiff.pages):
+            # Extract metadata tags and values for the current page
+            for tag in page.tags.values():
+                tag_name = tag.name
+                tag_value = str(tag.value)  # Convert value to string for easier comparison
+
+                # Check if the tag has been seen before
+                if tag_name in tag_values_memory:
+                    # If the value has changed, mark it as unstable
+                    if tag_values_memory[tag_name] != tag_value:
+                        unstable_tags.add(tag_name)
+                        # Store the tag's history if it's not already tracked
+                        if tag_name not in unstable_history:
+                            unstable_history[tag_name] = [tag_values_memory[tag_name]]
+                        # Append the new value to the tag's history
+                        unstable_history[tag_name].append(tag_value)
+                        # Update the memory with the new value
+                        tag_values_memory[tag_name] = tag_value
+                else:
+                    # Add the tag to memory if it's seen for the first time
+                    tag_values_memory[tag_name] = tag_value
+
+            # Optional: Progress logging
+            if i % 50 == 0:  # Log every 50 pages
+                print(f"Processed {i+1}/{len(tiff.pages)} pages...")
+
+    # Output stable and unstable tags
+    print("\nStable Tags:")
+    stable_tags = set(tag_values_memory.keys()) - unstable_tags
+    print(f"Count: {len(stable_tags)}")  # Print the number of stable tags
+    for tag in sorted(stable_tags):
+        print(tag)
+
+    print("\nUnstable Tags:")
+    print(f"Count: {len(unstable_tags)}")  # Print the number of unstable tags
+    for tag in sorted(unstable_tags):
+        print(f"{tag}: History = {unstable_history[tag]}")
+
+
+# Example usage
+if __name__ == "__main__":
+    # Update the path to point directly to the correct location of `tyche.tif`
+    tiff_stack_path = Path("/Users/katlynn/Documents/portfolio/sl-mesoscope/src/sl_mesoscope_vr/tyche.tif")
+
+    # Analyze stable and unstable tags
+    analyze_stable_and_unstable_tags(tiff_stack_path)
 
 
 def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
@@ -518,6 +609,7 @@ def compare_mesoscope_frames(
 
 
 if __name__ == "__main__":
+    print("")
     # input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
     # extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
     # export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
@@ -531,7 +623,7 @@ if __name__ == "__main__":
     # diff_ops_files_json(ops_1, ops_2)
 
     # tiff_path = Path(
-    #     "/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/Tyche-F2_2023_02_27_1__00001_00001.tif"
+    #     "/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/tyche.tif"
     # )  # Raw
     # bin_path = Path("/home/cyberaxolotl/Desktop/processed/Tyche-F2/2023_02_27/1/suite2p/plane0/data.bin")  # Registered
     # ops_path = Path("/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/ops.json")  #
