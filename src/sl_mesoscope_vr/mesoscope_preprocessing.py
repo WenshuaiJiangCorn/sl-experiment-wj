@@ -14,6 +14,8 @@ from ataraxis_base_utilities import console, ensure_directory_exists
 import matplotlib.pyplot as plt
 from suite2p.io.binary import BinaryFile
 
+from suite2p import registration_wrapper
+
 import re
 import os
 import difflib
@@ -176,242 +178,335 @@ def extract_frames_from_stack(
                 [future.result() for future in as_completed(future_to_file)]
 
 
-def extract_metadata_to_json(target_stack, output_json="metadata.json"):
+def extract_metadata_to_json(target_stack: Path):
     """
     Extract all TIFF tags from the first page of 'input_tif' and save
     them as JSON in 'output_json'.
     """
-    file_path = Path('/Users/natalieyeung/Downloads/Tyche-F2_2023_02_27_1__00001_00001.tif')
-    absolute_path = file_path.resolve()
+    file_path = Path(target_stack)
+    metadata_json = Path(target_stack.parent).joinpath('metadata.json')
 
-    with tifffile.TiffFile(absolute_path) as tiff:
-        # metadata = {tag.name: tag.value for tag in tiff.pages[0].tags.values()}
+    with tifffile.TiffFile(file_path) as tiff:
         metadata = tiff.scanimage_metadata
-
-    print(metadata)
-
-    output_directory = Path('/Users/natalieyeung/Documents/GitHub/sl-mesoscope/misc')
-    metadata_json = output_directory / 'metadata.json'
 
     with open(metadata_json, 'w') as json_file:
         json.dump(metadata, json_file, indent=4)
 
 
-def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
-    """
-    Generate ops.json from the metadata in metadata_json_path (extracted TIFF tags).
-    If `tiff_path` is provided and `stack_first_frame=True`, we will load the first
-    frame to get the actual 'height' for computing flyback frames.
+# def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
+#     """
+#     Generate ops.json from the metadata in metadata_json_path (extracted TIFF tags).
+#     If `tiff_path` is provided and `stack_first_frame=True`, we will load the first
+#     frame to get the actual 'height' for computing flyback frames.
+#
+#     If you already know the height or don't need the flyback logic, you can omit it
+#     or pass in a known value some other way.
+#     """
+#
+#     # ----------------------------------------------------------------
+#     # 0) Load the extracted metadata from JSON
+#     #    The JSON is assumed to have keys like "Software", "Artist", etc.
+#     # ----------------------------------------------------------------
+#     with open(metadata_json_path, "r", encoding="utf-8") as f:
+#         metadata = json.load(f)
+#
+#     # For convenience, we'll do:
+#     software_tag = metadata.get("Software", "")
+#     artist_tag = metadata.get("Artist", "")
+#
+#     # ----------------------------------------------------------------
+#     # 1) Determine the image height (stack_height) from the tags.
+#     # ----------------------------------------------------------------
+#     stack_height = metadata.get("ImageLength", None)
+#
+#     path_to_use = metadata_json_path
+#     root = os.path.dirname(os.path.abspath(path_to_use))
+#
+#     # ----------------------------------------------------------------
+#     # 2) Parse the frame rate `fs` from the software line
+#     #    - The MATLAB code searches for "SI.hRoiManager.scanVolumeRate"
+#     # ----------------------------------------------------------------
+#     fs = 4  # fallback
+#     # Split software_tag by lines
+#     lines_software = software_tag.splitlines()
+#     for line in lines_software:
+#         # e.g., "SI.hRoiManager.scanVolumeRate = 5"
+#         if "SI.hRoiManager.scanVolumeRate" in line:
+#             parts = line.split("=")
+#             if len(parts) > 1:
+#                 try:
+#                     fs = float(parts[1].strip())
+#                 except ValueError:
+#                     pass
+#         # e.g., "SI.hFastZ.userZs = [0 15 30]"
+#         if "SI.hFastZ.userZs" in line:
+#             # parse array
+#             match_z = re.search(r"\[(.*)\]", line)
+#             if match_z:
+#                 zs_str = match_z.group(1).strip()
+#                 zs_vals = zs_str.split()
+#                 nplanes = len(zs_vals)
+#             else:
+#                 nplanes = 1
+#         else:
+#             nplanes = 1
+#
+#     # ----------------------------------------------------------------
+#     # 3) Parse the "Artist" tag as JSON to get rois
+#     #    - The MATLAB code extracts sub-fields from artist.RoiGroups.imagingRoiGroup.rois
+#     # ----------------------------------------------------------------
+#     # The MATLAB snippet does:
+#     #   artist_info = artist_info(1:find(artist_info == '}', 1, 'last'));
+#     #   artist = jsondecode(artist_info);
+#     #   si_rois = artist.RoiGroups.imagingRoiGroup.rois;
+#     # We do something similar in Python:
+#
+#     si_rois = []
+#     # try to find the trailing brace if there's extra content
+#     match = re.search(r"(.*\})", artist_tag)
+#     if match:
+#         trimmed_json = match.group(1)
+#     else:
+#         trimmed_json = artist_tag  # fallback to entire string
+#     try:
+#         artist_dict = json.loads(trimmed_json)
+#         si_rois = artist_dict["RoiGroups"]["imagingRoiGroup"]["rois"]
+#     except Exception:
+#         si_rois = []
+#
+#     nrois = len(si_rois)
+#
+#     Ly = []
+#     Lx = []
+#     cXY = []
+#     szXY = []
+#
+#     for r in si_rois:
+#         # rois[k].scanfields(1).pixelResolutionXY => [W, H]
+#         sf = r["scanfields"]
+#         # Sometimes it's a list; sometimes just one dict
+#         sf0 = sf[0] if isinstance(sf, list) else sf
+#
+#         pixel_res_xy = sf0.get("pixelResolutionXY", [0, 0])
+#         center_xy = sf0.get("centerXY", [0, 0])
+#         size_xy = sf0.get("sizeXY", [0, 0])
+#
+#         # MATLAB does:
+#         # Ly(k,1) = .pixelResolutionXY(2)
+#         # Lx(k,1) = .pixelResolutionXY(1)
+#         Ly.append(pixel_res_xy[1])
+#         Lx.append(pixel_res_xy[0])
+#
+#         # cXY(k, [2,1]) = .centerXY
+#         # szXY(k, [2,1]) = .sizeXY
+#         cXY.append([center_xy[1], center_xy[0]])
+#         szXY.append([size_xy[1], size_xy[0]])
+#
+#     Ly = np.array(Ly)
+#     Lx = np.array(Lx)
+#     cXY = np.array(cXY)
+#     szXY = np.array(szXY)
+#
+#     # cXY = cXY - szXY/2; cXY = cXY - min(cXY,[],1);
+#     if len(cXY) > 0:
+#         cXY = cXY - (szXY / 2.0)
+#         cXY = cXY - np.min(cXY, axis=0)
+#
+#     # mu = median([Ly, Lx]./szXY,1);
+#     # => we can do a column stack of (Ly, Lx), then elementwise divide by szXY
+#     if len(Ly) > 0:
+#         stack_lylx = np.column_stack((Ly, Lx))
+#         safe_szxy = np.copy(szXY)
+#         safe_szxy[safe_szxy == 0] = 1e-9
+#         ratio = stack_lylx / safe_szxy
+#         mu = np.median(ratio, axis=0)  # shape (2,)
+#     else:
+#         mu = np.array([1, 1], dtype=float)
+#
+#     # imin = cXY .* mu
+#     if len(cXY) > 0:
+#         imin = cXY * mu
+#     else:
+#         imin = np.zeros((0, 2))
+#
+#     # deduce flyback frames from the most filled z-plane
+#     # (the MATLAB code uses size(stack,1) for total # of rows.)
+#     if stack_height is not None and len(Ly) > 0:
+#         n_rows_sum = np.sum(Ly)
+#         if nrois > 1:
+#             n_flyback = (stack_height - n_rows_sum) / (nrois - 1)
+#         else:
+#             n_flyback = 0
+#     else:
+#         # fallback
+#         n_rows_sum = 0
+#         n_flyback = 0
+#
+#     # irow = [0 cumsum(Ly'+n_flyback)]
+#     # irow(end) = [];
+#     # irow(2,:) = irow(1,:) + Ly';
+#     irow_starts = [0]
+#     irow_ends = []
+#     for val in Ly:
+#         irow_ends.append(irow_starts[-1] + val)
+#         irow_starts.append(irow_starts[-1] + val + n_flyback)
+#     # remove last start if it overshoots
+#     if len(irow_starts) > len(irow_ends):
+#         irow_starts.pop()
+#
+#     # ----------------------------------------------------------------
+#     # 4) Construct the "data" structure, matching the MATLAB logic
+#     # ----------------------------------------------------------------
+#     data = {}
+#     data["fs"] = fs
+#     data["nplanes"] = nplanes
+#     data["nrois"] = nrois
+#     data["mesoscan"] = 1 if nrois > 1 else 0
+#     data["diameter"] = [6, 9]
+#     data["num_workers_roi"] = 5
+#     data["keep_movie_raw"] = 0
+#     data["delete_bin"] = 1
+#     data["batch_size"] = 1000
+#     data["nimg_init"] = 400
+#     data["tau"] = 2.0
+#     data["combined"] = 1
+#     data["nonrigid"] = 1
+#
+#     if data["mesoscan"]:
+#         data["dx"] = []
+#         data["dy"] = []
+#         data["lines"] = []
+#         for i, (start_val, end_val) in enumerate(zip(irow_starts, irow_ends)):
+#             data["lines"].append(list(range(int(start_val), int(end_val))))
+#             if i < len(imin):
+#                 data["dx"].append(int(imin[i, 1]))
+#                 data["dy"].append(int(imin[i, 0]))
+#             else:
+#                 data["dx"].append(0)
+#                 data["dy"].append(0)
+#
+#     # ----------------------------------------------------------------
+#     # 5) Derive data_path and save_path0 from `root`
+#     #    The MATLAB code does some string manipulation for that
+#     # ----------------------------------------------------------------
+#     # We'll just store `root` as data_path[0] for simplicity:
+#     # You can adapt if you want different logic
+#     normalized_root = os.path.abspath(root)
+#     data["data_path"] = [normalized_root]
+#
+#     # The MATLAB code modifies the drive letter to "G:". We'll do a simple approach
+#     # or you can replicate exactly if you want:
+#     data["save_path0"] = f"G:{os.path.abspath(root)[2:]}"  # e.g. G:\DATA\...
+#     # Or just store the same root in case you don't want to alter the drive:
+#     # data["save_path0"] = normalized_root
+#
+#     # ----------------------------------------------------------------
+#     # 6) Write ops.json
+#     # ----------------------------------------------------------------
+#     output_path = os.path.join(root, output_ops_json)
+#     with open(output_path, "w", encoding="utf-8") as f:
+#         json.dump(data, f, indent=4)
+#
+#     print(f"Saved ops.json to {output_path}")
 
-    If you already know the height or don't need the flyback logic, you can omit it
-    or pass in a known value some other way.
-    """
 
-    # ----------------------------------------------------------------
-    # 0) Load the extracted metadata from JSON
-    #    The JSON is assumed to have keys like "Software", "Artist", etc.
-    # ----------------------------------------------------------------
-    with open(metadata_json_path, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
+def convert_to_ops_json(
+    root_folder,
+    default_fs=4.0,
+    default_nplanes=1,
+    default_diameter=(6, 9),
+    default_num_workers_roi=5,
+    default_keep_movie_raw=0,
+    default_delete_bin=1,
+    default_batch_size=1000,
+    default_nimg_init=400,
+    default_tau=2.0,
+    default_combined=1,
+    default_nonrigid=1,
+    default_save_drive='G:'
+):
+    tifs = [f for f in os.listdir(root_folder) if f.lower().endswith('.tif')]
+    if not tifs:
+        return
 
-    # For convenience, we'll do:
-    software_tag = metadata.get("Software", "")
-    artist_tag = metadata.get("Artist", "")
+    fname = os.path.join(root_folder, tifs[0])
+    fs = default_fs
+    nplanes = default_nplanes
+    rois = []
 
-    # ----------------------------------------------------------------
-    # 1) Determine the image height (stack_height) from the tags.
-    # ----------------------------------------------------------------
-    stack_height = metadata.get("ImageLength", None)
+    with tifffile.TiffFile(fname) as tif:
+        page_tags = tif.pages[0].tags
+        artist_tag = page_tags.get('Artist')
+        software_tag = page_tags.get('Software')
+        if artist_tag:
+            artist_str = artist_tag.value
+            idx = artist_str.rfind('}')
+            if idx != -1:
+                artist_str = artist_str[:idx+1]
+            try:
+                artist_data = json.loads(artist_str)
+            except:
+                artist_data = {}
+            try:
+                rois = artist_data["RoiGroups"]["imagingRoiGroup"]["rois"]
+            except:
+                rois = []
 
-    path_to_use = metadata_json_path
-    root = os.path.dirname(os.path.abspath(path_to_use))
+        if software_tag:
+            lines = software_tag.value.splitlines()
+            for line in lines:
+                parts = line.split(' = ')
+                if len(parts) != 2:
+                    continue
+                key, val = parts
+                if 'SI.hRoiManager.scanVolumeRate' in key:
+                    try:
+                        fs = float(val)
+                    except:
+                        pass
+                elif 'SI.hFastZ.userZs' in key:
+                    try:
+                        zs = [float(z) for z in val.strip('[]').split()]
+                        nplanes = len(zs)
+                    except:
+                        pass
 
-    # ----------------------------------------------------------------
-    # 2) Parse the frame rate `fs` from the software line
-    #    - The MATLAB code searches for "SI.hRoiManager.scanVolumeRate"
-    # ----------------------------------------------------------------
-    fs = 4  # fallback
-    # Split software_tag by lines
-    lines_software = software_tag.splitlines()
-    for line in lines_software:
-        # e.g., "SI.hRoiManager.scanVolumeRate = 5"
-        if "SI.hRoiManager.scanVolumeRate" in line:
-            parts = line.split("=")
-            if len(parts) > 1:
-                try:
-                    fs = float(parts[1].strip())
-                except ValueError:
-                    pass
-        # e.g., "SI.hFastZ.userZs = [0 15 30]"
-        if "SI.hFastZ.userZs" in line:
-            # parse array
-            match_z = re.search(r"\[(.*)\]", line)
-            if match_z:
-                zs_str = match_z.group(1).strip()
-                zs_vals = zs_str.split()
-                nplanes = len(zs_vals)
-            else:
-                nplanes = 1
-        else:
-            nplanes = 1
+    nrois = len(rois)
+    data = {
+        "fs": fs,
+        "nplanes": nplanes,
+        "nrois": nrois,
+        "mesoscan": 1 if nrois > 1 else 0,
+        "diameter": list(default_diameter),
+        "num_workers_roi": default_num_workers_roi,
+        "keep_movie_raw": default_keep_movie_raw,
+        "delete_bin": default_delete_bin,
+        "batch_size": default_batch_size,
+        "nimg_init": default_nimg_init,
+        "tau": default_tau,
+        "combined": default_combined,
+        "nonrigid": default_nonrigid
+    }
 
-    # ----------------------------------------------------------------
-    # 3) Parse the "Artist" tag as JSON to get rois
-    #    - The MATLAB code extracts sub-fields from artist.RoiGroups.imagingRoiGroup.rois
-    # ----------------------------------------------------------------
-    # The MATLAB snippet does:
-    #   artist_info = artist_info(1:find(artist_info == '}', 1, 'last'));
-    #   artist = jsondecode(artist_info);
-    #   si_rois = artist.RoiGroups.imagingRoiGroup.rois;
-    # We do something similar in Python:
-
-    si_rois = []
-    # try to find the trailing brace if there's extra content
-    match = re.search(r"(.*\})", artist_tag)
-    if match:
-        trimmed_json = match.group(1)
-    else:
-        trimmed_json = artist_tag  # fallback to entire string
-    try:
-        artist_dict = json.loads(trimmed_json)
-        si_rois = artist_dict["RoiGroups"]["imagingRoiGroup"]["rois"]
-    except Exception:
-        si_rois = []
-
-    nrois = len(si_rois)
-
-    Ly = []
-    Lx = []
-    cXY = []
-    szXY = []
-
-    for r in si_rois:
-        # rois[k].scanfields(1).pixelResolutionXY => [W, H]
-        sf = r["scanfields"]
-        # Sometimes it's a list; sometimes just one dict
-        sf0 = sf[0] if isinstance(sf, list) else sf
-
-        pixel_res_xy = sf0.get("pixelResolutionXY", [0, 0])
-        center_xy = sf0.get("centerXY", [0, 0])
-        size_xy = sf0.get("sizeXY", [0, 0])
-
-        # MATLAB does:
-        # Ly(k,1) = .pixelResolutionXY(2)
-        # Lx(k,1) = .pixelResolutionXY(1)
-        Ly.append(pixel_res_xy[1])
-        Lx.append(pixel_res_xy[0])
-
-        # cXY(k, [2,1]) = .centerXY
-        # szXY(k, [2,1]) = .sizeXY
-        cXY.append([center_xy[1], center_xy[0]])
-        szXY.append([size_xy[1], size_xy[0]])
-
-    Ly = np.array(Ly)
-    Lx = np.array(Lx)
-    cXY = np.array(cXY)
-    szXY = np.array(szXY)
-
-    # cXY = cXY - szXY/2; cXY = cXY - min(cXY,[],1);
-    if len(cXY) > 0:
-        cXY = cXY - (szXY / 2.0)
-        cXY = cXY - np.min(cXY, axis=0)
-
-    # mu = median([Ly, Lx]./szXY,1);
-    # => we can do a column stack of (Ly, Lx), then elementwise divide by szXY
-    if len(Ly) > 0:
-        stack_lylx = np.column_stack((Ly, Lx))
-        safe_szxy = np.copy(szXY)
-        safe_szxy[safe_szxy == 0] = 1e-9
-        ratio = stack_lylx / safe_szxy
-        mu = np.median(ratio, axis=0)  # shape (2,)
-    else:
-        mu = np.array([1, 1], dtype=float)
-
-    # imin = cXY .* mu
-    if len(cXY) > 0:
-        imin = cXY * mu
-    else:
-        imin = np.zeros((0, 2))
-
-    # deduce flyback frames from the most filled z-plane
-    # (the MATLAB code uses size(stack,1) for total # of rows.)
-    if stack_height is not None and len(Ly) > 0:
-        n_rows_sum = np.sum(Ly)
-        if nrois > 1:
-            n_flyback = (stack_height - n_rows_sum) / (nrois - 1)
-        else:
-            n_flyback = 0
-    else:
-        # fallback
-        n_rows_sum = 0
-        n_flyback = 0
-
-    # irow = [0 cumsum(Ly'+n_flyback)]
-    # irow(end) = [];
-    # irow(2,:) = irow(1,:) + Ly';
-    irow_starts = [0]
-    irow_ends = []
-    for val in Ly:
-        irow_ends.append(irow_starts[-1] + val)
-        irow_starts.append(irow_starts[-1] + val + n_flyback)
-    # remove last start if it overshoots
-    if len(irow_starts) > len(irow_ends):
-        irow_starts.pop()
-
-    # ----------------------------------------------------------------
-    # 4) Construct the "data" structure, matching the MATLAB logic
-    # ----------------------------------------------------------------
-    data = {}
-    data["fs"] = fs
-    data["nplanes"] = nplanes
-    data["nrois"] = nrois
-    data["mesoscan"] = 1 if nrois > 1 else 0
-    data["diameter"] = [6, 9]
-    data["num_workers_roi"] = 5
-    data["keep_movie_raw"] = 0
-    data["delete_bin"] = 1
-    data["batch_size"] = 1000
-    data["nimg_init"] = 400
-    data["tau"] = 2.0
-    data["combined"] = 1
-    data["nonrigid"] = 1
-
+    # Mock dx, dy, lines
     if data["mesoscan"]:
-        data["dx"] = []
-        data["dy"] = []
+        data["dx"] = [0] * nrois
+        data["dy"] = [0] * nrois
         data["lines"] = []
-        for i, (start_val, end_val) in enumerate(zip(irow_starts, irow_ends)):
-            data["lines"].append(list(range(int(start_val), int(end_val))))
-            if i < len(imin):
-                data["dx"].append(int(imin[i, 1]))
-                data["dy"].append(int(imin[i, 0]))
-            else:
-                data["dx"].append(0)
-                data["dy"].append(0)
+        for i in range(nrois):
+            data["lines"].append([])  # placeholder
 
-    # ----------------------------------------------------------------
-    # 5) Derive data_path and save_path0 from `root`
-    #    The MATLAB code does some string manipulation for that
-    # ----------------------------------------------------------------
-    # We'll just store `root` as data_path[0] for simplicity:
-    # You can adapt if you want different logic
-    normalized_root = os.path.abspath(root)
-    data["data_path"] = [normalized_root]
+    data["data_path"] = [root_folder.replace("\\", "/")]
 
-    # The MATLAB code modifies the drive letter to "G:". We'll do a simple approach
-    # or you can replicate exactly if you want:
-    data["save_path0"] = f"G:{os.path.abspath(root)[2:]}"  # e.g. G:\DATA\...
-    # Or just store the same root in case you don't want to alter the drive:
-    # data["save_path0"] = normalized_root
+    drive, tail = os.path.splitdrive(root_folder)
+    data["save_path0"] = os.path.join(default_save_drive, tail).replace("\\", "/")
 
-    # ----------------------------------------------------------------
-    # 6) Write ops.json
-    # ----------------------------------------------------------------
-    output_path = os.path.join(root, output_ops_json)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    ops_path = os.path.join(root_folder, "ops.json")
+    with open(ops_path, 'w') as f:
+        json.dump(data, f, indent=2)
 
-    print(f"Saved ops.json to {output_path}")
+    # Placeholder for saving zstack
+    print("Successfully generated ops.json with optional defaults.")
 
 
 def diff_ops_files_json(ops_path1, ops_path2):
@@ -518,6 +613,8 @@ def compare_mesoscope_frames(
 
 
 if __name__ == "__main__":
+    in_path = Path("/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/Tyche-F2_2023_02_27_1__00001_00001.tif")
+    extract_metadata_to_json(in_path)
     # input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
     # extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
     # export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
