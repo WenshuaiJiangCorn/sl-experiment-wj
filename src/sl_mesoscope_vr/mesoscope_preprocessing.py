@@ -2,7 +2,6 @@
 preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
 """
 
-from typing import Any
 from pathlib import Path
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -10,7 +9,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 import numpy as np
 import tifffile
+import json
 from ataraxis_base_utilities import console, ensure_directory_exists
+import matplotlib.pyplot as plt
+from suite2p.io.binary import BinaryFile
+
+import re
+import os
+import difflib
 
 
 def _check_stack_size(file: Path) -> int:
@@ -43,12 +49,12 @@ def _check_stack_size(file: Path) -> int:
 
 
 def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_sources: bool) -> None:
-    """Reads a TIFF stack and extracts its frames as LERC-compressed files.
+    """Reads a TIFF stack and saves it as a LERC-compressed stacked TIFF file.
 
     This is a worker function called by the _extract_frames_from_stack() as it parallelizes stack processing for each
     input directory. Specifically, this function is called for each stack inside each processed TIFF directory. It
-    extracts each frame stored inside the input stack as a series of LERC-compressed TIFF files and verifies that each
-    extracted frame matches the original to ensure data integrity.
+    re-compresses the stack using LERC-compression and verifies that each compressed frame matches the original to
+    ensure data integrity. This function maintains the input stack dimension and layout.
 
     Raises:
         RuntimeError: If any extracted frame does not match the original frame stored inside the TIFF stack.
@@ -60,50 +66,52 @@ def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_so
         remove_sources: Determines whether to remove original TIFF stacks after processing.
     """
     # Loads the stack into RAM
-    img = tifffile.imread(str(tiff_path))
+    original_stack = tifffile.imread(str(tiff_path))
 
-    # Uses the base stack name to compute the numeric ID for each frame. Specifically, uses the stack number and
-    # the stack size parameters to determine the exact number of each extracted frame in the overall sequence saved
-    # over multiple stacks.
+    # Uses the base stack name to determine the number and ID of frames inside the stack. Specifically, uses the stack
+    # number and the stack size parameters to determine the exact position of each extracted frame in the overall
+    # sequence saved over multiple stacks. This is used to determine the range of frames stored in this particular
+    # stack
     base_name = tiff_path.stem
     session_sequence: str = base_name.split("__")[-1]
     _, stack_number = session_sequence.split("_")
-    previous_frames = (int(stack_number) - 1) * stack_size
 
-    # Sequentially loops over each frame and extracts them as Tiffs.
-    frame: np.ndarray[Any]
-    for i, frame in enumerate(img, start=previous_frames + 1):
-        output_path = output_dir.joinpath(f"{i:012d}.tiff")
-        tifffile.imwrite(
-            output_path,
-            frame,
-            compression="lerc",
-            compressionargs={"level": 0.0},  # Lossless
-            predictor=True,
-            resolutionunit="NONE",  # Remove unnecessary metadata
-        )
+    # Computes the starting and ending frame number
+    actual_stack_size = len(original_stack)
+    start_frame = (int(stack_number) - 1) * stack_size + 1
+    end_frame = start_frame + actual_stack_size - 1
 
-        # Loads the newly compressed frame and verifies that it matches the original frame
-        new_frame = tifffile.imread(str(output_path))
-        if not np.array_equal(new_frame, frame):
-            message = f"Frame {i} does not match the original frame in {tiff_path}."
-            console.error(message=message, error=RuntimeError)
+    # Creates the output path for the compressed stack. Uses 12-digit padding for frame numbering
+    output_path = output_dir.joinpath(f"{str(start_frame).zfill(12)}_{str(end_frame).zfill(12)}.tiff")
 
-    # Since the integrity of each extracted frame is verified above, it is always safe to remove the original tiff file
+    tifffile.imwrite(
+        output_path,
+        original_stack,
+        compression="lerc",
+        compressionargs={"level": 0.0},  # Lossless compression
+        predictor=True,
+        resolutionunit="NONE",  # Remove unnecessary metadata
+    )
+
+    # Verifies the integrity of the compressed stack
+    compressed_stack = tifffile.memmap(output_path)
+    if not np.array_equal(compressed_stack, original_stack):
+        message = f"Compressed stack does not match the original stack in {tiff_path}."
+        console.error(message=message, error=RuntimeError)
+
+    # Remove the original file if requested
     if remove_sources:
-        tiff_path.unlink()  # Removes the original tiff file after it has been processed
+        tiff_path.unlink()
 
 
 def extract_frames_from_stack(
     image_directory: Path, num_processes: int, remove_sources: bool = False, batch: bool = False
 ) -> None:
-    """Loops over all multi-frame TIFF stacks in the input directory and extracts individual frames as efficiently
-    compressed TIFF files.
+    """Loops over all multi-frame TIFF stacks in the input directory and recompresses them using LERC scheme.
 
-    This function is used as a preprocessing step for mesoscope-acquired data, preparing it to be further processed
-    via suite2p. In addition to extracting data as single frame tiffs, it also compresses each tiff with an
-    efficient 'LERC' scheme and removes unnecessary tiff metadata and source stacks. These steps achieve ~70%
-    compression ratio, compared to the original frame stacks obtained from the mesoscope.
+    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
+    long-term storage and streaming over the network. To do so, each stack is re-encoded using LERC scheme,
+    which achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope.
 
     Notes:
         This function is specifically calibrated to work with TIFF stacks produced by the scanimage matlab software.
@@ -166,3 +174,371 @@ def extract_frames_from_stack(
             else:
                 # For batch mode, processes without progress tracking
                 [future.result() for future in as_completed(future_to_file)]
+
+
+def extract_metadata_to_json(target_stack, output_json="metadata.json"):
+    """
+    Extract all TIFF tags from the first page of 'input_tif' and save
+    them as JSON in 'output_json'.
+    """
+    file_path = Path('/Users/natalieyeung/Downloads/Tyche-F2_2023_02_27_1__00001_00001.tif')
+    absolute_path = file_path.resolve()
+
+    with tifffile.TiffFile(absolute_path) as tiff:
+        # metadata = {tag.name: tag.value for tag in tiff.pages[0].tags.values()}
+        metadata = tiff.scanimage_metadata
+
+    print(metadata)
+
+    output_directory = Path('/Users/natalieyeung/Documents/GitHub/sl-mesoscope/misc')
+    metadata_json = output_directory / 'metadata.json'
+
+    with open(metadata_json, 'w') as json_file:
+        json.dump(metadata, json_file, indent=4)
+
+
+def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
+    """
+    Generate ops.json from the metadata in metadata_json_path (extracted TIFF tags).
+    If `tiff_path` is provided and `stack_first_frame=True`, we will load the first
+    frame to get the actual 'height' for computing flyback frames.
+
+    If you already know the height or don't need the flyback logic, you can omit it
+    or pass in a known value some other way.
+    """
+
+    # ----------------------------------------------------------------
+    # 0) Load the extracted metadata from JSON
+    #    The JSON is assumed to have keys like "Software", "Artist", etc.
+    # ----------------------------------------------------------------
+    with open(metadata_json_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    # For convenience, we'll do:
+    software_tag = metadata.get("Software", "")
+    artist_tag = metadata.get("Artist", "")
+
+    # ----------------------------------------------------------------
+    # 1) Determine the image height (stack_height) from the tags.
+    # ----------------------------------------------------------------
+    stack_height = metadata.get("ImageLength", None)
+
+    path_to_use = metadata_json_path
+    root = os.path.dirname(os.path.abspath(path_to_use))
+
+    # ----------------------------------------------------------------
+    # 2) Parse the frame rate `fs` from the software line
+    #    - The MATLAB code searches for "SI.hRoiManager.scanVolumeRate"
+    # ----------------------------------------------------------------
+    fs = 4  # fallback
+    # Split software_tag by lines
+    lines_software = software_tag.splitlines()
+    for line in lines_software:
+        # e.g., "SI.hRoiManager.scanVolumeRate = 5"
+        if "SI.hRoiManager.scanVolumeRate" in line:
+            parts = line.split("=")
+            if len(parts) > 1:
+                try:
+                    fs = float(parts[1].strip())
+                except ValueError:
+                    pass
+        # e.g., "SI.hFastZ.userZs = [0 15 30]"
+        if "SI.hFastZ.userZs" in line:
+            # parse array
+            match_z = re.search(r"\[(.*)\]", line)
+            if match_z:
+                zs_str = match_z.group(1).strip()
+                zs_vals = zs_str.split()
+                nplanes = len(zs_vals)
+            else:
+                nplanes = 1
+        else:
+            nplanes = 1
+
+    # ----------------------------------------------------------------
+    # 3) Parse the "Artist" tag as JSON to get rois
+    #    - The MATLAB code extracts sub-fields from artist.RoiGroups.imagingRoiGroup.rois
+    # ----------------------------------------------------------------
+    # The MATLAB snippet does:
+    #   artist_info = artist_info(1:find(artist_info == '}', 1, 'last'));
+    #   artist = jsondecode(artist_info);
+    #   si_rois = artist.RoiGroups.imagingRoiGroup.rois;
+    # We do something similar in Python:
+
+    si_rois = []
+    # try to find the trailing brace if there's extra content
+    match = re.search(r"(.*\})", artist_tag)
+    if match:
+        trimmed_json = match.group(1)
+    else:
+        trimmed_json = artist_tag  # fallback to entire string
+    try:
+        artist_dict = json.loads(trimmed_json)
+        si_rois = artist_dict["RoiGroups"]["imagingRoiGroup"]["rois"]
+    except Exception:
+        si_rois = []
+
+    nrois = len(si_rois)
+
+    Ly = []
+    Lx = []
+    cXY = []
+    szXY = []
+
+    for r in si_rois:
+        # rois[k].scanfields(1).pixelResolutionXY => [W, H]
+        sf = r["scanfields"]
+        # Sometimes it's a list; sometimes just one dict
+        sf0 = sf[0] if isinstance(sf, list) else sf
+
+        pixel_res_xy = sf0.get("pixelResolutionXY", [0, 0])
+        center_xy = sf0.get("centerXY", [0, 0])
+        size_xy = sf0.get("sizeXY", [0, 0])
+
+        # MATLAB does:
+        # Ly(k,1) = .pixelResolutionXY(2)
+        # Lx(k,1) = .pixelResolutionXY(1)
+        Ly.append(pixel_res_xy[1])
+        Lx.append(pixel_res_xy[0])
+
+        # cXY(k, [2,1]) = .centerXY
+        # szXY(k, [2,1]) = .sizeXY
+        cXY.append([center_xy[1], center_xy[0]])
+        szXY.append([size_xy[1], size_xy[0]])
+
+    Ly = np.array(Ly)
+    Lx = np.array(Lx)
+    cXY = np.array(cXY)
+    szXY = np.array(szXY)
+
+    # cXY = cXY - szXY/2; cXY = cXY - min(cXY,[],1);
+    if len(cXY) > 0:
+        cXY = cXY - (szXY / 2.0)
+        cXY = cXY - np.min(cXY, axis=0)
+
+    # mu = median([Ly, Lx]./szXY,1);
+    # => we can do a column stack of (Ly, Lx), then elementwise divide by szXY
+    if len(Ly) > 0:
+        stack_lylx = np.column_stack((Ly, Lx))
+        safe_szxy = np.copy(szXY)
+        safe_szxy[safe_szxy == 0] = 1e-9
+        ratio = stack_lylx / safe_szxy
+        mu = np.median(ratio, axis=0)  # shape (2,)
+    else:
+        mu = np.array([1, 1], dtype=float)
+
+    # imin = cXY .* mu
+    if len(cXY) > 0:
+        imin = cXY * mu
+    else:
+        imin = np.zeros((0, 2))
+
+    # deduce flyback frames from the most filled z-plane
+    # (the MATLAB code uses size(stack,1) for total # of rows.)
+    if stack_height is not None and len(Ly) > 0:
+        n_rows_sum = np.sum(Ly)
+        if nrois > 1:
+            n_flyback = (stack_height - n_rows_sum) / (nrois - 1)
+        else:
+            n_flyback = 0
+    else:
+        # fallback
+        n_rows_sum = 0
+        n_flyback = 0
+
+    # irow = [0 cumsum(Ly'+n_flyback)]
+    # irow(end) = [];
+    # irow(2,:) = irow(1,:) + Ly';
+    irow_starts = [0]
+    irow_ends = []
+    for val in Ly:
+        irow_ends.append(irow_starts[-1] + val)
+        irow_starts.append(irow_starts[-1] + val + n_flyback)
+    # remove last start if it overshoots
+    if len(irow_starts) > len(irow_ends):
+        irow_starts.pop()
+
+    # ----------------------------------------------------------------
+    # 4) Construct the "data" structure, matching the MATLAB logic
+    # ----------------------------------------------------------------
+    data = {}
+    data["fs"] = fs
+    data["nplanes"] = nplanes
+    data["nrois"] = nrois
+    data["mesoscan"] = 1 if nrois > 1 else 0
+    data["diameter"] = [6, 9]
+    data["num_workers_roi"] = 5
+    data["keep_movie_raw"] = 0
+    data["delete_bin"] = 1
+    data["batch_size"] = 1000
+    data["nimg_init"] = 400
+    data["tau"] = 2.0
+    data["combined"] = 1
+    data["nonrigid"] = 1
+
+    if data["mesoscan"]:
+        data["dx"] = []
+        data["dy"] = []
+        data["lines"] = []
+        for i, (start_val, end_val) in enumerate(zip(irow_starts, irow_ends)):
+            data["lines"].append(list(range(int(start_val), int(end_val))))
+            if i < len(imin):
+                data["dx"].append(int(imin[i, 1]))
+                data["dy"].append(int(imin[i, 0]))
+            else:
+                data["dx"].append(0)
+                data["dy"].append(0)
+
+    # ----------------------------------------------------------------
+    # 5) Derive data_path and save_path0 from `root`
+    #    The MATLAB code does some string manipulation for that
+    # ----------------------------------------------------------------
+    # We'll just store `root` as data_path[0] for simplicity:
+    # You can adapt if you want different logic
+    normalized_root = os.path.abspath(root)
+    data["data_path"] = [normalized_root]
+
+    # The MATLAB code modifies the drive letter to "G:". We'll do a simple approach
+    # or you can replicate exactly if you want:
+    data["save_path0"] = f"G:{os.path.abspath(root)[2:]}"  # e.g. G:\DATA\...
+    # Or just store the same root in case you don't want to alter the drive:
+    # data["save_path0"] = normalized_root
+
+    # ----------------------------------------------------------------
+    # 6) Write ops.json
+    # ----------------------------------------------------------------
+    output_path = os.path.join(root, output_ops_json)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+    print(f"Saved ops.json to {output_path}")
+
+
+def diff_ops_files_json(ops_path1, ops_path2):
+    with open(ops_path1, "r", encoding="utf-8") as f1:
+        data1 = json.load(f1)
+    with open(ops_path2, "r", encoding="utf-8") as f2:
+        data2 = json.load(f2)
+
+    # Convert back to JSON with sorted keys, so differences are consistent
+    json1 = json.dumps(data1, sort_keys=True, indent=2)
+    json2 = json.dumps(data2, sort_keys=True, indent=2)
+
+    # Compare line by line
+    diff = difflib.unified_diff(
+        json1.splitlines(), json2.splitlines(), fromfile=ops_path1, tofile=ops_path2, lineterm=""
+    )
+
+    # Print the diff
+    printed = False
+    for line in diff:
+        printed = True
+        print(line)
+    if not printed:
+        print("No differences found! The JSON content is identical.")
+
+
+def compare_mesoscope_frames(
+    tiff_path: Path, bin_path: Path, ops_path: Path, tiff_index: int, plane_index: int, render_dpi: int
+) -> None:
+    """Generates a side-by-side plot of the raw mesoscope plane and the registered mesoscope plane data.
+
+    This function allows comparing raw and registered mesoscope frames. In addition to extracting and showing both
+    planes side-by-side, it also generates a plot of difference between the two image pixels and plots it in-line with
+    the visual data.
+
+    Notes:
+        This function assumes that the mesoscope images multiple ROIs (rectangles) as different planes. It also assumes
+        that images of each plane are stacked into a single 'frame' tiff file and that multiple 'frames' are
+        concatenated into a single tiff 'stack' during imaging.
+
+        At this time, this function does not support saving the generated images to disk. It is designed for quick
+        data inspection by a human researcher.
+
+    Args:
+        tiff_path: The path to the raw stack of mesoscope frames acquired by the mesoscope. Each frame can have one or
+            more planes (ROIs).
+        bin_path: The path to the binary file containing the registered mesoscope plane data.
+        ops_path: The path to the ops.json file generated by suite2p helpers or sl_mesoscope helpers. This file is used
+            to get the indices of frame rows occupied by each plane.
+        tiff_index: The index of the specific tiff file within the input tiff stack to process. This specifies the
+            frame to process and is relative to each stack with index 0 being the first frame in the stack.
+        plane_index: The index of the specific section within the registered data.bin file to process. This specifies
+            the plane (frame) to process and is relative to each bin file with index 0 being the first plane in the
+            bin file. This index assumes that the binary file only stores the data for a single plane.
+        render_dpi: The resolution at which to render the comparison figures. Since mesoscope frames are fairly large,
+            it is beneficial to use larger DPIs to render comparison figures.
+    """
+    # Reads the specified tiff frame (page) into RAM.
+    with tifffile.TiffFile(tiff_path) as tif:
+        raw_frame = tif.asarray(key=tiff_index)
+
+    # Uses ops.json to determine the indices for the rows occupied by the targeted plane
+    with open(ops_path, "r") as file:
+        plane_data = json.load(file)
+        lines = plane_data["lines"]
+
+    # Computes the dimensions of the plane using 'lines' as height and the width of the original frame tiff.
+    width = raw_frame.shape[1]
+    height = len(lines[plane_index])
+
+    raw_plane = raw_frame[lines[plane_index]]  # Extracts the plane data from the raw frame array
+
+    # Extracts the registered plane data for the matching frame
+    registered_plane = BinaryFile(Lx=width, Ly=height, filename=str(bin_path))[plane_index]
+
+    # Computes the difference between frames
+    difference = raw_plane - registered_plane
+
+    # Applies rendering dpi
+    plt.rcParams["figure.dpi"] = render_dpi
+
+    # Creates a figure with three subplots side by side
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6), dpi=render_dpi)
+
+    # Plots raw frame
+    im1 = ax1.imshow(raw_plane, cmap="gray")
+    ax1.set_title("Raw Frame")
+
+    # Plots registered frame
+    im2 = ax2.imshow(registered_plane, cmap="gray")
+    ax2.set_title("Registered Frame")
+
+    # Plots difference
+    # Uses 'bwr' colormap where blue is negative, white is zero, red is positive
+    im3 = ax3.imshow(difference, cmap="bwr")
+    ax3.set_title("Difference (Raw - Registered)")
+    plt.colorbar(im3, ax=ax3)
+
+    # Adjusts layout to prevent overlap
+    plt.tight_layout()
+
+    # Shows the plot
+    plt.show()
+
+
+if __name__ == "__main__":
+    # input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
+    # extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
+    # export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
+    #
+    # generate_ops_from_metadata(
+    #     metadata_json_path="/media/Data/Tyche-A2/2022_01_25/1/metadata.json", output_ops_json="ops.json"
+    # )
+
+    # ops_1 = "/media/Data/2022_01_25/1/ops.json"
+    # ops_2 = "/media/Data/Tyche-A2/2022_01_25/1/ops.json"
+    # diff_ops_files_json(ops_1, ops_2)
+
+    # tiff_path = Path(
+    #     "/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/Tyche-F2_2023_02_27_1__00001_00001.tif"
+    # )  # Raw
+    # bin_path = Path("/home/cyberaxolotl/Desktop/processed/Tyche-F2/2023_02_27/1/suite2p/plane0/data.bin")  # Registered
+    # ops_path = Path("/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/ops.json")  #
+    # tiff_index = 250
+    # bin_index = 250
+    # plane_index = 0
+    # render_dpi = 300
+    #
+    # # Generates and displays the difference between the raw and registered frame
+    # compare_mesoscope_frames(tiff_path, bin_path, ops_path, tiff_index, plane_index, render_dpi=300)

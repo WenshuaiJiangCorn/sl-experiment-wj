@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import tempfile
 
 from ataraxis_communication_interface.communication import MQTTCommunication
 from tqdm import tqdm
@@ -608,106 +607,104 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
         )
 
 
-def test_runtime() -> None:
-    temp_dir = Path(tempfile.mkdtemp())
-    data_logger = DataLogger(output_directory=temp_dir, instance_name="test_logger")
-
-    console.enable()
-
-    encoder = EncoderInterface()
-    brake = BreakInterface()
-    lick = LickInterface()
-    valve = ValveInterface(valve_calibration_data=((1000, 0.001), (5000, 0.005), (10000, 0.01)))
-
-    actor_interfaces = (brake, valve)
-
-    encoder_interfaces = (encoder,)
-
-    sensor_interfaces = (lick,)
-
-    actor_interface = MicroControllerInterface(
-        controller_id=np.uint8(101),
-        data_logger=data_logger,
-        module_interfaces=actor_interfaces,
-        microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port="/dev/ttyACM1",
-        baudrate=115200,
-    )
-
-    encoder_interface = MicroControllerInterface(
-        controller_id=np.uint8(203),
-        data_logger=data_logger,
-        module_interfaces=encoder_interfaces,
-        microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port="/dev/ttyACM2",
-        baudrate=115200,
-    )
-
-    sensor_interface = MicroControllerInterface(
-        controller_id=np.uint8(152),
-        data_logger=data_logger,
-        module_interfaces=sensor_interfaces,
-        microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port="/dev/ttyACM0",
-        baudrate=115200,
-    )
-
-    timer = PrecisionTimer("s")
-
-    # cue_topic = 'CueSequence/'
-    # unity_communication = UnityCommunication(monitored_topics=cue_topic)
-    # unity_communication.connect()
-
-    # unity_communication.send_data("Display/Blank/")
-    # timer.delay_noblock(5)
-    # unity_communication.send_data("Display/Show/")
-
-    # unity_communication.send_data("CueSequenceTrigger/")
-
-    # while not unity_communication.has_data:
-    #     pass
-
-    # sequence: bytes = unity_communication.get_data()
-
-    data_logger._vacate_shared_memory_buffer()
-    actor_interface.vacate_shared_memory_buffer()
-    sensor_interface.vacate_shared_memory_buffer()
-    encoder_interface.vacate_shared_memory_buffer()
-
-    data_logger.start()
-
-    actor_interface.start()
-    encoder_interface.start()
-    sensor_interface.start()
-
-    actor_interface.unlock_controller()
-
-    actor_interface.send_message(brake.toggle(state=False))  # Disengage the break
-
-    # Calibrate the encoder to only report CCW movement and start position recording
-    encoder_interface.send_message(encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=20))
-    encoder_interface.send_message(encoder.check_state(repetition_delay=np.uint32(100)))
-
-    # Starts lick monitoring
-    sensor_interface.send_message(lick.check_state(repetition_delay=np.uint32(20000)))
-
-    # Starts reward delivery
-    actor_interface.send_message(
-        valve.set_parameters(
-            pulse_duration=np.uint32(4000000), calibration_delay=np.uint32(10000), calibration_count=np.uint16(100)
-        )
-    )  # 1 second
-
-    timer.delay_noblock(delay=120)
-
-    actor_interface.stop()
-    encoder_interface.stop()
-    sensor_interface.stop()
-    data_logger.stop()
-
+# def test_runtime() -> None:
+#     temp_dir = Path(tempfile.mkdtemp())
+#     data_logger = DataLogger(output_directory=temp_dir, instance_name="test_logger")
+#
+#     console.enable()
+#
+#     encoder = EncoderInterface()
+#     brake = BreakInterface()
+#     lick = LickInterface()
+#     valve = ValveInterface(valve_calibration_data=((1000, 0.001), (5000, 0.005), (10000, 0.01)))
+#
+#     actor_interfaces = (brake, valve)
+#
+#     encoder_interfaces = (encoder,)
+#
+#     sensor_interfaces = (lick,)
+#
+#     actor_interface = MicroControllerInterface(
+#         controller_id=np.uint8(101),
+#         data_logger=data_logger,
+#         module_interfaces=actor_interfaces,
+#         microcontroller_serial_buffer_size=8192,
+#         microcontroller_usb_port="/dev/ttyACM1",
+#         baudrate=115200,
+#     )
+#
+#     encoder_interface = MicroControllerInterface(
+#         controller_id=np.uint8(203),
+#         data_logger=data_logger,
+#         module_interfaces=encoder_interfaces,
+#         microcontroller_serial_buffer_size=8192,
+#         microcontroller_usb_port="/dev/ttyACM2",
+#         baudrate=115200,
+#     )
+#
+#     sensor_interface = MicroControllerInterface(
+#         controller_id=np.uint8(152),
+#         data_logger=data_logger,
+#         module_interfaces=sensor_interfaces,
+#         microcontroller_serial_buffer_size=8192,
+#         microcontroller_usb_port="/dev/ttyACM0",
+#         baudrate=115200,
+#     )
+#
+#     timer = PrecisionTimer("s")
+#
+#     # cue_topic = 'CueSequence/'
+#     # unity_communication = UnityCommunication(monitored_topics=cue_topic)
+#     # unity_communication.connect()
+#
+#     # unity_communication.send_data("Display/Blank/")
+#     # timer.delay_noblock(5)
+#     # unity_communication.send_data("Display/Show/")
+#
+#     # unity_communication.send_data("CueSequenceTrigger/")
+#
+#     # while not unity_communication.has_data:
+#     #     pass
+#
+#     # sequence: bytes = unity_communication.get_data()
+#
+#     data_logger._vacate_shared_memory_buffer()
+#     actor_interface.vacate_shared_memory_buffer()
+#     sensor_interface.vacate_shared_memory_buffer()
+#     encoder_interface.vacate_shared_memory_buffer()
+#
+#     data_logger.start()
+#
+#     actor_interface.start()
+#     encoder_interface.start()
+#     sensor_interface.start()
+#
+#     actor_interface.unlock_controller()
+#
+#     actor_interface.send_message(brake.toggle(state=False))  # Disengage the break
+#
+#     # Calibrate the encoder to only report CCW movement and start position recording
+#     encoder_interface.send_message(encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=20))
+#     encoder_interface.send_message(encoder.check_state(repetition_delay=np.uint32(100)))
+#
+#     # Starts lick monitoring
+#     sensor_interface.send_message(lick.check_state(repetition_delay=np.uint32(20000)))
+#
+#     # Starts reward delivery
+#     actor_interface.send_message(
+#         valve.set_parameters(
+#             pulse_duration=np.uint32(4000000), calibration_delay=np.uint32(10000), calibration_count=np.uint16(100)
+#         )
+#     )  # 1 second
+#
+#     timer.delay_noblock(delay=120)
+#
+#     actor_interface.stop()
+#     encoder_interface.stop()
+#     sensor_interface.stop()
+#     data_logger.stop()
 
 if __name__ == "__main__":
-    test_runtime()
-
+    pass
     # target = Path("/media/Data/Tyche-A2")
     # convert_old_data(root_directory=target, remove_sources=True)
