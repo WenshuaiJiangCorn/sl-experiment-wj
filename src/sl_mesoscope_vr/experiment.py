@@ -18,7 +18,7 @@ from module_interfaces import (
     ScreenInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists
-from mesoscope_preprocessing import extract_frames_from_stack
+from mesoscope_preprocessing import process_mesoscope_directory
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
@@ -591,7 +591,7 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 
     # Processes each directory in parallel
     for directory in tqdm(session_directories, desc="Processing mesoscope frames for session directories", unit="dir"):
-        extract_frames_from_stack(
+        process_mesoscope_directory(
             directory,
             num_processes,
             remove_sources,
