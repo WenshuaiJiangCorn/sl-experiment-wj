@@ -18,7 +18,7 @@ from module_interfaces import (
     ScreenInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists
-from mesoscope_preprocessing import process_mesoscope_directory
+from mesoscope_preprocessing import process_mesoscope_directory, _fix_mesoscope_frames
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
@@ -577,29 +577,31 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
         if directory.is_dir() and directory.name != "mesoscope_frames"  # Exclude already processed frames.
     ]
 
-    # Collects the paths to each directory with TIFF files OR that has a mesoscope_frames subdirectory. This is used as
-    # a heuristic to discover folders with Tyche cohort session data.
-    session_directories = set()
+    # Collects the paths to each directory with TIFF files and to each directory that has a mesoscope_frames
+    # subdirectory. This is used as a heuristic to discover folders with Tyche cohort session data.
+    session_directories = set()  # Directories that have not been processed will have raw tiff stacks
+    old_directories = set()  # Directories processed by the OLD pipeline have mesoscope_frames folder
     for subdirectory in subdirectories:
         tiff_files_in_subdir = list(subdirectory.glob("*.tif")) + list(subdirectory.glob("*.tiff"))
 
-        # Check for mesoscope_frames subdirectory. This directory would exist in already processed session directories
+        # Checks for mesoscope_frames subdirectory. This directory would exist in already processed session directories
         has_mesoscope_frames = (subdirectory / "mesoscope_frames").exists()
 
-        if tiff_files_in_subdir or has_mesoscope_frames:
+        if tiff_files_in_subdir and not has_mesoscope_frames:
             session_directories.add(subdirectory)
 
+        if has_mesoscope_frames:
+            old_directories.add(subdirectory)
+
     # Processes each directory in parallel
-    for directory in tqdm(session_directories, desc="Processing mesoscope frames for session directories", unit="dir"):
-        process_mesoscope_directory(
-            directory,
-            num_processes,
-            remove_sources,
-            batch=True,
-        )
+    for directory in tqdm(session_directories, desc="Processing mesoscope frame directories", unit="directory"):
+        process_mesoscope_directory(directory, num_processes, remove_sources, batch=True, chunk_size=10)
+
+    for directory in tqdm(old_directories, desc="Reprocessing old mesoscope frame directories", unit="directory"):
+        _fix_mesoscope_frames(directory, num_processes, remove_sources, chunk_size=5000)
 
     # Calculates the checksum for each processed directory
-    for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="dir"):
+    for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="directory"):
         calculate_directory_checksum(
             directory,
             num_processes,
@@ -705,6 +707,5 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 #     data_logger.stop()
 
 if __name__ == "__main__":
-    pass
-    # target = Path("/media/Data/Tyche-A2")
-    # convert_old_data(root_directory=target, remove_sources=True)
+    target = Path("/media/Data/2022_01_25")
+    convert_old_data(root_directory=target, remove_sources=True)

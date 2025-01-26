@@ -4,9 +4,10 @@ preprocessing is to prepare the data for storage and further processing in the S
 
 from pathlib import Path
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 from numpy.typing import NDArray
+from functools import partial
 from tqdm import tqdm
 import numpy as np
 import tifffile
@@ -19,7 +20,17 @@ import difflib
 from datetime import datetime
 from contextlib import nullcontext
 
-# from suite2p import registration_wrapper
+
+def _get_stack_number(tiff_path: Path) -> int | None:
+    """A helper function that determines the number of mesoscope-acquired tiff stacks using its file name.
+
+    This is used to sort all TIFF stacks in a directory before recompressing them as a single BigTiff file. Like
+    other helpers, this helper is also used to identify and remove non-mesoscope TIFFs from the dataset.
+    """
+    try:
+        return int(tiff_path.stem.split("__")[-1].split("_")[-1])
+    except (ValueError, IndexError):
+        return None  # This is used to filter non-scanimage TIFFS
 
 
 def _check_stack_size(file: Path) -> int:
@@ -39,13 +50,14 @@ def _check_stack_size(file: Path) -> int:
         If the file is a stack, returns the number of frames (pages) in the stack. Otherwise, returns 0 to indicate that
         the file is not a stack.
     """
-    with tifffile.TiffFile(str(file)) as tif:
+    with tifffile.TiffFile(file) as tif:
         # Gets number of pages (frames) from tiff header
         n_frames = len(tif.pages)
 
         # Considers all files with more than one page and a 2-dimensional (monochrome) image as a stack. For these
-        # stacks, returns the discovered stack size (number of frames).
-        if n_frames > 1 and len(tif.pages[0].shape) == 2:
+        # stacks, returns the discovered stack size (number of frames). Also ensures that the files have the ScanImage
+        # metadata. This latter step will exclude already processed BigTiff files.
+        if n_frames > 1 and len(tif.pages[0].shape) == 2 and len(tif.scanimage_metadata.keys()) > 0:
             return n_frames
         # Otherwise, returns 0 to indicate that the file is not a stack.
         return 0
@@ -76,17 +88,8 @@ def _load_stack_data(file: Path) -> tuple[NDArray[np.int16], dict[str, Any]]:
         tag data. The dictionary uses sub-tags as keys and numpy arrays as values. Each array aggregates the data for
         all frames loaded from the stack in the same order as the frame data.
     """
-
-    # Extracts the number of pages inside the stack. Also doubles as a verification mechanism that checks if the file
-    # is a mesoscope TIFF stack.
-    num_pages = _check_stack_size(file)
-    if num_pages == 0:
-        message = (
-            f"Unable to process the requested TIFF file '{file}'. The file is not a supported mesoscope TIFF stack."
-        )
-        console.error(message=message, error=NotImplementedError)
-
     with tifffile.TiffFile(file) as tif:
+        num_pages = len(tif.pages)
         stack = tif.asarray()
 
         # Initializes arrays for storing metadata
@@ -183,122 +186,6 @@ def _load_stack_data(file: Path) -> tuple[NDArray[np.int16], dict[str, Any]]:
         }
 
         return stack, metadata_dict
-
-
-def _fix_mesoscope_frames(mesoscope_directory: Path, chunk_size: int = 5000) -> None:
-    """Loads all frames stored inside the target mesoscope_frames directory into memory and re-saves them as a single
-    BigTiff hyperstack.
-
-    This function is used to recompress the frames previously saved as single-frame TIFF files into one BigTiff stack.
-    This is used to bring the data preprocessed by the early Sub Lab pipeline to the modern format. Specifically,
-    initially we split mesoscope stacks into individual frames, but later a decision was made to instead produce a
-    BigTiff stack that includes all frames, instead of ~33000 individual TIFF files.
-
-    Notes:
-        This function is NOT memory-safe. We have enough memory on the host-computer to load the entire session into
-        RAM, but this function will fail on machines with less than ~100 GB of RAM.
-
-        This function generates a new mesoscope_frames.tiff file in the parent directory where mesoscope_frames folder
-        was stored.
-
-        This function verifies the integrity of frames after re-encoding and then removes the source directory and all
-        TIFF frame files.
-
-    Args:
-        mesoscope_directory: The Path to the mesoscope_frames directory containing the individual frame TIFF files.
-        chunk_size: The number of frames to load into memory at a time when recompressing the stack.
-    """
-
-    # Generates the list of frame files stored in the directory and sorts them in the order of acquisition.
-    tiff_files = sorted(mesoscope_directory.glob("*.tif*"), key=lambda x: int(x.stem))
-
-    # Precreates the output BigTiff file path
-    output_path = mesoscope_directory.parent / "mesoscope_frames.tiff"
-
-    # Saves the loaded data as lerc-compressed BigTiff:
-
-    # Loads the data in chunks and appends them to the output BigTiff file
-    for i in range(0, len(tiff_files), chunk_size):
-        chunk_files = tiff_files[i : i + chunk_size]
-
-        # Load chunk
-        with ThreadPoolExecutor() as executor:
-            frames = list(executor.map(tifffile.imread, chunk_files))
-        chunk_data = np.concatenate(frames, axis=0).astype(np.int16)
-
-        # Write chunk
-        tifffile.imwrite(
-            output_path,
-            chunk_data,
-            compression="lerc",
-            compressionargs={"level": 0.0},
-            predictor=True,
-            bigtiff=True,  # Enables BigTiff support
-            append=i > 0,  # Append after first chunk
-        )
-
-    del chunk_data  # Releases memory to free all resources for the verification step
-
-    # A worker function used to verify the integrity of recompressed frames in-parallel
-    def verify_frame(args):
-        idx, source_file = args
-        source_data = tifffile.imread(source_file)
-        with tifffile.TiffFile(output_path) as tif:
-            compressed_frame = tif.pages[idx].asarray()
-        return np.array_equal(compressed_frame, source_data)
-
-    # Verifies each page of the BigTiff file against its source file
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(verify_frame, enumerate(tiff_files)))
-
-    # Ensures all data passes verification before removing sources
-    if not all(results):
-        message = (
-            f"Verification failed for some frames in {output_path} when re-compressing mesoscope frames to BigTiff."
-        )
-        console.error(message=message, error=RuntimeError)
-
-    # Removes sources if verification passed and also removes the directory
-    for file in tiff_files:
-        file.unlink()
-    mesoscope_directory.rmdir()
-
-
-def _process_invariant_metadata(file: Path) -> None:
-    """Extracts frame-invariant ScanImage metadata from the target tiff file and outputs it as a JSON file in the same
-    directory.
-
-    This function only needs to be called for one raw ScanImage TIFF stack in each directory. It extracts the
-    ScanImage metadata that is common for all frames across all stacks and outputs it as metadata.json file. This
-    function also calls the _generate_ops() function that generates a suite2p ops.json file from the parsed
-    metadata.
-
-    Notes:
-        This function is primarily designed to preserve the metadata before converting raw TIFF stacks into a
-        single hyperstack and compressing it as LERC. It ensures that all original metadata is preserved for
-        future referencing.
-
-    Args:
-        file: The path to the mesoscope TIFF stack file. This can be any file in the directory as the
-            frame-invariant metadata is the same for all stacks.
-    """
-
-    # Uses the parent directory of the target tiff file to create the output JSON file
-    metadata_json = Path(file.parent).joinpath("metadata.json")
-
-    # Reads the frame-invariant metadata from the first page (frame) of the stack. This metadata is the same across
-    # all frames and stacks.
-    with tifffile.TiffFile(file) as tiff:
-        metadata = tiff.scanimage_metadata
-        frame_data = tiff.asarray(key=0)  # Loads the data for the first frame in the stack to generate ops.json
-
-    # Writes the metadata as a JSON file.
-    with open(metadata_json, "w") as json_file:
-        # noinspection PyTypeChecker
-        json.dump(metadata, json_file, indent=4)
-
-    # Also uses extracted metadata to generate the ops.json configuration file for scanImage processing.
-    _generate_ops(metadata=metadata, frame_data=frame_data, data_path=file.parent, output_path=file.parent)
 
 
 def _generate_ops(
@@ -419,50 +306,218 @@ def _generate_ops(
     json_path = data_path.joinpath("ax_ops.json")
     with open(json_path, "w") as f:
         # noinspection PyTypeChecker
-        json.dump(data, f)
+        json.dump(data, f, separators=(",", ":"), indent=None)  # Maximizes data compression
 
 
-def _verify_frame(args):
-    """A worker function used to verify the integrity of recompressed frames in-parallel.
+def _verify_frame(source_file_path: Path, processed_frame_offset: int, processed_file_path: Path) -> bool:
+    """Verifies the integrity of processed mesoscope frames against source frames.
 
-    This is used during mesoscope frame preprocessing to ensure it is safe to delete recompressed source files.
+    This worker function runs in parallel in multiple single- or multipage TIFF files. It is used to ensure it is safe
+    to remove source frame files once they have been processed.
+
+    Args:
+        source_file_path: Path to the source TIFF file (single or multipage).
+        processed_frame_offset: Starting frame number in processed BigTiff that corresponds to the first frame in the
+            input stack.
+        processed_file_path: Path to the processed BigTiff file.
+
+    Returns:
+        True if all frames match, False otherwise
     """
-    idx, (source_file, output_tiff) = args
-    source_data = tifffile.imread(source_file)
-    with tifffile.TiffFile(output_tiff) as tif:
-        compressed_frame = tif.pages[idx].asarray()
-    return np.array_equal(compressed_frame, source_data)
+
+    # Creates file handles for source and processed files
+    with tifffile.TiffFile(source_file_path) as source, tifffile.TiffFile(processed_file_path) as processed:
+        # Determines the number of frames (pages) in the source file. This function works with single-page and
+        # multipage TIFF files.
+        source_pages = len(source.pages)
+
+        # Loads the entire source stack into memory. Also loads comparatively many frames from the processed BigTiff
+        # stack, starting from the processed_frame_offset frame.
+        source_data = source.asarray()
+        processed_frames = processed.asarray(key=slice(processed_frame_offset, processed_frame_offset + source_pages))
+
+        # Compares the loaded data and returns the boolean result from this operation to caller
+        return np.array_equal(processed_frames, source_data)
+
+
+def _fix_mesoscope_frames(
+    mesoscope_directory: Path, num_processes: int, remove_sources: bool = False, chunk_size: int = 5000
+) -> None:
+    """Loads all frames stored inside the target mesoscope_frames directory into memory and re-saves them as a single
+    BigTiff hyperstack.
+
+    This function is used to recompress the frames previously saved as single-frame TIFF files into one BigTiff stack.
+    This is used to bring the data preprocessed by the early Sun Lab pipeline to the modern format. Specifically,
+    initially we split mesoscope stacks into individual frames, but later a decision was made to instead produce a
+    BigTiff stack that includes all frames. The output BigTiff is created in the parent directory of the
+    mesoscope_directory folder.
+
+    Notes:
+        This function can use a very large amount of RAM to buffer the data in memory. To manage the memory use, adjust
+        the chunk_size to determine how many frames are kept in memory at the same time. The chunking will only apply to
+        the encoding phase of this function's runtime. The data integrity verification step is limited by the number
+        of parallel workers defined by the num_workers with each worker storing 2 frames in memory.
+
+    Raises:
+        FileExistsError: If the target BigTiff file already exists.
+        RuntimeError: If one or more frames in the BigTiff file do not match its source frame. This indicates that
+            frame data was corrupted during processing.
+
+    Args:
+        mesoscope_directory: The Path to the mesoscope_frames directory containing the individual frame TIFF files.
+        num_processes: The number of CPU cores to use for processing and verifying the data.
+        remove_sources: Determines whether to remove (unlink) the single-page source Tiffs that were used to create the
+            BigTiff file.
+        chunk_size: The number of frames to load into memory at a time when recompressing the frames into one
+            BigTiff stack.
+    """
+    # Generates the list of frame files stored in the directory and sorts them in the order of acquisition.
+    tiff_files = sorted(mesoscope_directory.glob("*.tif*"), key=lambda x: int(x.stem))
+
+    # Precreates the output BigTiff file path
+    output_path = mesoscope_directory.parent / "mesoscope_frames.tiff"
+
+    # If there are no tiff files to process, ends processing early.
+    if len(tiff_files) < 0:
+        return
+
+    # If the BigTiff already exists, raises an error. Due to us using append mode, it is not safe to proceed to rework
+    # an existing BigTiff file and deleting the existing stack may also be unsafe. So we defer to user discretion.
+    if output_path.exists():
+        message = (
+            f"Unable to re-stack single-page frame tiffs into the BigTiff format for the directory "
+            f"{mesoscope_directory}. The target BigTiff file already exists."
+        )
+        console.error(message=message, error=FileExistsError)
+
+    # Saves the loaded data as lerc-compressed BigTiff:
+    for i in range(0, len(tiff_files), chunk_size):
+        # The frame data is loaded in memory as chunks to deal with excessive RAM hogging. The chunks are processed by
+        # multiple CPU cores to optimize LERC-decoding associated with reading compressed frames into memory.
+        chunk_files = tiff_files[i : i + chunk_size]
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            frames = list(executor.map(tifffile.imread, chunk_files))
+
+        # Chunks are aggregated into a contiguous np.int16 array and are appended to the end of the output BigTiff file
+        # using LERC compression again.
+        chunk_data = np.concatenate(frames, axis=0).astype(np.int16)
+        tifffile.imwrite(
+            output_path,
+            chunk_data,
+            compression="lerc",
+            compressionargs={"level": 0.0},
+            predictor=True,
+            bigtiff=True,  # Enables BigTiff support
+            append=i > 0,  # Appends after first chunk
+        )
+
+    del chunk_data  # Releases memory to free all resources for the verification step
+
+    # Verifies each page of the BigTiff file against its source file. Does not use chunking like the function for
+    # stack processing as each worker will only load 2 frames into memory at a time, so number of workers is the
+    # limiting factor here.
+    with ProcessPoolExecutor() as executor:
+        verify = partial(_verify_frame, processed_file_path=output_path)
+        results = list(executor.map(verify, tiff_files, range(len(tiff_files))))
+
+    # Ensures all data passes verification before removing sources
+    if not all(results):
+        message = (
+            f"Unable to re-stack single-page frame tiffs into the BigTiff format for the directory "
+            f"{mesoscope_directory}. Some frames inside the generated BigTiff do not match their source single-page "
+            f"frames. This indicates data corruption during frame recompression."
+        )
+        console.error(message=message, error=RuntimeError)
+
+    # Removes sources if verification passed and also removes the directory
+    if remove_sources:
+        for file in tiff_files:
+            file.unlink()
+        mesoscope_directory.rmdir()
+
+
+def process_invariant_metadata(file: Path) -> None:
+    """Extracts frame-invariant ScanImage metadata from the target tiff file and outputs it as a JSON file in the same
+    directory.
+
+    This function only needs to be called for one raw ScanImage TIFF stack in each directory. It extracts the
+    ScanImage metadata that is common for all frames across all stacks and outputs it as metadata.json file. This
+    function also calls the _generate_ops() function that generates a suite2p ops.json file from the parsed
+    metadata.
+
+    Notes:
+        This function is primarily designed to preserve the metadata before converting raw TIFF stacks into a
+        single hyperstack and compressing it as LERC. It ensures that all original metadata is preserved for
+        future referencing.
+
+    Args:
+        file: The path to the mesoscope TIFF stack file. This can be any file in the directory as the
+            frame-invariant metadata is the same for all stacks.
+    """
+
+    # Uses the parent directory of the target tiff file to create the output JSON file
+    metadata_json = Path(file.parent).joinpath("metadata.json")
+
+    # Reads the frame-invariant metadata from the first page (frame) of the stack. This metadata is the same across
+    # all frames and stacks.
+    with tifffile.TiffFile(file) as tiff:
+        metadata = tiff.scanimage_metadata
+        frame_data = tiff.asarray(key=0)  # Loads the data for the first frame in the stack to generate ops.json
+
+    # Writes the metadata as a JSON file.
+    with open(metadata_json, "w") as json_file:
+        # noinspection PyTypeChecker
+        json.dump(metadata, json_file, separators=(",", ":"), indent=None)  # Maximizes data compression
+
+    # Also uses extracted metadata to generate the ops.json configuration file for scanImage processing.
+    _generate_ops(metadata=metadata, frame_data=frame_data, data_path=file.parent, output_path=file.parent)
 
 
 def process_mesoscope_directory(
-    image_directory: Path, num_processes: int, remove_sources: bool = False, batch: bool = False, chunk_size: int = 20
+    image_directory: Path, num_processes: int, remove_sources: bool = False, batch: bool = False, chunk_size: int = 10
 ) -> None:
-    """Loops over all multi-frame TIFF stacks in the input directory and recompresses them using LERC scheme.
+    """Loops over all multi-frame TIFF stacks in the input directory and recompresses them using LERC scheme as one
+    BigTiff file.
 
     This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
-    long-term storage and streaming over the network. To do so, each stack is re-encoded using LERC scheme,
-    which achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope.
+    long-term storage and streaming over the network. To do so, all stacks are assembled into one file and re-encoded
+    using LERC scheme, which achieves ~70% compression ratio, compared to the original frame stacks obtained from the
+    mesoscope.
+
+    Additionally, this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and
+    saves it as efficiently encoded JSON and compressed numpy archives to minimize disk space usage.
 
     Notes:
         This function is specifically calibrated to work with TIFF stacks produced by the scanimage matlab software.
         Critically, these stacks are named using '__' to separate session and stack number from the rest of the
         file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
-        input TIFF files do not follow this naming convention, the function will not work as expected.
+        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
+        stacks od not contain ScanImage metadata, they will be excluded from processing.
 
-        This function assumes that scanimage buffers frames until the stack_size number of frames is available and then
-        saves the frames as a TIFF stack. Therefore, it assumes that the directory contains at most one non-full stack.
-        The function uses this assumption when assigning unique frame IDs to extracted frames.
-
-        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFF at the
-        same time. It uses the stack number and stack size as a heuristic to determine which IDs to assign to each
-        extracted frame while processing stacks in-parallel to avoid collisions.
+        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
+        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
+        operate on the entire folder at the same time. To prevent this, use chunk_size to limit the number of TIFF
+        archives that can be buffered in RAM at a given time.
 
     Args:
-        image_directory: The directory containing the multi-frame TIFF stacks.
-        num_processes: The maximum number of processes to use while processing the directory.
-        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
+        image_directory: The directory containing the multi-frame TIFF stacks. This is typically the root directory for
+            one experimental session.
+        num_processes: The maximum number of processes to use while processing the directory. With the way this function
+            works now, this number is less important than the chunk_size parameter and offers fairly negligible
+            performance boost.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed. Due to
+            built-in processed data verification, this option is almost always safe and advised to minimize disk space
+            usage.
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
-            to optimize progress reporting to avoid cluttering the terminal.
+            to optimize progress reporting to avoid cluttering the terminal window.
+        chunk_size: The number of TIFF stacks to process at the same time. Primarily, this is used to constrain the
+            size of data buffered in RAM to avoid out-of-memory errors. Note, this number is halved for the data
+            integrity verification step as it requires loading both old (source) and processed (BigTiff) data at the
+            same time.
+
+    Raises:
+        FileExistsError: If the output BigTiff file or compressed frame-variant metadata NumPy archive already exists.
+        RuntimeError: If one or more processed frames fails data integrity verification check.
     """
     # Precreates the paths to the output files
     output_tiff = image_directory / "mesoscope_frames.tiff"
@@ -475,31 +530,80 @@ def process_mesoscope_directory(
     # Finds all TIFF files in the input directory (non-recursive).
     tiff_files = list(image_directory.glob("*.tif")) + list(image_directory.glob("*.tiff"))
 
-    # Uses chunking to prevent out-of-memory errors
+    # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
+    tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
+    tiff_files.sort(key=_get_stack_number)
+
+    # Goes over files and removes any non-stack or non-mesoscope TIFF files from processing. Also calculates frame
+    # offsets based on stack sizes. This is used to verify the data integrity after re-encoding in-parallel by reading
+    # from different TIFF lines at the same time (for the BigTiff file).
+    offsets = []
+    current_offset = 0
+    tiff_files_filtered = []
+    for file in tiff_files:
+        stack_size = _check_stack_size(file)
+        if stack_size > 0:
+            tiff_files_filtered.append(file)
+            offsets.append(current_offset)
+            current_offset += stack_size
+
+    tiff_files = tiff_files_filtered
+
+    # Ends the runtime early if there are no valid TIFF files to process after filtering
+    if len(tiff_files) == 0:
+        return
+
+    # If output files already exist, raises an error. Since we don't know why these files are there, the decision to
+    # handle them is deferred to the user.
+    if output_tiff.exists() or metadata_file.exists():
+        message = (
+            f"Unable to stack all mesoscope-acquired frames into the BigTiff format and extract their metadata for the "
+            f"directory {image_directory}. The target BigTiff file or the frame_metadata.npz file already exists."
+        )
+        console.error(message=message, error=FileExistsError)
+
+    # Ensures that the chunk_size is valid and uses to determine half-chunk-size for the verification phase
+    if chunk_size > 0:
+        chunk_size = int(max(1, chunk_size))
+    # If chunking is disabled (set to -1), chunk size is set to the number of all tiff stacks
+    else:
+        chunk_size = len(tiff_files)
+
+    # Half-chunk is always half the main chunk
+    half_chunk_size = int(max(1, chunk_size // 2))
+
+    # Extracts frame invariant metadata using the first frame of the first TIFF stack. Sinc this metadata is the
+    # same for all stacks, it is safe to use any available stack. We use the first one for consistency with
+    # suite2p helper scripts.
+    process_invariant_metadata(file=tiff_files[0])
+
+    # Processes all available frames. Uses chunking to prevent too much data from being loaded into RAM at the same
+    # time.
     with (
-        tqdm(range(0, len(tiff_files), chunk_size), desc="Processing TIFF stacks", unit="chunks")
+        tqdm(range(0, len(tiff_files), chunk_size), desc=f"Processing chunks of {chunk_size} TIFF stacks", unit="chunk")
         if not batch
         else nullcontext(range(0, len(tiff_files), chunk_size))
-    ) as pbar:
-        for i in pbar:
-            # Determines the stacks for each chunk
-            chunk = tiff_files[i : i + chunk_size]
+    ) as chunk_indices:
+        for index in chunk_indices:
+            # Extracts the paths to the TIFF stacks that are part of the current chunk
+            chunk = tiff_files[index : index + chunk_size]
 
-            # Loads all TIFF stacks from the current chunk pool into memory. Also leads frame-variant metadata for all
-            # frames in processed stacks
-            with ThreadPoolExecutor(max_workers=num_processes) as executor:
+            # Loads all TIFF stacks from the current chunk pool into memory. The method also extracts and formats the
+            # frame-variant ScanImage metadata for each loaded frame.
+            with ProcessPoolExecutor(max_workers=num_processes) as executor:
                 chunk_results = list(executor.map(_load_stack_data, chunk))
 
-            # Concatenates the frames from all stacks and writes appends them to the end of the BigTiff output file
-            chunk_frames = np.concatenate([result[0] for result in chunk_results], axis=0).astype(np.int16)
+            # Iteratively concatenates the frame data from all stacks and appends it to the end of the BigTiff output
+            # file
+            frame_data = np.concatenate([result[0] for result in chunk_results], axis=0).astype(np.int16)
             tifffile.imwrite(
                 output_tiff,
-                chunk_frames,
+                frame_data,
                 compression="lerc",
                 compressionargs={"level": 0.0},
                 predictor=True,
                 bigtiff=True,
-                append=i > 0,
+                append=index > 0,
             )
 
             # Collects metadata from all chunks into the unified metadata_dictionary as runtime progresses
@@ -507,34 +611,52 @@ def process_mesoscope_directory(
                 for key, value in result[1].items():
                     all_metadata[key].append(value)
 
-            pbar.update(1)
-
         # Removes leftover chunk data once the BigTiff is created to conserve memory
-        del chunk_frames
+        del frame_data
 
-        # Saves concatenated metadata as compressed numpy archive
-        metadata_dict = {k: np.concatenate(v) for k, v in all_metadata.items()}
-        np.savez(metadata_file, **metadata_dict)
+    # Saves concatenated metadata as compressed numpy archive
+    metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
+    np.savez(metadata_file, **metadata_dict)
 
-        # Verifies each page of the BigTiff file against its source file
-        verify_iter = ((i, (f, output_tiff)) for i, f in enumerate(tiff_files))
-        with (
-            tqdm(verify_iter, total=len(tiff_files), desc="Verifying frames") if not batch else nullcontext(verify_iter)
-        ) as iter_with_paths:
+    # Verifies each page of the BigTiff file against its source stak frame. The reason we do not do this in-line
+    # with data saving is to be able to catch any collisions during saving (previous chunk being overwritten by the
+    # next chunk, etc.). This way is slower, but safer.
+    with (
+        tqdm(
+            range(0, len(tiff_files), half_chunk_size),
+            desc=f"Verifying compressed chunk integrity of {half_chunk_size} TIFF stacks",
+            unit="chunks",
+        )
+        if not batch
+        else nullcontext(range(0, len(tiff_files), half_chunk_size))
+    ) as chunk_indices:
+        for index in chunk_indices:
+            # Since verification loads TWICE as much data into memory (source AND processed frame data), we use the
+            # same chunking approach as above, but half the chunk size.
+            file_chunk = tiff_files[index : index + half_chunk_size]
+            offset_chunk = offsets[index : index + half_chunk_size]
+
+            # Submits the tasks to run in parallel
             with ProcessPoolExecutor(max_workers=num_processes) as executor:
-                verification = executor.map(_verify_frame, iter_with_paths)
+                verification = executor.map(
+                    partial(_verify_frame, processed_file_path=output_tiff),
+                    file_chunk,  # Source file path
+                    offset_chunk,  # Stack offset in the BigTiff file
+                )
 
-        # Ensures all data passes verification before removing sources
-        if not all(verification):
-            message = (
-                f"Verification failed for some frames in {output_tiff} when re-compressing mesoscope frames to BigTiff."
-            )
-            console.error(message=message, error=RuntimeError)
+    # Ensures all data passes verification before removing sources
+    if not all(verification):
+        message = (
+            f"Unable to aggregate TIFF stacks into the BigTiff format for the directory {image_directory}. Some frames "
+            f"inside the generated BigTiff file do not match the data inside their source stacks. This indicates data "
+            f"corruption during frame processing."
+        )
+        console.error(message=message, error=RuntimeError)
 
-        # Removes compressed sources
-        if remove_sources:
-            for file in tiff_files:
-                file.unlink()
+    # Removes compressed sources
+    if remove_sources:
+        for file in tiff_files:
+            file.unlink()
 
 
 def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
@@ -650,15 +772,3 @@ def compare_mesoscope_frames(
 
     # Shows the plot
     plt.show()
-
-
-if __name__ == "__main__":
-    in_path = Path("/home/cybermouse/Desktop/raw/Tyche-F2/2023_02_28/1")
-    process_mesoscope_directory(image_directory=in_path, num_processes=70, remove_sources=False, batch=False)
-
-    ops1 = Path("/media/cybermouse/SciDataLin/raw/Tyche-F2/2023_02_27/1/ops.json")
-    ops2 = Path("/media/cybermouse/SciDataLin/raw/Tyche-F2/2023_02_27/1/ops2.json")
-    # _process_metadata(in_path)
-    # compare_ops_files(ops1, ops2)
-    # stack_data, stack_metadata = _load_stack_data(in_path)
-    # print(stack_metadata)
