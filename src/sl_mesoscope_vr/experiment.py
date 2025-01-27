@@ -595,10 +595,19 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 
     # Processes each directory in parallel
     for directory in tqdm(session_directories, desc="Processing mesoscope frame directories", unit="directory"):
-        process_mesoscope_directory(directory, num_processes, remove_sources, batch=True, chunk_size=10)
+        process_mesoscope_directory(
+            directory, num_processes=num_processes, remove_sources=remove_sources, batch=True, use_memmap=True
+        )
 
     for directory in tqdm(old_directories, desc="Reprocessing old mesoscope frame directories", unit="directory"):
-        _fix_mesoscope_frames(directory, num_processes, remove_sources, chunk_size=5000)
+        _fix_mesoscope_frames(
+            directory,
+            num_processes=num_processes,
+            remove_sources=remove_sources,
+            stack_size=500,
+            batch=True,
+            use_memmap=True,
+        )
 
     # Calculates the checksum for each processed directory
     for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="directory"):
@@ -707,7 +716,5 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 #     data_logger.stop()
 
 if __name__ == "__main__":
-    target = Path("/media/Data/Tyche-A1/2021_10_05/1/mesoscope_frames")
-    _fix_mesoscope_frames(target, num_processes=28, remove_sources=False, chunk_size=5000)
-
-    # convert_old_data(root_directory=target, remove_sources=True)
+    target = Path("/media/Data/processing")
+    convert_old_data(root_directory=target, remove_sources=True)

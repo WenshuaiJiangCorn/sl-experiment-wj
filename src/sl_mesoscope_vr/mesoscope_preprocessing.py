@@ -228,7 +228,7 @@ def _process_stack(
 
 
 def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: bool, use_memmap: bool = False) -> None:
-    """ Reads the input sequence of frame TIFF files and assembles them into a single multipage, LERC-compressed TIFF
+    """Reads the input sequence of frame TIFF files and assembles them into a single multipage, LERC-compressed TIFF
     stack.
 
     This worker function is used by the _fix_mesoscope_frames() function and is overall similar to _process_stack(). It
@@ -423,7 +423,7 @@ def _fix_mesoscope_frames(
     stack_size: int = 500,
     remove_sources: bool = False,
     batch: bool = False,
-    use_memmap: bool = True
+    use_memmap: bool = True,
 ) -> None:
     """Recompresses single-page frames stored in the target directory into stacks.
 
@@ -458,7 +458,7 @@ def _fix_mesoscope_frames(
     tiff_files = sorted(mesoscope_directory.glob("*.tiff"), key=lambda x: int(x.stem))
 
     # Chunks the sorted frames into stacks
-    stacks = tuple([tiff_files[i:i + stack_size] for i in range(0, len(tiff_files), stack_size)])
+    stacks = tuple([tiff_files[i : i + stack_size] for i in range(0, len(tiff_files), stack_size)])
 
     # Uses partial to bind the constant arguments to the processing function
     process_func = partial(_assemble_stack_from_frames, remove_sources=remove_sources, use_memmap=use_memmap)
@@ -467,13 +467,13 @@ def _fix_mesoscope_frames(
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         # Submits all tasks
         # noinspection PyTypeChecker
-        future_to_file = {
-            executor.submit(process_func, stacks)
-        }
+        future_to_file = set()
+        for stack in stacks:
+            future_to_file.add(executor.submit(process_func, stack))
 
         if not batch:
             # Shows progress with tqdm when not in batch mode
-            with tqdm(total=len(tiff_files), desc="Recompressing frames into stacks", unit="stack") as pbar:
+            with tqdm(total=len(stacks), desc="Recompressing frames into stacks", unit="stack") as pbar:
                 for future in as_completed(future_to_file):
                     future.result()  # Gets result to ensure completion
                     pbar.update(1)
@@ -616,10 +616,9 @@ def process_mesoscope_directory(
     # Processes each tiff stack in parallel
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         # Submits all tasks
-        # noinspection PyTypeChecker
-        future_to_file = {
-            executor.submit(process_func, [file for file in tiff_files], [frame for frame in frame_numbers])
-        }
+        future_to_file = set()
+        for file, frame in zip(tiff_files, frame_numbers):
+            future_to_file.add(executor.submit(process_func, file, frame))
 
         if not batch:
             # Shows progress with tqdm when not in batch mode
