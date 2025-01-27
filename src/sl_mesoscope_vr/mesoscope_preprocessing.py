@@ -334,7 +334,10 @@ def _verify_frame(source_file_path: Path, processed_frame_offset: int, processed
         # Loads the entire source stack into memory. Also loads comparatively many frames from the processed BigTiff
         # stack, starting from the processed_frame_offset frame.
         source_data = source.asarray()
-        processed_frames = processed.asarray(key=slice(processed_frame_offset, processed_frame_offset + source_pages))
+        if source_pages < 2:
+            processed_frames = processed.asarray(key=processed_frame_offset)
+        else:
+            processed_frames = processed.asarray(key=slice(processed_frame_offset, processed_frame_offset + source_pages))
 
         # Compares the loaded data and returns the boolean result from this operation to caller
         return np.array_equal(processed_frames, source_data)
@@ -372,13 +375,13 @@ def _fix_mesoscope_frames(
             BigTiff stack.
     """
     # Generates the list of frame files stored in the directory and sorts them in the order of acquisition.
-    tiff_files = sorted(mesoscope_directory.glob("*.tif*"), key=lambda x: int(x.stem))
+    tiff_files = sorted(mesoscope_directory.glob("*.tiff"), key=lambda x: int(x.stem))
 
     # Precreates the output BigTiff file path
     output_path = mesoscope_directory.parent / "mesoscope_frames.tiff"
 
     # If there are no tiff files to process, ends processing early.
-    if len(tiff_files) < 0:
+    if len(tiff_files) == 0:
         return
 
     # If the BigTiff already exists, raises an error. Due to us using append mode, it is not safe to proceed to rework
@@ -390,7 +393,19 @@ def _fix_mesoscope_frames(
         )
         console.error(message=message, error=FileExistsError)
 
+    # Ensures that the chunk_size is valid and uses to determine half-chunk-size for the verification phase
+    if chunk_size > 0:
+        chunk_size = int(max(1, chunk_size))
+    # If chunking is disabled (set to -1), chunk size is set to the number of all tiff stacks
+    else:
+        chunk_size = len(tiff_files)
+
+    # Half-chunk is always half the main chunk
+    half_chunk_size = int(max(1, chunk_size // 2))
+
     # Saves the loaded data as lerc-compressed BigTiff:
+    from time import perf_counter_ns
+    start = perf_counter_ns()
     for i in range(0, len(tiff_files), chunk_size):
         # The frame data is loaded in memory as chunks to deal with excessive RAM hogging. The chunks are processed by
         # multiple CPU cores to optimize LERC-decoding associated with reading compressed frames into memory.
@@ -413,12 +428,22 @@ def _fix_mesoscope_frames(
 
     del chunk_data  # Releases memory to free all resources for the verification step
 
+    stop = perf_counter_ns()
+    print(f'Encoding: {(stop-start) / 1000000000} seconds')
+
     # Verifies each page of the BigTiff file against its source file. Does not use chunking like the function for
     # stack processing as each worker will only load 2 frames into memory at a time, so number of workers is the
     # limiting factor here.
-    with ProcessPoolExecutor() as executor:
-        verify = partial(_verify_frame, processed_file_path=output_path)
-        results = list(executor.map(verify, tiff_files, range(len(tiff_files))))
+    start = perf_counter_ns()
+    verification_results = []
+    offset_list = range(len(tiff_files))
+    for i in range(0, len(tiff_files), half_chunk_size):
+        files = tiff_files[i: i + half_chunk_size]
+        offsets = offset_list[i: i + half_chunk_size]
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            verify = partial(_verify_frame, processed_file_path=output_path)
+            results = list(executor.map(verify, files, offsets))
+            verification_results.extend(results)
 
     # Ensures all data passes verification before removing sources
     if not all(results):
@@ -428,6 +453,9 @@ def _fix_mesoscope_frames(
             f"frames. This indicates data corruption during frame recompression."
         )
         console.error(message=message, error=RuntimeError)
+
+    stop = perf_counter_ns()
+    print(f'Verification: {(stop - start) / 1000000000} seconds')
 
     # Removes sources if verification passed and also removes the directory
     if remove_sources:
@@ -621,6 +649,7 @@ def process_mesoscope_directory(
     # Verifies each page of the BigTiff file against its source stak frame. The reason we do not do this in-line
     # with data saving is to be able to catch any collisions during saving (previous chunk being overwritten by the
     # next chunk, etc.). This way is slower, but safer.
+    verification_results = []
     with (
         tqdm(
             range(0, len(tiff_files), half_chunk_size),
@@ -643,9 +672,10 @@ def process_mesoscope_directory(
                     file_chunk,  # Source file path
                     offset_chunk,  # Stack offset in the BigTiff file
                 )
+                verification_results.extend(verification)
 
     # Ensures all data passes verification before removing sources
-    if not all(verification):
+    if not all(verification_results):
         message = (
             f"Unable to aggregate TIFF stacks into the BigTiff format for the directory {image_directory}. Some frames "
             f"inside the generated BigTiff file do not match the data inside their source stacks. This indicates data "

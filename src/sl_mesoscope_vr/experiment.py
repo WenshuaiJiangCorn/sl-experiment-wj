@@ -707,5 +707,7 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 #     data_logger.stop()
 
 if __name__ == "__main__":
-    target = Path("/media/Data/2022_01_25")
-    convert_old_data(root_directory=target, remove_sources=True)
+    target = Path("/media/Data/Tyche-A1/2021_10_05/1/mesoscope_frames")
+    _fix_mesoscope_frames(target, num_processes=28, remove_sources=False, chunk_size=5000)
+
+    # convert_old_data(root_directory=target, remove_sources=True)
