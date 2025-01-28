@@ -623,6 +623,8 @@ def convert_old_data(
                 batch=True,
                 verify_integrity=verify_integrity,
             )
+    else:
+        print("No new mesoscope frame directories to process.")
 
     # Next, handles any old directories that require reprocessing
     if len(old_directories) > 0:
@@ -635,6 +637,8 @@ def convert_old_data(
                 batch=True,
                 verify_integrity=verify_integrity,
             )
+    else:
+        print("No old mesoscope frame directories to reprocess.")
 
     # Calculates the checksum for all mesoscope-related directories
     for directory in tqdm(all_directories, desc="Calculating checksums for processed directories", unit="directory"):
