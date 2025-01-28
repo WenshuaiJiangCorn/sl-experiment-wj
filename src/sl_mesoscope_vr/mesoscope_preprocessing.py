@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from numpy.typing import NDArray
 from functools import partial
+
 from tqdm import tqdm
 import numpy as np
 import tifffile
@@ -63,16 +64,19 @@ def _check_stack_size(file: Path) -> int:
 
 
 def _process_stack(
-    tiff_path: Path, first_frame_number: int, output_dir: Path, remove_sources: bool, use_memmap: bool = False
+    tiff_path: Path, first_frame_number: int, output_dir: Path, remove_sources: bool, verify_integrity: bool
 ) -> dict[str, Any]:
     """Reads a TIFF stack, extracts its frame-variant ScanImage data, and saves it as a LERC-compressed stacked TIFF
     file.
 
-    This is a worker function called by the process_mesoscope_directory() as it parallelizes stack processing for each
-    input directory. Specifically, this function is called for each stack inside each processed TIFF directory. It
-    re-compresses the stack using LERC-compression and verifies that each compressed frame matches the original to
-    ensure data integrity. In addition to recompressing the stack, the function also extracts the frame-variant
-    ScanImage metadata for each frame, parses it into a dictionary, and returns it to caller.
+    This is a worker function called by the process_mesoscope_directory in-parallel for each stack inside each
+    processed directory. It re-compresses the input TIFF stack using LERC-compression and extracts the frame-variant
+    ScanImage metadata for each frame inside the stack. Optionally, the function can be configured to verify data
+    integrity after compression and to remove original TIFF stacks after processing.
+
+    Notes:
+        This function can reserve up to double the processed stack size of RAM bytes to hold the data in memory. If the
+        host-computer does not have enough RAM, reduce the number of concurrent processes or disable verification.
 
     Raises:
         RuntimeError: If any extracted frame does not match the original frame stored inside the TIFF stack.
@@ -82,14 +86,14 @@ def _process_stack(
     Args:
         tiff_path: The path to the TIFF stack to process.
         first_frame_number: The position (number) of the first frame stored in the stack, relative to the overall
-            sequence of frames acquired during experimental session. This is used to set the output file name to include
+            sequence of frames acquired during experiment. This is used to configure the output file name to include
             the range of frames stored in the stack.
-        output_dir: The path to the directory to which processed stacks are saved.
+        output_dir: The path to the directory where to save the processed stacks.
         remove_sources: Determines whether to remove original TIFF stacks after processing.
-        use_memmap: Determines whether to use memory mapping when reading stack data. Memory mapping is helpful in
-            massively parallel contexts where too much data is loaded into memory at the same time. In such contexts,
-            memory mapping will help to avoid out-of-memory errors. Not using memory mapping may result in considerably
-            faster runtimes if the host-computer has enough RAM.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
+            process.
     """
     # Generates the file handle for the current stack
     with tifffile.TiffFile(tiff_path) as stack:
@@ -190,10 +194,7 @@ def _process_stack(
         }
 
         # Loads stack data
-        if use_memmap:
-            original_stack = stack.asarray(out="memmap")  # Memory-mapped numpy array
-        else:
-            original_stack = stack.asarray()  # Reads the data as a numpy array into RAM
+        original_stack = stack.asarray()  # Reads the data as a numpy array into RAM
 
         # Computes the starting and ending frame number
         start_frame = first_frame_number  # This is precomputed to be correct, no adjustment needed
@@ -211,10 +212,9 @@ def _process_stack(
             predictor=True,
         )
 
-    # Verifies the integrity of the compressed stack. Always uses memmap, as we do not need to transform the data, so
-    # performance is not majorly compromised.
-    with tifffile.TiffFile(output_path) as tif:
-        compressed_stack = tif.asarray(out="memmap")
+    # Verifies the integrity of the compressed stack.
+    if verify_integrity:
+        compressed_stack = tifffile.imread(output_path)
         if not np.array_equal(compressed_stack, original_stack):
             message = f"Compressed stack {output_path} does not match the original stack in {tiff_path}."
             console.error(message=message, error=RuntimeError)
@@ -227,7 +227,7 @@ def _process_stack(
     return metadata_dict
 
 
-def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: bool, use_memmap: bool = False) -> None:
+def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: bool, verify_integrity: bool) -> None:
     """Reads the input sequence of frame TIFF files and assembles them into a single multipage, LERC-compressed TIFF
     stack.
 
@@ -236,29 +236,29 @@ def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: b
     frame as a one-page TIFF file. Since this process also (accidentally) stripped all metadata from source files,
     this function only restacks the frames into a LERC-compressed TIFF stack and verifies the processing integrity.
 
+    Notes:
+        This function can reserve up to double the processed stack size of RAM bytes to hold the data in memory. If the
+        host-computer does not have enough RAM, reduce the number of concurrent processes or disable verification.
+
     Args:
         frame_files: A list of paths to the individual frame TIFF files to be assembled into a stack.
         remove_sources: Determines whether to remove original frame files after processing.
-        use_memmap: Determines whether to use memory mapping when reading frame data. Memory mapping is helpful in
-            massively parallel contexts where too much data is loaded into memory at the same time. In such contexts,
-            memory mapping will help to avoid out-of-memory errors. Not using memory mapping may result in considerably
-            faster runtimes if the host-computer has enough RAM.
+        verify_integrity: Determines whether to verify the integrity of processed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
+            process.
 
     Raises:
         RuntimeError: If the re-encoded stack does not match original frame sources.
     """
-
     # Loads all frames as a list of arrays
     frames = []
     for frame_file in frame_files:
-        with tifffile.TiffFile(frame_file) as tif:
-            if use_memmap:
-                frame = tif.pages[0].asarray(out="memmap")
-            else:
-                frame = tif.pages[0].asarray()
-            # Adds singleton dimension for concatenation. This is used to convert the data from shape (height, width)
-            # to shape (frames, height, width)
-            frames.append(frame[np.newaxis, ...])
+        # Loads frame data into memory
+        frame = tifffile.imread(frame_file)
+        # Adds singleton dimension for concatenation. This is used to convert the data from shape (height, width)
+        # to shape (frames, height, width)
+        frames.append(frame[np.newaxis, ...])
 
     # Concatenates along the first axis (stack dimension) to assemble the stack data
     frame_data = np.concatenate(frames, axis=0)
@@ -281,10 +281,9 @@ def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: b
         predictor=True,
     )
 
-    # Verifies the integrity of the compressed stack. Always uses memmap, as we do not need to transform the data, so
-    # performance is not majorly compromised.
-    with tifffile.TiffFile(output_path) as tif:
-        compressed_stack = tif.asarray(out="memmap")
+    # Verifies the integrity of the compressed stack.
+    if verify_integrity:
+        compressed_stack = tifffile.imread(output_path)
         if not np.array_equal(compressed_stack, frame_data):
             message = f"Compressed stack {output_path} does not match one or more original frames."
             console.error(message=message, error=RuntimeError)
@@ -423,7 +422,7 @@ def _fix_mesoscope_frames(
     stack_size: int = 500,
     remove_sources: bool = False,
     batch: bool = False,
-    use_memmap: bool = True,
+    verify_integrity: bool = True,
 ) -> None:
     """Recompresses single-page frames stored in the target directory into stacks.
 
@@ -435,24 +434,21 @@ def _fix_mesoscope_frames(
     Notes:
         To optimize runtime efficiency, this function employs multiple processes to work with multiple stacks at the
         same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
-        operate on the entire folder at the same time. To prevent this, enable use_memmap flag to minimize the
-        RAM usage at the expense of increased processing time.
+        operate on the entire folder at the same time. To prevent this, disable verification and use fewer processes.
 
     Args:
         mesoscope_directory: The Path to the mesoscope_frames directory containing the individual frame TIFF files.
-        num_processes: The maximum number of processes to use while processing the directory. If the function is called
-            without memory-mapping support, this number indirectly determines the RAM usage level.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            assemble a stack of TIFF files in-parallel.
         stack_size: The number of frames to compress into each stack. For the final stack in the sequence, if the
             directory does not contain exactly stack_size frames, the size will be less and include all leftover frames.
-        remove_sources: Determines whether to remove the original TIFF files after they have been processed. Due to
-            built-in processed data verification, this option is almost always safe and advised to minimize disk space
-            usage.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
             to optimize progress reporting to avoid cluttering the terminal window.
-        use_memmap: Determines whether to use memory mapping when working with stack data. Memory mapping is helpful in
-            massively parallel contexts where too much data is loaded into memory at the same time. In such contexts,
-            memory mapping will help to avoid out-of-memory errors. Not using memory mapping may result in considerably
-            faster runtimes if the host-computer has enough RAM.
+        verify_integrity: Determines whether to verify the integrity of processed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
     """
     # Generates the list of frame files stored in the directory and sorts them in the order of acquisition.
     tiff_files = sorted(mesoscope_directory.glob("*.tiff"), key=lambda x: int(x.stem))
@@ -461,7 +457,9 @@ def _fix_mesoscope_frames(
     stacks = tuple([tiff_files[i : i + stack_size] for i in range(0, len(tiff_files), stack_size)])
 
     # Uses partial to bind the constant arguments to the processing function
-    process_func = partial(_assemble_stack_from_frames, remove_sources=remove_sources, use_memmap=use_memmap)
+    process_func = partial(
+        _assemble_stack_from_frames, remove_sources=remove_sources, verify_integrity=verify_integrity
+    )
 
     # Processes each tiff stack in parallel
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
@@ -471,6 +469,7 @@ def _fix_mesoscope_frames(
         for stack in stacks:
             future_to_file.add(executor.submit(process_func, stack))
 
+        # Note, this function does not need to parse metadata
         if not batch:
             # Shows progress with tqdm when not in batch mode
             with tqdm(total=len(stacks), desc="Recompressing frames into stacks", unit="stack") as pbar:
@@ -524,17 +523,16 @@ def process_mesoscope_directory(
     num_processes: int,
     remove_sources: bool = False,
     batch: bool = False,
-    use_memmap: bool = True,
+    verify_integrity: bool = True,
 ) -> None:
     """Loops over all multi-frame TIFF stacks in the input directory, recompresses them using LERC scheme, and extracts
     ScanImage metadata.
 
     This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
     long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
-    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope.
-
-    Additionally, this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and
-    saves it as efficiently encoded JSON and compressed numpy archives to minimize disk space usage.
+    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
+    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
+    efficiently encoded JSON and compressed numpy archives to minimize disk space usage.
 
     Notes:
         This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
@@ -545,23 +543,20 @@ def process_mesoscope_directory(
 
         To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
         same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
-        operate on the entire folder at the same time. To prevent this, enable use_memmap flag to minimize the
-        RAM usage at the expense of increased processing time.
+        operate on the entire folder at the same time. To prevent this, disable verification and use fewer processes.
 
     Args:
         image_directory: The directory containing the multi-frame TIFF stacks. This is typically the root directory for
             one experimental session.
-        num_processes: The maximum number of processes to use while processing the directory. If the function is called
-            without memory-mapping support, this number indirectly determines the RAM usage level.
-        remove_sources: Determines whether to remove the original TIFF files after they have been processed. Due to
-            built-in processed data verification, this option is almost always safe and advised to minimize disk space
-            usage.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            compress a stack of TIFF files in-parallel.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
             to optimize progress reporting to avoid cluttering the terminal window.
-        use_memmap: Determines whether to use memory mapping when working with stack data. Memory mapping is helpful in
-            massively parallel contexts where too much data is loaded into memory at the same time. In such contexts,
-            memory mapping will help to avoid out-of-memory errors. Not using memory mapping may result in considerably
-            faster runtimes if the host-computer has enough RAM.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
     """
     # Generates the mesoscope_frames directory, where the processed stacks will be saved
     output_dir = image_directory.joinpath("mesoscope_frames")
@@ -611,7 +606,9 @@ def process_mesoscope_directory(
     process_invariant_metadata(file=tiff_files[0])
 
     # Uses partial to bind the constant arguments to the processing function
-    process_func = partial(_process_stack, output_dir=output_dir, remove_sources=remove_sources, use_memmap=use_memmap)
+    process_func = partial(
+        _process_stack, output_dir=output_dir, remove_sources=remove_sources, verify_integrity=verify_integrity
+    )
 
     # Processes each tiff stack in parallel
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
@@ -624,11 +621,14 @@ def process_mesoscope_directory(
             # Shows progress with tqdm when not in batch mode
             with tqdm(total=len(tiff_files), desc="Processing TIFF stacks", unit="stack") as pbar:
                 for future in as_completed(future_to_file):
-                    future.result()  # Gets result to ensure completion
+                    for key, value in future.result().items():
+                        all_metadata[key].append(value)
                     pbar.update(1)
         else:
             # For batch mode, processes without progress tracking
-            [future.result() for future in as_completed(future_to_file)]
+            for future in as_completed(future_to_file):
+                for key, value in future.result().items():
+                    all_metadata[key].append(value)
 
     # Saves concatenated metadata as compressed numpy archive
     metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}

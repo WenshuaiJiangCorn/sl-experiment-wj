@@ -129,7 +129,7 @@ class MesoscopeExperiment:
             )
             console.error(message=message, error=ValueError)
 
-        # Ensures that the output directory exists, if it passed the verification above
+        # Ensures that the output directory exists if it passed the verification above
         ensure_directory_exists(output_directory)
 
         if not isinstance(valve_calibration_data, tuple) or not all(
@@ -385,7 +385,7 @@ class MesoscopeExperiment:
         # noinspection PyTypeChecker
         self._encoder.send_message(self._wheel_encoder.dequeue_command)
 
-        # Toggles the state of the VR screens to be OFF, if the VR screens are currently ON. If the screens are OFF,
+        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
         # keeps them OFF.
         if not self._screen_off:
             # noinspection PyTypeChecker
@@ -564,8 +564,10 @@ class ProjectData:
         return session_path
 
 
-def convert_old_data(root_directory: Path, remove_sources: bool = False, num_processes: int = None) -> None:
-    """A temporary function used to convert old Tyche data to our new format."""
+def convert_old_data(
+    root_directory: Path, remove_sources: bool = False, num_processes: int = None, verify_integrity=True
+) -> None:
+    """A temporary function used to convert old Tyche data to our latest data format."""
     # Resolves the number of processes to use for processing the data.
     if num_processes is None:
         num_processes = max(1, os.cpu_count() - 4)  # Keeps 4 cores free for other tasks
@@ -580,42 +582,63 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
     # Collects the paths to each directory with TIFF files and to each directory that has a mesoscope_frames
     # subdirectory. This is used as a heuristic to discover folders with Tyche cohort session data.
     session_directories = set()  # Directories that have not been processed will have raw tiff stacks
-    old_directories = set()  # Directories processed by the OLD pipeline have mesoscope_frames folder
+    old_directories = set()  # Directories processed by the pipeline will have mesoscope_frames folder in them
+    all_directories = set()  # Stores all directories that may contain mesoscope frames
     for subdirectory in subdirectories:
+        # Discovers all tiff and tif files inside each candidate subdirectory
         tiff_files_in_subdir = list(subdirectory.glob("*.tif")) + list(subdirectory.glob("*.tiff"))
 
-        # Checks for mesoscope_frames subdirectory. This directory would exist in already processed session directories
-        has_mesoscope_frames = (subdirectory / "mesoscope_frames").exists()
+        # Also builds the path to the mesoscope_frames directory, which may be located inside the evaluated directory
+        mesoscope_directory = subdirectory / "mesoscope_frames"
 
-        if tiff_files_in_subdir and not has_mesoscope_frames:
+        # Checks for mesoscope_frames subdirectory. This directory would exist in already processed directories and
+        # may contain frame data using the old format.
+        has_mesoscope_frames = mesoscope_directory.exists()
+
+        # Any directory that does not have mesoscope_frames and has tiff files is marked to be processed as a new
+        # directory. This processing type will compress existing stacks with LERC and extract metadata.
+        if not has_mesoscope_frames and tiff_files_in_subdir:
             session_directories.add(subdirectory)
-
-        if has_mesoscope_frames:
+        # Conversely, directories that contain mesoscope_frames can either be processed with the modern or old pipeline.
+        # Directories processed with the old pipeline will have thousands of frames inside the mesoscope_frames. These
+        # directories need to be reprocessed to reinstate the stack format used by the modern pipeline.
+        if (
+            has_mesoscope_frames
+            and len(list(mesoscope_directory.glob("*.tif")) + list(mesoscope_directory.glob("*.tiff"))) > 200
+        ):
             old_directories.add(subdirectory)
 
-    # Processes each directory in parallel
-    for directory in tqdm(session_directories, desc="Processing mesoscope frame directories", unit="directory"):
-        process_mesoscope_directory(
-            directory, num_processes=num_processes, remove_sources=remove_sources, batch=True, use_memmap=True
-        )
+        # This final set is used to ensure all directories are checksummed, regardless of whether they are unprocessed
+        # or reprocessed.
+        if has_mesoscope_frames or tiff_files_in_subdir:
+            all_directories.add(subdirectory)
 
-    for directory in tqdm(old_directories, desc="Reprocessing old mesoscope frame directories", unit="directory"):
-        _fix_mesoscope_frames(
-            directory,
-            num_processes=num_processes,
-            remove_sources=remove_sources,
-            stack_size=500,
-            batch=True,
-            use_memmap=True,
-        )
+    # First processes new session directories
+    if len(session_directories) > 0:
+        for directory in tqdm(session_directories, desc="Processing mesoscope frame directories", unit="directory"):
+            process_mesoscope_directory(
+                image_directory=directory,
+                num_processes=num_processes,
+                remove_sources=remove_sources,
+                batch=True,
+                verify_integrity=verify_integrity,
+            )
 
-    # Calculates the checksum for each processed directory
-    for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="directory"):
-        calculate_directory_checksum(
-            directory,
-            num_processes,
-            batch=True,
-        )
+    # Next, handles any old directories that require reprocessing
+    if len(old_directories) > 0:
+        for directory in tqdm(old_directories, desc="Reprocessing old mesoscope frame directories", unit="directory"):
+            _fix_mesoscope_frames(
+                mesoscope_directory=directory,
+                num_processes=num_processes,
+                remove_sources=remove_sources,
+                stack_size=500,
+                batch=True,
+                verify_integrity=verify_integrity,
+            )
+
+    # Calculates the checksum for all mesoscope-related directories
+    for directory in tqdm(all_directories, desc="Calculating checksums for processed directories", unit="directory"):
+        calculate_directory_checksum(directory, num_processes, batch=True, save_checksum=True)
 
 
 # def test_runtime() -> None:
@@ -716,5 +739,5 @@ def convert_old_data(root_directory: Path, remove_sources: bool = False, num_pro
 #     data_logger.stop()
 
 if __name__ == "__main__":
-    target = Path("/media/Data/processing")
-    convert_old_data(root_directory=target, remove_sources=True)
+    target = Path("/media/Data/2022_01_25")
+    convert_old_data(root_directory=target, remove_sources=True, verify_integrity=True)
