@@ -2,23 +2,22 @@
 preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
 """
 
+import json
+from typing import Any
+import difflib
 from pathlib import Path
+from datetime import datetime
+from functools import partial
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
-from numpy.typing import NDArray
-from functools import partial
 
 from tqdm import tqdm
 import numpy as np
 import tifffile
-import json
-from ataraxis_base_utilities import console, ensure_directory_exists
+from numpy.typing import NDArray
 import matplotlib.pyplot as plt
-from suite2p.io.binary import BinaryFile
-from typing import Any
-import difflib
-from datetime import datetime
+from suite2p.io.binary import BinaryFile  # type: ignore
+from ataraxis_base_utilities import console, ensure_directory_exists
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
@@ -57,7 +56,7 @@ def _check_stack_size(file: Path) -> int:
         # Considers all files with more than one page and a 2-dimensional (monochrome) image as a stack. For these
         # stacks, returns the discovered stack size (number of frames). Also ensures that the files have the ScanImage
         # metadata. This latter step will exclude already processed BigTiff files.
-        if n_frames > 1 and len(tif.pages[0].shape) == 2 and len(tif.scanimage_metadata.keys()) > 0:
+        if n_frames > 1 and len(tif.pages[0].shape) == 2 and tif.scanimage_metadata is not None:
             return n_frames
         # Otherwise, returns 0 to indicate that the file is not a stack.
         return 0
@@ -114,7 +113,7 @@ def _process_stack(
 
         # Loops over each page in the stack and extracts the metadata associated with each frame
         for i, page in enumerate(stack.pages):
-            metadata = page.tags["ImageDescription"].value
+            metadata = page.tags["ImageDescription"].value  # type: ignore
 
             # The metadata is returned as a 'newline'-delimited string of key=value pairs. This preprocessing header
             # splits the string into separate key=value pairs. Then, each pair is further separated and processed as
@@ -515,7 +514,12 @@ def process_invariant_metadata(file: Path) -> None:
         json.dump(metadata, json_file, separators=(",", ":"), indent=None)  # Maximizes data compression
 
     # Also uses extracted metadata to generate the ops.json configuration file for scanImage processing.
-    _generate_ops(metadata=metadata, frame_data=frame_data, data_path=file.parent, output_path=file.parent)
+    _generate_ops(
+        metadata=metadata,  # type: ignore
+        frame_data=frame_data,
+        data_path=file.parent,
+        output_path=file.parent,
+    )
 
 
 def process_mesoscope_directory(
@@ -574,7 +578,7 @@ def process_mesoscope_directory(
 
     # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
     tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
-    tiff_files.sort(key=_get_stack_number)
+    tiff_files.sort(key=_get_stack_number)  # type: ignore
 
     # Goes over each stack and, for each, determines the position of the first frame from the stack in the overall
     # sequence of frames acquired by all stacks. This is used to map frames stored in multiple stacks to a single
@@ -593,8 +597,8 @@ def process_mesoscope_directory(
             tiff_files.remove(file)
 
     # Converts to tuple for efficiency
-    tiff_files = tuple(tiff_files)
-    frame_numbers = tuple(frame_numbers)
+    tiff_files = tuple(tiff_files)  # type: ignore
+    frame_numbers = tuple(frame_numbers)  # type: ignore
 
     # Ends the runtime early if there are no valid TIFF files to process after filtering
     if len(tiff_files) == 0:

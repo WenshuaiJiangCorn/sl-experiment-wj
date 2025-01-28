@@ -84,7 +84,7 @@ def calculate_directory_checksum(
     """
     # Determines the number of parallel processes to use.
     if num_processes is None:
-        num_processes = max(1, os.cpu_count() - 4)
+        num_processes = max(1, os.cpu_count() - 4)  # type: ignore
 
     # Determines the path to each file inside the input directory structure and sorts them for consistency
     path: Path

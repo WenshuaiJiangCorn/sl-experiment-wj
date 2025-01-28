@@ -113,6 +113,9 @@ noconda = [
     "tox-uv>=1,<2",
     "uv>=0,<1",
 
+    # Types:
+    "types-tqdm>=4,<5",
+
     # Documentation
     "sphinx-rtd-dark-mode>=1,<2",
 

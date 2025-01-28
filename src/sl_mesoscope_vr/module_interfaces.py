@@ -674,7 +674,7 @@ class ValveInterface(ModuleInterface):
         # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
         slope: np.float64
         intercept: np.float64
-        slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)  # type: ignore
+        slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)
         self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
         self._intercept: np.float64 = np.round(a=intercept, decimals=12)
 
