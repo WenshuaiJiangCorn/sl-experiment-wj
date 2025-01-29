@@ -31,13 +31,13 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    # "Programming Language :: Python :: 3.12",
     # "Programming Language :: Python :: 3.13",
     # Supported OS systems
     "Operating System :: POSIX :: Linux",
 ]
 
-# Runtime project dependencies. This overlaps with 'condarun' optional list.
+# Runtime project dependencies. This overlaps with the 'condarun' optional list.
 dependencies = [
     "numpy>=2,<3",
     "numba>=0,<1",
@@ -68,6 +68,7 @@ Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
 condarun = [
     "numpy>=2,<3",
     "tifffile>=2024,<2025",
+    "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
     "matplotlib>=3,<4",
 ]
@@ -137,7 +138,7 @@ dev = [
 # Future support for CLI interface(s) can be realizied through this section.
 [project.scripts]
 
-# Specifies files that should not be included in the source-code distribution, but are also not part of gitignore.
+# Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]
 exclude = [".github", "recipe"]
 
@@ -147,12 +148,12 @@ packages = ["src/sl_mesoscope_vr", "examples"]
 
 # Ruff Configuration.
 [tool.ruff]
-line-length = 120         # Maximum column length is set to 120 for this project.
+line-length = 120         # The maximum column length is set to 120 for this project.
 indent-width = 4          # Same as black, indents are 4 spaces
 target-version = "py311"  # Targets the lowest supported version of python
 src = ["src"]             # The name of the source directory
 
-# Excludes 'service' .py files, such as the sphinx configuration file from linting.
+# Excludes 'service' .py files, such as the sphinx configuration file, from linting.
 extend-exclude = ["conf.py"]
 
 # Checks for all potential violations and uses the exclusions below to target-disable specific ones.
