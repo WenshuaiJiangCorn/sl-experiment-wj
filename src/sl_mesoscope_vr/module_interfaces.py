@@ -3,6 +3,8 @@
 from json import dumps
 import math
 from multiprocessing import Queue as MPQueue
+from multiprocessing import Manager
+from multiprocessing.managers import SyncManager
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,11 +29,10 @@ class EncoderInterface(ModuleInterface):
     handle the pulses sent by the two encoder channels.
 
     Notes:
-        This interface automatically sends CW and CCW motion data to Unity via 'LinearTreadmill/Data' MQTT topic.
+        This interface sends CW and CCW motion data to Unity via 'LinearTreadmill/Data' MQTT topic.
 
         The default initial encoder readout is 0 (no CW or CCW motion). The class instance is zeroed at communication
-        initialization, and it is safe to assume the displacement readout is 0 until the encoder sends the first
-        code 51 or 52 data message.
+        initialization.
 
     Args:
         encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). This is the
@@ -50,6 +51,10 @@ class EncoderInterface(ModuleInterface):
         _object_diameter: Stores the diameter of the object connected to the encoder.
         _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
+        _communication: Stores the communication class used to send data to Unity over MQTT.
+        _mp_manager: Stores the multiprocessing manager used for managing the output multiprocessing queue.
+        _output_queue: Stores the multiprocessing queue used to send data from the communication process back to the
+            main process.
     """
 
     def __init__(
@@ -58,6 +63,7 @@ class EncoderInterface(ModuleInterface):
         object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
         cm_per_unity_unit: float = 10.0,
     ) -> None:
+        self._mp_manager: SyncManager = Manager()
         data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
 
         super().__init__(
@@ -75,24 +81,35 @@ class EncoderInterface(ModuleInterface):
         self._object_diameter = object_diameter
         self._cm_per_unity_unit = cm_per_unity_unit
 
-        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 12 decimal places for
+        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 8 decimal places for
         # consistency and to ensure repeatability.
         self._unity_unit_per_pulse = np.round(
             a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
-            decimals=12,
+            decimals=8,
         )
+
+        # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
+        # issues
+        self._communication: MQTTCommunication | None = None
+
+        # The queue used to output PPR reports to the main process
+        self._output_queue: MPQueue = self._mp_manager.Queue()
+
+    def initialize_remote_assets(self):
+        self._communication = MQTTCommunication()
+        self._communication.connect()
+
+    def terminate_remote_assets(self):
+        self._communication.disconnect()
 
     def process_received_data(
         self,
         message: ModuleState | ModuleData,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
     ) -> None:
         # If the incoming message is the PPR report, sends the data to the output queue
         if message.event == 53:
-            topic = "encoder ppr"
             ppr = message.data_object
-            mp_queue.put((topic, ppr))
+            self._output_queue.put(ppr)
 
         # Otherwise, the message necessarily has to be reporting rotation into CCW or CW direction
         # (event code 51 or 52).
@@ -102,11 +119,11 @@ class EncoderInterface(ModuleInterface):
         sign = 1 if message.event == np.uint8(51) else -1
 
         # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
-        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
+        # using the precomputed conversion factor. Uses float64 and rounds to 8 decimal places for consistency and
         # precision
         signed_motion = np.round(
             a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
-            decimals=12,
+            decimals=8,
         )
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
@@ -115,7 +132,7 @@ class EncoderInterface(ModuleInterface):
         byte_array = json_string.encode("utf-8")
 
         # Publishes the motion to the appropriate MQTT topic.
-        mqtt_communication.send_data(topic=self._motion_topic, payload=byte_array)
+        self._communication.send_data(topic=self._motion_topic, payload=byte_array)  # type: ignore
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -126,7 +143,7 @@ class EncoderInterface(ModuleInterface):
         report_ccw: np.bool | bool = np.bool(True),
         report_cw: np.bool | bool = np.bool(True),
         delta_threshold: np.uint32 | int = np.uint32(10),
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the EncoderModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the EncoderModule instance managed by
@@ -140,19 +157,16 @@ class EncoderInterface(ModuleInterface):
                 change is 0 (the encoder readout did not change), it will not be reported, regardless of the
                 value of this parameter. Sub-threshold motion will be aggregated (summed) across readouts until a
                 significant overall change in position is reached to justify reporting it to the PC.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
 
         If there has been a significant change in the absolute count of pulses, reports the change and direction to the
@@ -167,40 +181,33 @@ class EncoderInterface(ModuleInterface):
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
             command will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(False),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),
+                cycle_delay=np.uint32(repetition_delay),
+            )
+        self._input_queue.put(command)  # type: ignore
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=np.uint32(repetition_delay),
-        )
-
-    def reset_pulse_count(self) -> OneOffModuleCommand:
+    def reset_pulse_count(self) -> None:
         """Resets the EncoderModule pulse tracker to 0.
 
         This command allows resetting the encoder without evaluating its current pulse count. Currently, this command
-        is designed ot only run once.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
+        is designed to only run once.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
@@ -208,7 +215,9 @@ class EncoderInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-    def get_ppr(self) -> OneOffModuleCommand:
+        self._input_queue.put(command)  # type: ignore
+
+    def get_ppr(self) -> None:
         """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
 
         The PPR allows converting raw pulse counts the EncoderModule sends to the PC to accurate displacement in
@@ -227,18 +236,15 @@ class EncoderInterface(ModuleInterface):
             The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
             further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, if the
             object is moving too fast (or too slow), the command will not work as intended.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(3),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
     @property
     def mqtt_topic(self) -> str:
@@ -250,8 +256,15 @@ class EncoderInterface(ModuleInterface):
         """Returns the conversion factor to translate raw encoder pulse count to real world centimeters of motion."""
         return np.round(
             a=np.float64((math.pi * self._object_diameter) / self._ppr),
-            decimals=12,
+            decimals=8,
         )
+
+    @property
+    def output_queue(self) -> MPQueue:  # type: ignore
+        """Returns the multiprocessing queue used to transfer the ppr values from the communication process to the main
+        process.
+        """
+        return self._output_queue
 
 
 class TTLInterface(ModuleInterface):
@@ -470,25 +483,25 @@ class BreakInterface(ModuleInterface):
         # Converts minimum and maximum break strength into Newton centimeter
         self._minimum_break_strength: np.float64 = np.round(
             a=minimum_break_strength * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
         self._maximum_break_strength: np.float64 = np.round(
             a=maximum_break_strength * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
 
         # Computes the conversion factor to translate break pwm levels into breaking torque in Newtons cm. Rounds
         # to 12 decimal places for consistency and to ensure repeatability.
         self._torque_per_pwm = np.round(
             a=(self._maximum_break_strength - self._minimum_break_strength) / 255,
-            decimals=12,
+            decimals=8,
         )
 
         # Also computes the conversion factor to translate break pwm levels into force in Newtons. TO overcome the
         # breaking torque, the object has to experience that much force applied to its edge.
         self._force_per_pwm = np.round(
             a=self._torque_per_pwm / (object_diameter / 2),
-            decimals=12,
+            decimals=8,
         )
 
     def process_received_data(
@@ -675,8 +688,8 @@ class ValveInterface(ModuleInterface):
         slope: np.float64
         intercept: np.float64
         slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)
-        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
-        self._intercept: np.float64 = np.round(a=intercept, decimals=12)
+        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=8)
+        self._intercept: np.float64 = np.round(a=intercept, decimals=8)
 
         # Stores the reward topic separately to make it accessible via property
         self._reward_topic = "Gimbl/Reward/"
@@ -932,7 +945,7 @@ class LickInterface(ModuleInterface):
         self._lick_threshold: np.uint16 = np.uint16(lick_threshold)
 
         # Statically computes the voltage resolution of each analog step, assuming a 3.3V ADC with 12-bit resolution.
-        self._volt_per_adc_unit = np.round(a=np.float64(3.3 / (2**12)), decimals=12)
+        self._volt_per_adc_unit = np.round(a=np.float64(3.3 / (2**12)), decimals=8)
 
     def process_received_data(
         self,
@@ -1125,7 +1138,7 @@ class TorqueInterface(ModuleInterface):
         # Determines the capacity of the torque sensor in Newtons centimeter.
         self._capacity_in_newtons_cm: np.float64 = np.round(
             a=np.float64(sensor_capacity) * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
 
         # Computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
@@ -1133,14 +1146,14 @@ class TorqueInterface(ModuleInterface):
         # repeatability.
         self._torque_per_adc_unit = np.round(
             a=(self._capacity_in_newtons_cm / (maximum_voltage - baseline_voltage)),
-            decimals=12,
+            decimals=8,
         )
 
         # Also computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
         # force in Newtons.
         self._force_per_adc_unit = np.round(
             a=self._torque_per_adc_unit / (object_diameter / 2),
-            decimals=12,
+            decimals=8,
         )
 
     def process_received_data(

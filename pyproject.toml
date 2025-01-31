@@ -12,7 +12,7 @@ version = "1.0.0"
 description = "Aggregates the software assets used to acquire experimental data via Sun lab Mesoscope and Virtual Reality systems."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = "==3.11"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
+requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
 authors = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
@@ -45,9 +45,10 @@ dependencies = [
     "matplotlib>=3,<4",
     "ataraxis-time>=3,<4",
     "ataraxis-base-utilities>=3,<4",
-    "ataraxis-data-structures>=2,<3",
+    "ataraxis-data-structures>=3,<4",
     "ataraxis-transport-layer-pc>=1,<2",
-    "ataraxis-communication-interface>=2,<3",
+    "ataraxis-communication-interface>=3,<4",
+    "ataraxis-video-system>=1,<2",
     "tifffile>=2025,<2026",
     "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
@@ -101,9 +102,6 @@ conda = [
     # Distribution
     "twine>=6,<7",
     "grayskull>=2,<3",
-
-    # Miscellaneous helpers
-    "black>=24,<25",
 ]
 
 # Dependencies known to not be installable with conda for at least one supported development platform
