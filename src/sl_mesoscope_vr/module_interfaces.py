@@ -7,6 +7,7 @@ from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 
 import numpy as np
+from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
 from numpy.polynomial.polynomial import polyfit
@@ -19,6 +20,7 @@ from ataraxis_communication_interface import (
     OneOffModuleCommand,
     RepeatedModuleCommand,
 )
+from typing import Any
 
 
 class EncoderInterface(ModuleInterface):
@@ -102,10 +104,7 @@ class EncoderInterface(ModuleInterface):
     def terminate_remote_assets(self):
         self._communication.disconnect()
 
-    def process_received_data(
-        self,
-        message: ModuleState | ModuleData,
-    ) -> None:
+    def process_received_data(self, message: ModuleState | ModuleData) -> None:
         # If the incoming message is the PPR report, sends the data to the output queue
         if message.event == 53:
             ppr = message.data_object
@@ -267,33 +266,48 @@ class EncoderInterface(ModuleInterface):
         return self._output_queue
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
-        """"""
+        """Extracts and converts the encoder displacement logged during runtime into absolute position of the animal in
+        centimeters.
+
+        This method should be called during data preprocessing carried out at the end of each experimental session to
+        prepare encoder data for alignment with other experimental data sources and integration into the unified VR
+        behavior dataset.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps in microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the absolute position of the
+            animal in centimeters at each timestamp.
+        """
         # Reads the data logged during runtime as a dictionary of dictionaries.
-        log_data:  dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
 
-        # This loop converts the data from 'displacement vectors' into an overall 'position' vector. The position is
-        # given in centimeters and is referenced to the onset of the experiment. Positive positions are calibrated
-        # to correspond to the mouse moving forward in the linear corridor and negative positions corresponds to the
-        # mouse moving backward in the linear corridor.
-
+        # Precreates the lists to store extracted data
         timestamps = []
         displacements = []
 
-        # Top level keys are event codes. We look for codes 51 and 52. 51 is the code for CCW, 52 is the code for
-        # CW
+        # Top level keys in the returned dictionary are event codes. We look for codes 51 and 52. 51 is the code for
+        # CCW rotation, 52 is the code for CW rotation.
         for value in log_data[np.uint8(51)]:
-            timestamp = value["timestamp"]
-            displacement = value["data"]  # CCW displacement is treated as positive
-            timestamps.append(timestamp)
-            displacements.append(displacement)
+            timestamps.append(value["timestamp"])
+            displacements.append(value["data"])  # CCW rotation is interpreted as the positive direction
         for value in log_data[np.uint8(52)]:
-            timestamp = value["timestamp"]
-            displacement = 0 - value["data"]  # CW displacement is treated as negative
-            timestamps.append(timestamp)
-            displacements.append(displacement)
+            timestamps.append(value["timestamp"])
+            displacements.append(-value["data"])  # CW rotation is interpreted as the negative direction
 
-        # Sort by timestamp and convert displacement into positions
+        # Converts lists to numpy arrays (for efficiency) and sorts by timestamp to get the correct sequence of
+        # displacements as they occurred during the experiment.
+        timestamps = np.array(timestamps, dtype=np.uint64)
+        displacements = np.array(displacements, dtype=np.float64)
+        sort_idx = np.argsort(timestamps)
+        timestamps = timestamps[sort_idx]
+        displacements = displacements[sort_idx]
 
+        # Converts displacements to absolute positions using the cumulative sum and translates from encoder pulses to
+        # centimeters
+        positions = np.round(np.cumsum(displacements) * self.cm_per_pulse, decimals=8)
+
+        # Returns sorted timestamps and the absolute position of the encoder at each timestamp.
+        return timestamps, positions
 
 
 class TTLInterface(ModuleInterface):
@@ -306,6 +320,12 @@ class TTLInterface(ModuleInterface):
     Notes:
         When the TTLModule is configured to output a signal, it will notify the PC about the initial signal state
         (HIGH or LOW) after setup.
+
+    Attributes:
+        _input_flag: A one-element SharedMemoryArray used to communicate to other processes when the interfaced
+            TTLModule first receives a HIGH input signal.
+        _once: A boolean flag that ensures that the _input_flag is flipped from 0 to 1 exactly once.
+
     """
 
     def __init__(self, module_id: np.uint8) -> None:
@@ -314,23 +334,44 @@ class TTLInterface(ModuleInterface):
         # kInputOn, kInputOff, kOutputOn, kOutputOff
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
 
+        # HIGH incoming pulses are used to detect when other equipment is operational. For example, when mesoscope
+        # sends HIGH frame acquisition triggers, this is used to notify the main process tha the mesoscope has been
+        # armed and is now acquiring images.
+        data_codes = {np.uint8(52)}
+
         super().__init__(
             module_type=np.uint8(1),
-            module_id=np.uint8(1),
+            module_id=module_id,
             mqtt_communication=False,
-            data_codes=None,  # None of the data codes needs additional processing, so statically set to None
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        """Not used."""
-        return
+        # Initializes the shared memory array used to share whether the interface has received an InputOn code from the
+        # microcontroller with other processes.
+        prototype = np.zeros(shape=1, dtype=np.uint8)
+        self._input_flag = SharedMemoryArray.create_array(
+            name=f"1_{module_id}_flag", prototype=prototype, exist_ok=True
+        )
+
+        # This attribute is used to ensure that the _input_flag is flipped from 0 to 1 exactly once.
+        self._once = True
+
+    def initialize_remote_assets(self):
+        self._input_flag.connect()
+
+    def terminate_remote_assets(self):
+        self._input_flag.disconnect()
+        self._input_flag.destroy()
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        # The only messages that reach this method are messages with event_code 52. The first time this happens, flips
+        # the value of the _input_flag. In turns, th central process uses this flag to detect when external equipment,
+        # such as the mesoscope, is armed and ready to record experimental data.
+        if self._once:
+            # noinspection PyTypeChecker
+            self._input_flag.write_data(index=0, data=1)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -338,7 +379,7 @@ class TTLInterface(ModuleInterface):
 
     def set_parameters(
         self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the TTLModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the TTLModule instance managed by
@@ -350,21 +391,16 @@ class TTLInterface(ModuleInterface):
             averaging_pool_size: The number of digital pin readouts to average together when checking pin state. This
                 is used during the execution of check_state() command to debounce the pin readout and acts in addition
                 to any built-in debouncing.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, averaging_pool_size),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
-    ) -> RepeatedModuleCommand | OneOffModuleCommand:
+    def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True) -> None:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
 
         This command is well-suited to carry out most forms of TTL communication, but it is adapted for comparatively
@@ -378,42 +414,36 @@ class TTLInterface(ModuleInterface):
             noblock: Determines whether the command should block the microcontroller while emitting the high phase of
                 the pulse or not. Blocking ensures precise pulse duration, non-blocking allows the microcontroller to
                 perform other operations while waiting, increasing its throughput.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(noblock),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(noblock),
+                cycle_delay=repetition_delay,
+            )
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(noblock),
-            cycle_delay=repetition_delay,
-        )
+        self._input_queue.put(command)  # type: ignore
 
-    def toggle(self, state: bool) -> OneOffModuleCommand:
+    def toggle(self, state: bool) -> None:
         """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
 
         This command locks the TTLModule managed by this Interface into delivering the desired logical signal.
 
         Args:
             state: The signal to output. Set to True for HIGH and False for LOW.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
@@ -421,7 +451,9 @@ class TTLInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+        self._input_queue.put(command)  # type: ignore
+
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Checks the state of the TTL signal received by the TTLModule.
 
         This command evaluates the state of the TTLModule's input pin and, if it is different from the previous state,
@@ -431,28 +463,41 @@ class TTLInterface(ModuleInterface):
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
             will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(4),
                 noblock=np.bool(False),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(4),
+                noblock=np.bool(False),
+                cycle_delay=repetition_delay,
+            )
+        self._input_queue.put(command)  # type: ignore
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(4),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """Extracts and converts the encoder displacement logged during runtime into absolute position of the animal in
+        centimeters.
+
+        This method should be called during data preprocessing carried out at the end of each experimental session to
+        prepare encoder data for alignment with other experimental data sources and integration into the unified VR
+        behavior dataset.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps in microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the absolute position of the
+            animal in centimeters at each timestamp.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
 
 
 class BreakInterface(ModuleInterface):
@@ -533,12 +578,7 @@ class BreakInterface(ModuleInterface):
             decimals=8,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        queue: MPQueue,  # type: ignore
-    ) -> None:
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Not used."""
         return
 
