@@ -114,8 +114,8 @@ class EncoderInterface(ModuleInterface):
         # Otherwise, the message necessarily has to be reporting rotation into CCW or CW direction
         # (event code 51 or 52).
 
-        # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
-        # and CCW as positive.
+        # The rotation direction is encoded via the message event code. CW rotation (code 52) is interpreted as negative
+        # and CCW (code 51) as positive.
         sign = 1 if message.event == np.uint8(51) else -1
 
         # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
@@ -266,6 +266,35 @@ class EncoderInterface(ModuleInterface):
         """
         return self._output_queue
 
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """"""
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data:  dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # This loop converts the data from 'displacement vectors' into an overall 'position' vector. The position is
+        # given in centimeters and is referenced to the onset of the experiment. Positive positions are calibrated
+        # to correspond to the mouse moving forward in the linear corridor and negative positions corresponds to the
+        # mouse moving backward in the linear corridor.
+
+        timestamps = []
+        displacements = []
+
+        # Top level keys are event codes. We look for codes 51 and 52. 51 is the code for CCW, 52 is the code for
+        # CW
+        for value in log_data[np.uint8(51)]:
+            timestamp = value["timestamp"]
+            displacement = value["data"]  # CCW displacement is treated as positive
+            timestamps.append(timestamp)
+            displacements.append(displacement)
+        for value in log_data[np.uint8(52)]:
+            timestamp = value["timestamp"]
+            displacement = 0 - value["data"]  # CW displacement is treated as negative
+            timestamps.append(timestamp)
+            displacements.append(displacement)
+
+        # Sort by timestamp and convert displacement into positions
+
+
 
 class TTLInterface(ModuleInterface):
     """Interfaces with TTLModule instances running on Ataraxis MicroControllers.
@@ -279,7 +308,7 @@ class TTLInterface(ModuleInterface):
         (HIGH or LOW) after setup.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, module_id: np.uint8) -> None:
         error_codes = {np.uint8(51), np.uint8(54)}  # kOutputLocked, kInvalidPinMode
 
         # kInputOn, kInputOff, kOutputOn, kOutputOff
