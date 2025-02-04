@@ -43,20 +43,16 @@ class EncoderInterface(ModuleInterface):
             encoder.
         object_diameter: The diameter of the rotating object connected to the encoder, in centimeters. This is used to
             convert encoder pulses into rotated distance in cm.
-        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the connected object
-             into Unity units. This value works together with object_diameter and encoder_ppr to translate raw
-             encoder pulses received from the microcontroller into Unity-compatible units.
+        cm_per_unity_unit: The length of each Unity 'unit' in centimeters. This is used to translate raw encoder pulses
+            into Unity 'units' before sending the data to Unity.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
         _ppr: Stores the resolution of the managed quadrature encoder.
         _object_diameter: Stores the diameter of the object connected to the encoder.
-        _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
+        _cm_per_pulse: Stores the conversion factor that translates encoder pulses into centimeters.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
         _communication: Stores the communication class used to send data to Unity over MQTT.
-        _mp_manager: Stores the multiprocessing manager used for managing the output multiprocessing queue.
-        _output_queue: Stores the multiprocessing queue used to send data from the communication process back to the
-            main process.
     """
 
     def __init__(
@@ -65,7 +61,6 @@ class EncoderInterface(ModuleInterface):
         object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
         cm_per_unity_unit: float = 10.0,
     ) -> None:
-        self._mp_manager: SyncManager = Manager()
         data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
 
         super().__init__(
@@ -81,7 +76,12 @@ class EncoderInterface(ModuleInterface):
         self._motion_topic = "LinearTreadmill/Data"  # Hardcoded output topic
         self._ppr = encoder_ppr
         self._object_diameter = object_diameter
-        self._cm_per_unity_unit = cm_per_unity_unit
+
+        # Computes the conversion factor to go from pulses to centimeters
+        self._cm_per_pulse = np.round(
+            a=np.float64((math.pi * self._object_diameter) / self._ppr),
+            decimals=8,
+        )
 
         # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 8 decimal places for
         # consistency and to ensure repeatability.
@@ -93,9 +93,6 @@ class EncoderInterface(ModuleInterface):
         # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
         # issues
         self._communication: MQTTCommunication | None = None
-
-        # The queue used to output PPR reports to the main process
-        self._output_queue: MPQueue = self._mp_manager.Queue()
 
     def initialize_remote_assets(self):
         """Initializes the MQTTCommunication class and connects to the MQTT broker."""
@@ -111,13 +108,11 @@ class EncoderInterface(ModuleInterface):
         """Processes incoming data.
 
         Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
-        is sent to Unity via MQTT. Encoder PPR data (code 53) is submitted to the output queue to be read from the
-        main process.
+        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console, so make sure console is enabled.
         """
         # If the incoming message is the PPR report, sends the data to the output queue
         if message.event == 53:
-            ppr = message.data_object
-            self._output_queue.put(ppr)
+            console.echo(f"PPR: {message.data_object}")
 
         # Otherwise, the message necessarily has to be reporting rotation into CCW or CW direction
         # (event code 51 or 52).
@@ -133,6 +128,13 @@ class EncoderInterface(ModuleInterface):
             a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
             decimals=8,
         )
+
+        # TODO remove me!
+        cm_motion = np.round(
+            a=np.float64(message.data_object) * self._cm_per_pulse * sign,
+            decimals=8,
+        )
+        console.echo(message = f"moved: {cm_motion} cm.")
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -174,7 +176,7 @@ class EncoderInterface(ModuleInterface):
         )
         self._input_queue.put(message)  # type: ignore
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(200)) -> None:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
 
         If there has been a significant change in the absolute count of pulses, reports the change and direction to the
@@ -188,7 +190,7 @@ class EncoderInterface(ModuleInterface):
 
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
-            command will only run once.
+                command will only run once.
         """
         if repetition_delay == 0:
             command = OneOffModuleCommand(
@@ -266,13 +268,6 @@ class EncoderInterface(ModuleInterface):
             a=np.float64((math.pi * self._object_diameter) / self._ppr),
             decimals=8,
         )
-
-    @property
-    def output_queue(self) -> MPQueue:  # type: ignore
-        """Returns the multiprocessing queue used to transfer the ppr values from the communication process to the main
-        process.
-        """
-        return self._output_queue
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
