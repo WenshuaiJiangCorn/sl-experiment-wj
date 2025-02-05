@@ -562,7 +562,7 @@ class ProjectData:
 
 
 def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
-    """Exposes a console-based CLI to help developers in calibrating EncoderModule and EncoderInterface."""
+    """Exposes a console-based CLI that interfaces with the encoder connected to the running wheel."""
     while True:
         code = input()  # Sneaky UI
         if code == "q":
@@ -581,23 +581,20 @@ def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold:
             encoder.check_state(repetition_delay=np.uint32(polling_delay))
 
 
-def _ttl_cli(ttl: TTLInterface, polling_delay: int, pulsing_delay: int, pulse_duration: int, pool_size: int) -> None:
-    """Exposes a console-based CLI to help developers in calibrating EncoderModule and EncoderInterface.
+def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the TTL modules used to start and stop mesoscope frame
+    acquisition.
     """
     while True:
         code = input()  # Sneaky UI
         if code == "q":
             break
-        elif code == "on":  # Turns ON
-            ttl.toggle(True)
-        elif code == "off":  # Turns OFF
-            ttl.toggle(False)
-        elif code == "p":  # Pulse
-            ttl.set_parameters(pulse_duration=np.uint32(pulse_duration), averaging_pool_size=np.uint8(pool_size))
-            ttl.send_pulse(repetition_delay=np.uint32(pulsing_delay))  # noblock is not tested here
-        elif code == "c":  # Check state
-            ttl.check_state(repetition_delay=np.uint32(polling_delay))
-
+        elif code == "b":  # Start / Begin
+            start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            start_trigger.send_pulse()
+        elif code == "e": # Stop / End
+            stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            stop_trigger.send_pulse()
 
 def calibration() -> None:
     # Output dir
@@ -617,14 +614,15 @@ def calibration() -> None:
     console.enable()
 
     # Tested module interface
-    module = EncoderInterface(debug=True)
-    # module = TTLInterface(module_id=1, debug=True)
+    # module = EncoderInterface(debug=True)
+    module = TTLInterface(module_id=np.uint8(1), debug=True)
+    module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
 
     # Tested AMC interface
     interface = MicroControllerInterface(
-        controller_id=encoder_id,
+        controller_id=actor_id,
         data_logger=data_logger,
-        module_interfaces=(module,),
+        module_interfaces=(module, module_2),
         microcontroller_serial_buffer_size=8192,
         microcontroller_usb_port=encoder_usb,
         baudrate=115200,
@@ -634,11 +632,11 @@ def calibration() -> None:
     data_logger.start()
     interface.start()
 
+    interface.unlock_controller()
+
     # Calls the appropriate CLI to test the target module
-    if isinstance(module, EncoderInterface):
-        _encoder_cli(module, 500, 15)
-    elif isinstance(module, TTLInterface):
-        _ttl_cli(module, 500, 1000000, 10000, 30)
+    # _encoder_cli(module, 500, 15)
+    _mesoscope_ttl_cli(module, module_2, 500000)
 
     # Shutdown
     interface.stop()
