@@ -267,35 +267,25 @@ from tqdm import tqdm
 
 
 # --- Helper: Calculate checksum for a local file or directory ---
-def calculate_local_checksum(path: Path, chunk_size: int = 1024 * 1024 * 32) -> str:
-    """
-    Calculates an MD5 checksum for a file or directory (recursively).
-    For directories the relative file paths (sorted) are incorporated into the hash.
-    """
+def calculate_local_checksum(path: Path, chunk_size: int = 1024 * 1024 * 32, ignore_files: list[str] = None) -> str:
+    """Calculates an MD5 checksum for a file or directory while ignoring metadata and specified files."""
+    if ignore_files is None:
+        ignore_files = ["ax_checksum.txt"]
     md5_hash = hashlib.md5()
     if path.is_dir():
-        # Walk through all files (recursively) in a sorted order.
         for item in sorted(path.rglob('*')):
-            if item.is_file():
-                # Include the file’s relative path in the hash.
-                relative = str(item.relative_to(path)).encode()
-                md5_hash.update(relative)
-                # Now hash the file’s contents.
+            if item.is_file() and item.name not in ignore_files:
                 with open(item, "rb") as f:
-                    while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
+                    while chunk := f.read(chunk_size):
                         md5_hash.update(chunk)
     else:
-        # A single file.
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                md5_hash.update(chunk)
+        if path.name not in ignore_files:
+            with open(path, "rb") as f:
+                while chunk := f.read(chunk_size):
+                    md5_hash.update(chunk)
     return md5_hash.hexdigest()
+
+
 
 
 # --- Main transfer function ---
