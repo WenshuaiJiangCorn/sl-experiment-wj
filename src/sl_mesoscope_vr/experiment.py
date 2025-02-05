@@ -3,10 +3,8 @@
 import os
 from pathlib import Path
 
-from tqdm import tqdm
 import numpy as np
 from ataraxis_time import PrecisionTimer
-from packaging_tools import calculate_directory_checksum
 from module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -17,7 +15,6 @@ from module_interfaces import (
     EncoderInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists
-from mesoscope_preprocessing import _fix_mesoscope_frames, process_mesoscope_directory
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
@@ -564,85 +561,42 @@ class ProjectData:
         return session_path
 
 
-def convert_old_data(
-    root_directory: Path, remove_sources: bool = False, num_processes: int = None, verify_integrity=True
-) -> None:
-    """A temporary function used to convert old Tyche data to our latest data format."""
-    # Resolves the number of processes to use for processing the data.
-    if num_processes is None:
-        num_processes = max(1, os.cpu_count() - 4)  # Keeps 4 cores free for other tasks
+def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
+    """Exposes a console-based CLI to help developers in calibrating EncoderModule and EncoderInterface."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "f":  # CW only
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "r":  # CCW only
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "a":  # Both CW and CCW
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
 
-    # Recursively finds all subdirectories inside the root directory, excluding 'mesoscope_frames'
-    subdirectories = [
-        directory
-        for directory in root_directory.rglob("*")
-        if directory.is_dir() and directory.name != "mesoscope_frames"  # Exclude already processed frames.
-    ]
 
-    # Collects the paths to each directory with TIFF files and to each directory that has a mesoscope_frames
-    # subdirectory. This is used as a heuristic to discover folders with Tyche cohort session data.
-    session_directories = set()  # Directories that have not been processed will have raw tiff stacks
-    old_directories = set()  # Directories processed by the pipeline will have mesoscope_frames folder in them
-    all_directories = set()  # Stores all directories that may contain mesoscope frames
-    for subdirectory in subdirectories:
-        # Discovers all tiff and tif files inside each candidate subdirectory
-        tiff_files_in_subdir = list(subdirectory.glob("*.tif")) + list(subdirectory.glob("*.tiff"))
-
-        # Also builds the path to the mesoscope_frames directory, which may be located inside the evaluated directory
-        mesoscope_directory = subdirectory / "mesoscope_frames"
-
-        # Checks for mesoscope_frames subdirectory. This directory would exist in already processed directories and
-        # may contain frame data using the old format.
-        has_mesoscope_frames = mesoscope_directory.exists()
-
-        # Any directory that does not have mesoscope_frames and has tiff files is marked to be processed as a new
-        # directory. This processing type will compress existing stacks with LERC and extract metadata.
-        if not has_mesoscope_frames and tiff_files_in_subdir:
-            session_directories.add(subdirectory)
-        # Conversely, directories that contain mesoscope_frames can either be processed with the modern or old pipeline.
-        # Directories processed with the old pipeline will have thousands of frames inside the mesoscope_frames. These
-        # directories need to be reprocessed to reinstate the stack format used by the modern pipeline.
-        if (
-            has_mesoscope_frames
-            and len(list(mesoscope_directory.glob("*.tif")) + list(mesoscope_directory.glob("*.tiff"))) > 200
-        ):
-            old_directories.add(subdirectory)
-
-        # This final set is used to ensure all directories are checksummed, regardless of whether they are unprocessed
-        # or reprocessed.
-        if has_mesoscope_frames or tiff_files_in_subdir:
-            all_directories.add(subdirectory)
-
-    # First processes new session directories
-    if len(session_directories) > 0:
-        for directory in tqdm(session_directories, desc="Processing mesoscope frame directories", unit="directory"):
-            process_mesoscope_directory(
-                image_directory=directory,
-                num_processes=num_processes,
-                remove_sources=remove_sources,
-                batch=True,
-                verify_integrity=verify_integrity,
-            )
-    else:
-        print("No new mesoscope frame directories to process.")
-
-    # Next, handles any old directories that require reprocessing
-    if len(old_directories) > 0:
-        for directory in tqdm(old_directories, desc="Reprocessing old mesoscope frame directories", unit="directory"):
-            _fix_mesoscope_frames(
-                mesoscope_directory=directory,
-                num_processes=num_processes,
-                remove_sources=remove_sources,
-                stack_size=500,
-                batch=True,
-                verify_integrity=verify_integrity,
-            )
-    else:
-        print("No old mesoscope frame directories to reprocess.")
-
-    # Calculates the checksum for all mesoscope-related directories
-    for directory in tqdm(all_directories, desc="Calculating checksums for processed directories", unit="directory"):
-        calculate_directory_checksum(directory, num_processes, batch=True, save_checksum=True)
+def _ttl_cli(ttl: TTLInterface, polling_delay: int, pulsing_delay: int, pulse_duration: int, pool_size: int) -> None:
+    """Exposes a console-based CLI to help developers in calibrating EncoderModule and EncoderInterface.
+    """
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "on":  # Turns ON
+            ttl.toggle(True)
+        elif code == "off":  # Turns OFF
+            ttl.toggle(False)
+        elif code == "p":  # Pulse
+            ttl.set_parameters(pulse_duration=np.uint32(pulse_duration), averaging_pool_size=np.uint8(pool_size))
+            ttl.send_pulse(repetition_delay=np.uint32(pulsing_delay))  # noblock is not tested here
+        elif code == "c":  # Check state
+            ttl.check_state(repetition_delay=np.uint32(polling_delay))
 
 
 def calibration() -> None:
@@ -662,13 +616,15 @@ def calibration() -> None:
     # Add console support for print debugging
     console.enable()
 
-    # Tested interface
-    encoder = EncoderInterface()
+    # Tested module interface
+    module = EncoderInterface(debug=True)
+    # module = TTLInterface(module_id=1, debug=True)
 
+    # Tested AMC interface
     interface = MicroControllerInterface(
         controller_id=encoder_id,
         data_logger=data_logger,
-        module_interfaces=(encoder,),
+        module_interfaces=(module,),
         microcontroller_serial_buffer_size=8192,
         microcontroller_usb_port=encoder_usb,
         baudrate=115200,
@@ -678,28 +634,16 @@ def calibration() -> None:
     data_logger.start()
     interface.start()
 
-    # Testing goes brrrr
-    while True:
-        code = input()  # Sneaky UI
-        if code == 'q':
-            break
-        elif code == 'f':
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=1)
-            encoder.check_state(repetition_delay=np.uint32(500))
-        elif code == 'r':
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=1)
-            encoder.check_state(repetition_delay=np.uint32(500))
-        elif code == 'a':
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=1)
-            encoder.check_state(repetition_delay=np.uint32(500))
-
+    # Calls the appropriate CLI to test the target module
+    if isinstance(module, EncoderInterface):
+        _encoder_cli(module, 500, 15)
+    elif isinstance(module, TTLInterface):
+        _ttl_cli(module, 500, 1000000, 10000, 30)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
+
 
 if __name__ == "__main__":
     calibration()

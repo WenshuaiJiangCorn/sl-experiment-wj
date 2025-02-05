@@ -45,6 +45,8 @@ class EncoderInterface(ModuleInterface):
             convert encoder pulses into rotated distance in cm.
         cm_per_unity_unit: The length of each Unity 'unit' in centimeters. This is used to translate raw encoder pulses
             into Unity 'units' before sending the data to Unity.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
@@ -53,6 +55,7 @@ class EncoderInterface(ModuleInterface):
         _cm_per_pulse: Stores the conversion factor that translates encoder pulses into centimeters.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
         _communication: Stores the communication class used to send data to Unity over MQTT.
+        _debug: Stores the debug flag.
     """
 
     def __init__(
@@ -60,6 +63,7 @@ class EncoderInterface(ModuleInterface):
         encoder_ppr: int = 8192,
         object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
         cm_per_unity_unit: float = 10.0,
+        debug: bool = False,
     ) -> None:
         data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
 
@@ -76,6 +80,7 @@ class EncoderInterface(ModuleInterface):
         self._motion_topic = "LinearTreadmill/Data"  # Hardcoded output topic
         self._ppr = encoder_ppr
         self._object_diameter = object_diameter
+        self._debug = debug
 
         # Computes the conversion factor to go from pulses to centimeters
         self._cm_per_pulse = np.round(
@@ -105,14 +110,17 @@ class EncoderInterface(ModuleInterface):
         self._communication.disconnect()
 
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
-        """Processes incoming data.
+        """Processes incoming data in real time.
 
         Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
         is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console, so make sure console is enabled.
+
+        Notes:
+            If debug mode is enabled, motion data is also converted to centimeters and printed via console.
         """
-        # If the incoming message is the PPR report, sends the data to the output queue
+        # If the incoming message is the PPR report, prints the data via console.
         if message.event == 53:
-            console.echo(f"PPR: {message.data_object}")
+            console.echo(f"Encoder ppr: {message.data_object}")
 
         # Otherwise, the message necessarily has to be reporting rotation into CCW or CW direction
         # (event code 51 or 52).
@@ -129,12 +137,14 @@ class EncoderInterface(ModuleInterface):
             decimals=8,
         )
 
-        # TODO remove me!
-        cm_motion = np.round(
-            a=np.float64(message.data_object) * self._cm_per_pulse * sign,
-            decimals=8,
-        )
-        console.echo(message = f"moved: {cm_motion} cm.")
+        # If the class is in the debug mode, converts the received motion data into centimeters and prints it via
+        # console
+        if self._debug:
+            cm_motion = np.round(
+                a=np.float64(message.data_object) * self._cm_per_pulse * sign,
+                decimals=8,
+            )
+            console.echo(message=f"Encoder moved {cm_motion} cm.")
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -263,11 +273,8 @@ class EncoderInterface(ModuleInterface):
 
     @property
     def cm_per_pulse(self) -> np.float64:
-        """Returns the conversion factor to translate raw encoder pulse count to real world centimeters of motion."""
-        return np.round(
-            a=np.float64((math.pi * self._object_diameter) / self._ppr),
-            decimals=8,
-        )
+        """Returns the conversion factor to translate raw encoder pulse count to distance moved in centimeters."""
+        return self._cm_per_pulse
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
@@ -324,21 +331,39 @@ class TTLInterface(ModuleInterface):
     Notes:
         When the TTLModule is configured to output a signal, it will notify the PC about the initial signal state
         (HIGH or LOW) after setup.
+
+    Args:
+        module_id: The unique byte-code identifier of the TTLModule instance. Since the mesoscope data acquisition
+            pipeline uses multiple TTL modules on some microcontrollers, each instance running on the same
+            microcontroller must have a unique identifier. The ID codes are not shared between AMC and other module
+            types.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
     """
 
     def __init__(
         self,
+        module_id: np.uint8,
+        debug: bool = False
     ) -> None:
         error_codes = {np.uint8(51), np.uint8(54)}  # kOutputLocked, kInvalidPinMode
+        self._debug = debug
 
-        # kInputOn, kInputOff, kOutputOn, kOutputOff
-        # data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
+        # If the interface runs in the debug mode, configures the interface to monitor all incoming data codes.
+        # Otherwise, the interface does not need to do any real-time processing of incoming data, so sets data_codes to
+        # None.
+        data_codes: set[np.uint8] | None
+        if debug:
+            # kInputOn, kInputOff, kOutputOn, kOutputOff
+            data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
+        else:
+            data_codes = None
 
         super().__init__(
             module_type=np.uint8(1),
-            module_id=np.uint8(1),  # Although we use multiple TTLModules, each is on a separate microcontroller.
+            module_id=module_id,
             mqtt_communication=False,
-            data_codes=None,  # No codes are monitored in ral time, so statically sets to None.
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
         )
@@ -352,8 +377,24 @@ class TTLInterface(ModuleInterface):
         return
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
-        """Not used."""
-        pass
+        """During debug runtime, dumps the data received from the module into the terminal.
+
+        This includes both received and emitted ttl pulses. The method reports rising and falling edges of the TTL
+        pulses.
+
+        Notes:
+            The method is not used during non-debug runtimes. If the interface runs in debug mode, make sure the
+            console is enabled, as it is used to print received data into terminal.
+        """
+        # The method is ONLY called during debug runtime, so prints all received data via console.
+        if message.event == 52:
+            console.echo(f"TTLModule {self.module_id} detects HIGH signal")
+        if message.event == 53:
+            console.echo(f"TTLModule {self.module_id} detects LOW signal")
+        if message.event == 55:
+            console.echo(f"TTLModule {self.module_id} emits HIGH signal")
+        if message.event == 56:
+            console.echo(f"TTLModule {self.module_id} emits LOW signal")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
