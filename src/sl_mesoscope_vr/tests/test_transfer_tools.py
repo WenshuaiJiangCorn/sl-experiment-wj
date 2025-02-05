@@ -54,7 +54,7 @@ def test_transfer_local(setup_test_dirs):
         checksum_file.unlink()
 
 
-    dest_checksum = calculate_local_checksum(dst_path, ignore_files=["ax_checksum.txt"])
+    dest_checksum = calculate_local_checksum(dst_path)
     print(f"Destination checksum: {dest_checksum}")
 
     # Print per-file checksums after transfer

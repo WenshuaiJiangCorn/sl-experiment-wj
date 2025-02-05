@@ -265,25 +265,25 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+from src.sl_mesoscope_vr.packaging_tools import calculate_directory_checksum
+import xxhash
 
-# --- Helper: Calculate checksum for a local file or directory ---
-def calculate_local_checksum(path: Path, chunk_size: int = 1024 * 1024 * 32, ignore_files: list[str] = None) -> str:
-    """Calculates an MD5 checksum for a file or directory while ignoring metadata and specified files."""
-    if ignore_files is None:
-        ignore_files = ["ax_checksum.txt"]
-    md5_hash = hashlib.md5()
+from src.sl_mesoscope_vr.packaging_tools import calculate_directory_checksum
+import xxhash
+
+def calculate_local_checksum(path: Path) -> str:
+    """Uses the faster xxHash3-128 checksum method from packaging_tools.py"""
     if path.is_dir():
-        for item in sorted(path.rglob('*')):
-            if item.is_file() and item.name not in ignore_files:
-                with open(item, "rb") as f:
-                    while chunk := f.read(chunk_size):
-                        md5_hash.update(chunk)
+        return calculate_directory_checksum(path)
+    elif path.is_file():
+        # ✅ 파일 단위로 xxHash 체크섬 계산
+        with open(path, "rb") as f:
+            hasher = xxhash.xxh3_128()
+            for chunk in iter(lambda: f.read(1024 * 1024 * 8), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
     else:
-        if path.name not in ignore_files:
-            with open(path, "rb") as f:
-                while chunk := f.read(chunk_size):
-                    md5_hash.update(chunk)
-    return md5_hash.hexdigest()
+        raise ValueError(f"Invalid path: {path}")
 
 
 
@@ -365,13 +365,15 @@ def transfer_directory(source: Path,
 
     # --- Step 3. Verify transfer by calculating checksums ---
     print("Calculating source checksum...")
-    src_checksum = calculate_local_checksum(source, chunk_size)
+    src_checksum = calculate_local_checksum(source)
+
+
     print("Calculating destination checksum...")
     if transfer_type == 'local':
-        dest_checksum = calculate_local_checksum(destination, chunk_size)
+        dest_checksum = calculate_local_checksum(destination)
     elif transfer_type == 'nas':
         from transfer_tools import calculate_nas_checksum
-        dest_checksum = calculate_nas_checksum(destination, chunk_size)
+        dest_checksum = calculate_nas_checksum(destination)
     elif transfer_type == 'sftp':
         # For SFTP you would need to implement a remote checksum calculation
         raise NotImplementedError("Checksum calculation for sftp transfer_type is not implemented.")
