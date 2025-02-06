@@ -592,9 +592,54 @@ def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, 
         elif code == "b":  # Start / Begin
             start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
             start_trigger.send_pulse()
-        elif code == "e": # Stop / End
+        elif code == "e":  # Stop / End
             stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
             stop_trigger.send_pulse()
+
+
+def _break_cli(wheel_break: BreakInterface) -> None:
+    """Exposes a console-based CLI that interfaces with the break connected to the running wheel."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "e":  # Engage
+            wheel_break.toggle(state=True)
+        elif code == "d":  # Disengage
+            wheel_break.toggle(state=False)
+
+
+def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the water reward delivery valve."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "r":  # Deliver reward
+            valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            valve.send_pulse()
+        elif code == "1":
+            valve.set_parameters(calibration_delay=np.uint32(5000))  # 5 milliseconds
+        elif code == "2":
+            valve.set_parameters(calibration_delay=np.uint32(12000))  # 12 milliseconds
+        elif code == "3":
+            valve.set_parameters(calibration_delay=np.uint32(25000))  # 25 milliseconds
+        elif code == "4":
+            valve.set_parameters(calibration_delay=np.uint32(50000))  # 50 milliseconds
+        elif code == "5":
+            valve.set_parameters(calibration_delay=np.uint32(100000))  # 100 milliseconds
+
+
+def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the HDMI translator boards connected to all three VR screens."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "t":  # Toggle
+            screen.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            screen.toggle()
+
 
 def calibration() -> None:
     # Output dir
@@ -615,14 +660,18 @@ def calibration() -> None:
 
     # Tested module interface
     # module = EncoderInterface(debug=True)
+
     module = TTLInterface(module_id=np.uint8(1), debug=True)
     module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
+    module_3 = BreakInterface(debug=True)
+    module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+    module_5 = ScreenInterface(debug=True)
 
     # Tested AMC interface
     interface = MicroControllerInterface(
         controller_id=actor_id,
         data_logger=data_logger,
-        module_interfaces=(module, module_2),
+        module_interfaces=(module_3,),
         microcontroller_serial_buffer_size=8192,
         microcontroller_usb_port=encoder_usb,
         baudrate=115200,
@@ -632,11 +681,15 @@ def calibration() -> None:
     data_logger.start()
     interface.start()
 
+    # For ACTOR modules, enables writing to output pins
     interface.unlock_controller()
 
     # Calls the appropriate CLI to test the target module
     # _encoder_cli(module, 500, 15)
-    _mesoscope_ttl_cli(module, module_2, 500000)
+    # _mesoscope_ttl_cli(module, module_2, 10000)
+    _break_cli(module_3)
+    # _valve_cli(module_4, 1000)
+    # _screen_cli(module_5, 500000)
 
     # Shutdown
     interface.stop()
