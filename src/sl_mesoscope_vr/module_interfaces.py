@@ -548,7 +548,7 @@ class TTLInterface(ModuleInterface):
         # timestamps associated with each falling edge, before returning them to the caller.
         # falling_edges = np.where((triggers[:-1] == 1) & (triggers[1:] == 0))[0] + 1
 
-        # Recently we switched to using the rising edges instead of falling edges. The purpose and code is very similar
+        # Recently we switched to using the rising edges instead of falling edges. The purpose and code are very similar
         # though
         rising_edges = np.where((triggers[:-1] == 0) & (triggers[1:] == 1))[0] + 1
         frame_timestamps = timestamps[rising_edges]
@@ -1928,4 +1928,3 @@ class ScreenInterface(ModuleInterface):
             screen_states[i] = 1 - screen_states[i - 1]  # Flips between 0 and 1
 
         return screen_timestamps, screen_states
-
