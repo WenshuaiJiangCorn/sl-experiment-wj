@@ -7,7 +7,6 @@ import numpy as np
 from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
-from numpy.polynomial.polynomial import polyfit
 from ataraxis_communication_interface import (
     ModuleData,
     ModuleState,
@@ -593,8 +592,8 @@ class BreakInterface(ModuleInterface):
 
     def __init__(
         self,
-        minimum_break_strength: float = 43.2047,  # 0.6 in iz
-        maximum_break_strength: float = 1152.1246,  # 16 in oz
+        minimum_break_strength: float = 43.2047,  # 0.6 oz in
+        maximum_break_strength: float = 1152.1246,  # 16 oz in
         object_diameter: float = 15.0333,
         debug: bool = False,
     ) -> None:
@@ -894,7 +893,7 @@ class ValveInterface(ModuleInterface):
         # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
         slope: np.float64
         intercept: np.float64
-        slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)
+        slope, intercept = np.polyfit(pulse_durations, fluid_volumes, deg=1)
         self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=8)
         self._intercept: np.float64 = np.round(a=intercept, decimals=8)
 
@@ -1918,7 +1917,7 @@ class ScreenInterface(ModuleInterface):
         # Adds the initial state of the screen using the first recorded timestamp. The module is configured to send the
         # initial state of the relay (Off) during Setup, so the first recorded timestamp will always be 0 and correspond
         # to the initial state of the screen.
-        screen_timestamps = np.concatenate((timestamps[0], screen_timestamps))
+        screen_timestamps = np.concatenate(([timestamps[0]], screen_timestamps))
 
         # Builds an array of screen states. Starts with the initial screen state and then flips the state for each
         # consecutive timestamp matching a rising edge of the toggle pulse.

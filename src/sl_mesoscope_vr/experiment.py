@@ -618,16 +618,50 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
         elif code == "r":  # Deliver reward
             valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
             valve.send_pulse()
-        elif code == "1":
-            valve.set_parameters(calibration_delay=np.uint32(5000))  # 5 milliseconds
-        elif code == "2":
-            valve.set_parameters(calibration_delay=np.uint32(12000))  # 12 milliseconds
-        elif code == "3":
-            valve.set_parameters(calibration_delay=np.uint32(25000))  # 25 milliseconds
-        elif code == "4":
-            valve.set_parameters(calibration_delay=np.uint32(50000))  # 50 milliseconds
-        elif code == "5":
-            valve.set_parameters(calibration_delay=np.uint32(100000))  # 100 milliseconds
+        # elif code == "1":
+        #     valve.set_parameters(pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 25 milliseconds
+        #     valve.calibrate()
+        # elif code == "2":
+        #     valve.set_parameters(pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 50 milliseconds
+        #     valve.calibrate()
+        # elif code == "3":
+        #     valve.set_parameters(pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 75 milliseconds
+        #     valve.calibrate()
+        # elif code == "4":
+        #     valve.set_parameters(pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 100 milliseconds
+        #     valve.calibrate()
+        # elif code == "5":
+        #     valve.set_parameters(pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 125 milliseconds
+        #     valve.calibrate()
+        # elif code == "6":
+        #     valve.set_parameters(pulse_duration=np.uint32(150000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 150 milliseconds
+        #     valve.calibrate()
+        # elif code == "7":
+        #     valve.set_parameters(pulse_duration=np.uint32(175000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 175 milliseconds
+        #     valve.calibrate()
+        # elif code == "8":
+        #     valve.set_parameters(pulse_duration=np.uint32(200000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 200 milliseconds
+        #     valve.calibrate()
+        # elif code == "9":
+        #     valve.set_parameters(pulse_duration=np.uint32(250000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 250 milliseconds
+        #     valve.calibrate()
+        # elif code == "10":
+        #     valve.set_parameters(pulse_duration=np.uint32(300000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 300 milliseconds
+        #     valve.calibrate()
+        # elif code == "11":
+        #     valve.set_parameters(pulse_duration=np.uint32(350000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 350 milliseconds
+        #     valve.calibrate()
+        # elif code == "12":
+        #     valve.set_parameters(pulse_duration=np.uint32(400000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 400 milliseconds
+        #     valve.calibrate()
+        elif code == "o":
+            valve.toggle(state=True)
+        elif code == "c":
+            valve.toggle(state=False)
+        elif code.isnumeric():
+            pulse_duration = valve.get_duration_from_volume(float(code))
+            valve.set_parameters(pulse_duration=pulse_duration)
+            valve.send_pulse()
 
 
 def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
@@ -647,33 +681,31 @@ def calibration() -> None:
     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
 
     # Defines static assets needed for testing
-    valve_calibration_data = ((1000, 0.001), (5000, 0.005), (10000, 0.01))
-    encoder_id = np.uint8(203)
-    encoder_usb = "/dev/ttyACM0"
+    valve_calibration_data = ((25000, 1.2215), (50000, 3.917), (75000, 6.0875), (100000, 10.0325), (125000, 16.047), (150000, 19.471), (175000, 25.3265), (200000, 31.225), (250000, 41.595), (300000, 53.6335), (350000, 67.5435), (400000, 86.321))
     actor_id = np.uint8(101)
-    actor_usb = "/dev/ttyACM1"
     sensor_id = np.uint8(152)
-    sensor_usb = "/dev/ttyACM2"
+    encoder_id = np.uint8(203)
+    usb = "/dev/ttyACM0"
 
     # Add console support for print debugging
     console.enable()
 
     # Tested module interface
-    # module = EncoderInterface(debug=True)
+    module = EncoderInterface(debug=True)
 
-    module = TTLInterface(module_id=np.uint8(1), debug=True)
+    module_1 = TTLInterface(module_id=np.uint8(1), debug=True)
     module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
     module_3 = BreakInterface(debug=True)
     module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
-    module_5 = ScreenInterface(debug=True)
+    module_5 = ScreenInterface(initially_on=False, debug=True)
 
     # Tested AMC interface
     interface = MicroControllerInterface(
         controller_id=actor_id,
         data_logger=data_logger,
-        module_interfaces=(module_3,),
+        module_interfaces=(module_4,),
         microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port=encoder_usb,
+        microcontroller_usb_port=usb,
         baudrate=115200,
     )
 
@@ -686,15 +718,23 @@ def calibration() -> None:
 
     # Calls the appropriate CLI to test the target module
     # _encoder_cli(module, 500, 15)
-    # _mesoscope_ttl_cli(module, module_2, 10000)
-    _break_cli(module_3)
-    # _valve_cli(module_4, 1000)
+    # _mesoscope_ttl_cli(module_1, module_2, 10000)
+    # _break_cli(module_3)
+    _valve_cli(module_4, 800000)
     # _screen_cli(module_5, 500000)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
 
+    data_logger.compress_logs(remove_sources=True)
+
+    # Checks log parsing
+    # stamps, water = module_4.parse_logged_data()
+    #
+    # print(f"Log data:")
+    # print(f"Timestamps: {stamps}")
+    # print(f"Water: {water}")
 
 if __name__ == "__main__":
     calibration()
