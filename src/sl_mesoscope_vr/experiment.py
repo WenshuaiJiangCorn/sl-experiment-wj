@@ -537,31 +537,90 @@ class ProjectData:
             ensure_directory_exists(self._animal_directory)
             self._sessions = tuple()
 
-    def create_session(self) -> Path:
+    def add_animal(self, animal_name: str) -> Path:
+        """Creates directories for a new animal with 'raw' and 'processed' subdirectories."""
+        animal_directory = self._project_directory / animal_name
+        raw_directory = animal_directory / "raw"
+        processed_directory = animal_directory / "processed"
+
+        ensure_directory_exists(raw_directory)
+        ensure_directory_exists(processed_directory)
+
+        return animal_directory
+    
+    def create_session(self, animal_name: str) -> Path:
         """Creates a new session directory within the broader project-animal data structure.
 
-        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
-        name within the broader project-animal structure has a unique name that accurately preserves the order of the
-        sessions.
+    #     Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
+    #     name within the broader project-animal structure has a unique name that accurately preserves the order of 
+    #     the sessions.
 
-        Notes:
-            You can use the 'stem' property of the returned path to get the session name.
+    #     Notes:
+    #         You can use the 'stem' property of the returned path to get the session name.
 
-        Returns:
-            The Path to the newly created session directory.
+    #     Returns:
+    #         The Path to the newly created session directory.
+    #     """
+        animal_directory = self._project_directory / animal_name
+        raw_directory = animal_directory / "raw"
+        processed_directory = animal_directory / "processed"
+        
+        # Animal not in the project directory
+        if not raw_directory.exists():
+            self.add_animal(animal_name) #Add the animal
+        
+        session_name = get_timestamp(time_separator="-")
+
+        raw_session_path = raw_directory / session_name
+        processed_session_path = processed_directory / session_name
+
+        # Handles conflicts when adding same session to the same animal
+        counter = 1
+        while raw_session_path.exists() or processed_session_path.exists():
+            new_session_name = f"{session_name}_{counter}"
+            raw_session_path = raw_directory / new_session_name
+            processed_session_path = processed_directory / new_session_name
+            counter += 1
+
+        ensure_directory_exists(raw_session_path)
+        ensure_directory_exists(processed_session_path)
+
+        return raw_session_path, processed_session_path
+    
+    def get_animals(self, return_paths: bool = False) -> list[str | Path]:
+        """Returns either all animal names or their absolute paths based on the return_paths flag.
         """
-        # Generates a unique name for the session, based on the current timestamp. Since the timestamp is accurate
-        # to microseconds, this method is guaranteed to provide unique timestamp-based names across all our
-        # use cases.
-        session_name: str = get_timestamp(time_separator="-")
-        session_path = self._animal_directory.joinpath(session_name)
+        if return_paths:
+            return [animal.resolve() for animal in self._project_directory.iterdir() if animal.is_dir()]
+        else:
+            return [animal.name for animal in self._project_directory.iterdir() if animal.is_dir()]
 
-        # Precreates the 'raw' and the 'processed' directories within the session directory
-        ensure_directory_exists(session_path.joinpath("raw"))
-        ensure_directory_exists(session_path.joinpath("processed"))
 
-        self._sessions += (session_name,)  # Updates the sessions tuple with the new session name
-        return session_path
+    def get_sessions(self, return_paths: bool = False) -> tuple[list[str | Path], list[str | Path]]:
+        """Returns a tuple (raw_sessions, processed_sessions), where each is a list containing session names or paths 
+        for all animals. If return_paths is True, absolute paths are returned instead of session names.
+        """
+        raw_sessions = []
+        processed_sessions = []
+
+        for animal_directory in self._project_directory.iterdir():
+            if animal_directory.is_dir():
+                raw_directory = animal_directory / "raw"
+                processed_directory = animal_directory / "processed"
+
+                if raw_directory.exists():
+                    raw_sessions.append(
+                        session.resolve() if return_paths else session.name
+                        for session in raw_directory.iterdir() if session.is_dir()
+                    )
+
+                if processed_directory.exists():
+                    processed_sessions.append(
+                        session.resolve() if return_paths else session.name
+                        for session in processed_directory.iterdir() if session.is_dir()
+                    )
+
+        return raw_sessions, processed_sessions
 
 
 def convert_old_data(
