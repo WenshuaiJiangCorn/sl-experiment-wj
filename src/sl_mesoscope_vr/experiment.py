@@ -681,7 +681,20 @@ def calibration() -> None:
     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
 
     # Defines static assets needed for testing
-    valve_calibration_data = ((25000, 1.2215), (50000, 3.917), (75000, 6.0875), (100000, 10.0325), (125000, 16.047), (150000, 19.471), (175000, 25.3265), (200000, 31.225), (250000, 41.595), (300000, 53.6335), (350000, 67.5435), (400000, 86.321))
+    valve_calibration_data = (
+        (25000, 1.2215),
+        (50000, 3.917),
+        (75000, 6.0875),
+        (100000, 10.0325),
+        (125000, 16.047),
+        (150000, 19.471),
+        (175000, 25.3265),
+        (200000, 31.225),
+        (250000, 41.595),
+        (300000, 53.6335),
+        (350000, 67.5435),
+        (400000, 86.321),
+    )
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)
     encoder_id = np.uint8(203)
@@ -735,6 +748,7 @@ def calibration() -> None:
     # print(f"Log data:")
     # print(f"Timestamps: {stamps}")
     # print(f"Water: {water}")
+
 
 if __name__ == "__main__":
     calibration()

@@ -38,12 +38,12 @@ def test_transfer_local(setup_test_dirs):
     print(f"Source checksum: {src_checksum}")
 
     # Print per-file checksums before transfer
-    for file in src_path.rglob('*'):
+    for file in src_path.rglob("*"):
         if file.is_file():
             print(f"Source file {file}: {calculate_local_checksum(file)}")
 
     # Perform transfer
-    transfer_directory(source=src_path, destination=dst_path, transfer_type='local', parallel=False)
+    transfer_directory(source=src_path, destination=dst_path, transfer_type="local", parallel=False)
 
     # Check if source is removed
     assert not src_path.exists(), "Source directory was not deleted after transfer."
@@ -53,12 +53,11 @@ def test_transfer_local(setup_test_dirs):
     if checksum_file.exists():
         checksum_file.unlink()
 
-
     dest_checksum = calculate_local_checksum(dst_path)
     print(f"Destination checksum: {dest_checksum}")
 
     # Print per-file checksums after transfer
-    for file in dst_path.rglob('*'):
+    for file in dst_path.rglob("*"):
         if file.is_file():
             print(f"Destination file {file}: {calculate_local_checksum(file)}")
 

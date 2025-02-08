@@ -493,7 +493,7 @@ def process_invariant_metadata(file: Path) -> None:
         This function is primarily designed to preserve the metadata before converting raw TIFF stacks into a
         single hyperstack and compressing it as LERC. It ensures that all original metadata is preserved for
         future referencing.
-        
+
     Args:
         file: The path to the mesoscope TIFF stack file. This can be any file in the directory as the
             frame-invariant metadata is the same for all stacks.
