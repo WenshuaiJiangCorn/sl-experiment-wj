@@ -618,42 +618,31 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
         elif code == "r":  # Deliver reward
             valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
             valve.send_pulse()
-        # elif code == "1":
-        #     valve.set_parameters(pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 25 milliseconds
-        #     valve.calibrate()
-        # elif code == "2":
-        #     valve.set_parameters(pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 50 milliseconds
-        #     valve.calibrate()
-        # elif code == "3":
-        #     valve.set_parameters(pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 75 milliseconds
-        #     valve.calibrate()
-        # elif code == "4":
-        #     valve.set_parameters(pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 100 milliseconds
-        #     valve.calibrate()
-        # elif code == "5":
-        #     valve.set_parameters(pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 125 milliseconds
-        #     valve.calibrate()
-        # elif code == "6":
-        #     valve.set_parameters(pulse_duration=np.uint32(150000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 150 milliseconds
-        #     valve.calibrate()
-        # elif code == "7":
-        #     valve.set_parameters(pulse_duration=np.uint32(175000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 175 milliseconds
-        #     valve.calibrate()
-        # elif code == "8":
-        #     valve.set_parameters(pulse_duration=np.uint32(200000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 200 milliseconds
-        #     valve.calibrate()
-        # elif code == "9":
-        #     valve.set_parameters(pulse_duration=np.uint32(250000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 250 milliseconds
-        #     valve.calibrate()
-        # elif code == "10":
-        #     valve.set_parameters(pulse_duration=np.uint32(300000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 300 milliseconds
-        #     valve.calibrate()
-        # elif code == "11":
-        #     valve.set_parameters(pulse_duration=np.uint32(350000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 350 milliseconds
-        #     valve.calibrate()
-        # elif code == "12":
-        #     valve.set_parameters(pulse_duration=np.uint32(400000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 400 milliseconds
-        #     valve.calibrate()
+        elif code == "1":
+            valve.set_parameters(
+                pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 25 milliseconds
+            valve.calibrate()
+        elif code == "2":
+            valve.set_parameters(
+                pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 50 milliseconds
+            valve.calibrate()
+        elif code == "3":
+            valve.set_parameters(
+                pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 75 milliseconds
+            valve.calibrate()
+        elif code == "4":
+            valve.set_parameters(
+                pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 100 milliseconds
+            valve.calibrate()
+        elif code == "5":
+            valve.set_parameters(
+                pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 125 milliseconds
+            valve.calibrate()
         elif code == "o":
             valve.toggle(state=True)
         elif code == "c":
@@ -682,18 +671,12 @@ def calibration() -> None:
 
     # Defines static assets needed for testing
     valve_calibration_data = (
+        (0, 0),  # Need to add this logical constraint to prevent irrational computations, such as negative intercept
         (25000, 1.2215),
         (50000, 3.917),
         (75000, 6.0875),
         (100000, 10.0325),
         (125000, 16.047),
-        (150000, 19.471),
-        (175000, 25.3265),
-        (200000, 31.225),
-        (250000, 41.595),
-        (300000, 53.6335),
-        (350000, 67.5435),
-        (400000, 86.321),
     )
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)

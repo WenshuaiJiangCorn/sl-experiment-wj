@@ -2,7 +2,7 @@ import tempfile
 import shutil
 from pathlib import Path
 import pytest
-from src.sl_mesoscope_vr.transfer_tools import transfer_directory, calculate_local_checksum
+from src.sl_experiment.transfer_tools import transfer_directory, calculate_local_checksum
 
 
 @pytest.fixture

@@ -7,9 +7,9 @@ build-backend = "hatchling.build"
 
 # Project metdata section. Provides the genral ID information about the project.
 [project]
-name = "sl-mesoscope"
+name = "sl-experiment"
 version = "1.0.0"
-description = "Aggregates the software assets used to acquire experimental data via Sun lab Mesoscope and Virtual Reality systems."
+description = "Aggregates all assets used to acquire and preprocess all experimental data in the Sun lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
@@ -39,6 +39,10 @@ classifiers = [
 
 # Runtime project dependencies. This overlaps with the 'condarun' optional list.
 dependencies = [
+    "zaber-motion>=7,<8",
+    "crc>=7,<8",
+    "tabulate>=0,<1",
+    "click>=8,<9",
     "numpy>=2,<3",
     "numba>=0,<1",
     "suite2p>=0,<1",
@@ -56,8 +60,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Sun-Lab-NBB/sl-mesoscope"
-Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
+Homepage = "https://github.com/Sun-Lab-NBB/sl-experiment"
+Documentation = "https://sl-experiment-api-docs.netlify.app/"
 
 # Specifies additional dependencies that can be installed alongside the main library. Also, this is the section that
 # stores conda, condarun, and noconda lists that facilitate setting up dependencies via conda where possible.
@@ -72,6 +76,9 @@ condarun = [
     "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
     "matplotlib>=3,<4",
+    "zaber-motion>=7,<8",
+    "tabulate>=0,<1",
+    "click>=8,<9",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
@@ -129,12 +136,14 @@ noconda = [
 # be used by developers to quickly install all necessary components for working on this project. Has to be installed
 # from pip.
 dev = [
-    "sl-mesoscope[conda]",
-    "sl-mesoscope[noconda]"
+    "sl-experiment[conda]",
+    "sl-experiment[noconda]"
 ]
 
 # Future support for CLI interface(s) can be realizied through this section.
 [project.scripts]
+#axz-crc = "sl-experiment:calculate_crc"
+#find-axz-devices = "experiment:discover_zaber_devices"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]
@@ -142,7 +151,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/sl_mesoscope_vr", "examples"]
+packages = ["src/sl_experiment", "examples"]
 
 # Ruff Configuration.
 [tool.ruff]
@@ -202,14 +211,14 @@ length-sort = true                 # Places shorter imports first
 disallow_untyped_defs = true # Enforces function annotation
 warn_unused_ignores = true   # Warns against using 'type: ignore' for packages that have type stubs available.
 exclude = [
-    "sl-mesoscope-\\d+", # Ignores temporary folder created by setuptools when building the sdist
-    "venv.*/",           # Ignores virtual environments
-    "build/",            # Ignores the sdist directory
-    "dist/",             # Ignores the wheel directory
-    "docs/",             # Ignores the sphinx / doxygen directory
-    "stubs/",            # Ignores stubs directory (stubgen output target)
-    "recipe/",           # Ignores recipe directory (grayskull output target)
-    "tests/",            # Ignores the test directory.
+    "sl-experiment-\\d+", # Ignores temporary folder created by setuptools when building the sdist
+    "venv.*/",            # Ignores virtual environments
+    "build/",             # Ignores the sdist directory
+    "dist/",              # Ignores the wheel directory
+    "docs/",              # Ignores the sphinx / doxygen directory
+    "stubs/",             # Ignores stubs directory (stubgen output target)
+    "recipe/",            # Ignores recipe directory (grayskull output target)
+    "tests/",             # Ignores the test directory.
 ]
 
 # This is used by the 'test' tox tasks to aggregate coverage data produced during pytest runtimes.

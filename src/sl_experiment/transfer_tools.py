@@ -1,5 +1,5 @@
-"""This module provides methods for moving data between the local machine, the NAS drive (SMB protocol) and the Sun lab
-BioHPC cluster (SFTP protocol).
+"""This module provides methods for moving data between the local machine, the NAS drive and the Sun lab BioHPC cluster
+(SMB protocol).
 """
 
 import shutil
@@ -24,7 +24,7 @@ def transfer_directory(
     remove_sources: bool = False,
     verify_integrity: bool = True,
 ) -> None:
-    """ Transfers an entire directory tree from source to destination while preserving the folder structure.
+    """Transfers an entire directory tree from source to destination while preserving the folder structure.
 
     Args:
         source: The path to the directory that needs to be moved.
