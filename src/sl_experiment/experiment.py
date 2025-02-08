@@ -547,17 +547,16 @@ class ProjectData:
     
     def create_session(self, animal_name: str) -> Path:
         """Creates a new session directory within the broader project-animal data structure.
+        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
+        name within the broader project-animal structure has a unique name that accurately preserves the order of
+        the sessions.
 
-    #     Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
-    #     name within the broader project-animal structure has a unique name that accurately preserves the order of 
-    #     the sessions.
+        Notes:
+            You can use the 'stem' property of the returned path to get the session name.
 
-    #     Notes:
-    #         You can use the 'stem' property of the returned path to get the session name.
-
-    #     Returns:
-    #         The Path to the newly created session directory.
-    #     """
+        Returns:
+            The Path to the newly created session directory.
+        """
         animal_directory = self._project_directory / animal_name
         raw_directory = animal_directory / "raw"
         processed_directory = animal_directory / "processed"
@@ -594,7 +593,7 @@ class ProjectData:
 
 
     def get_sessions(self, return_paths: bool = False) -> tuple[list[str | Path], list[str | Path]]:
-        """Returns a tuple (raw_sessions, processed_sessions), where each is a list containing session names or paths 
+        """Returns a tuple (raw_sessions, processed_sessions), where each is a list containing session names or paths
         for all animals. If return_paths is True, absolute paths are returned instead of session names.
         """
         raw_sessions = []
