@@ -46,16 +46,16 @@ def _calculate_file_checksum(base_directory: Path, file_path: Path) -> tuple[str
     return relative_path, checksum.digest()
 
 
-def calculate_directory_checksum(directory: Path, num_processes: int | None = None, batch: bool = False) -> None:
+def calculate_directory_checksum(
+    directory: Path, num_processes: int | None = None, batch: bool = False, save_checksum: bool = True
+) -> str:
     """Calculates xxHash3-128 checksum for the input directory, which includes the data of all contained files and
     the directory structure information.
 
     This function is used to generate a checksum for each experimental session directory. Checksums are used to
     verify the session data integrity during transmission between the PC that acquired the data and longer term storage
-    locations, such as the NAS or the lab processing server.
-
-    This function writes the generated checksum as a hexadecimal string to the ax_checksum.txt file stored at the
-    highest level of the input directory.
+    locations, such as the NAS or the lab processing server. The function can be configured to write the generated
+    checksum as a hexadecimal string to the ax_checksum.txt file stored at the highest level of the input directory.
 
     Note:
         All data transfer methods from this library automatically verify data integrity when it is uploaded to or
@@ -77,10 +77,14 @@ def calculate_directory_checksum(directory: Path, num_processes: int | None = No
             function defaults to using (logical CPU count - 4).
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
             to optimize progress reporting to avoid cluttering the terminal.
+        save_checksum: Determines whether the checksum should be saved (written to) a .txt file.
+
+    Returns:
+        The xxHash3-128 checksum for the input directory as a hexadecimal string.
     """
     # Determines the number of parallel processes to use.
     if num_processes is None:
-        num_processes = max(1, os.cpu_count() - 4)
+        num_processes = max(1, os.cpu_count() - 4)  # type: ignore
 
     # Determines the path to each file inside the input directory structure and sorts them for consistency
     path: Path
@@ -118,7 +122,12 @@ def calculate_directory_checksum(directory: Path, num_processes: int | None = No
             checksum.update(file_path.encode())
             checksum.update(file_checksum)
 
+    checksum_hexstr = checksum.hexdigest()
+
     # Writes the hash to ax_checksum.txt in the root directory
-    checksum_path = directory / "ax_checksum.txt"
-    with open(checksum_path, "w") as f:
-        f.write(checksum.hexdigest())
+    if save_checksum:
+        checksum_path = directory / "ax_checksum.txt"
+        with open(checksum_path, "w") as f:
+            f.write(checksum_hexstr)
+
+    return checksum_hexstr

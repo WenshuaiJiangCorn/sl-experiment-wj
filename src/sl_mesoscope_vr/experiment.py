@@ -3,25 +3,22 @@
 import os
 from pathlib import Path
 
-from ataraxis_communication_interface.communication import MQTTCommunication
-from tqdm import tqdm
 import numpy as np
 from ataraxis_time import PrecisionTimer
-from packaging_tools import calculate_directory_checksum
 from module_interfaces import (
     TTLInterface,
     LickInterface,
     BreakInterface,
     ValveInterface,
+    ScreenInterface,
     TorqueInterface,
     EncoderInterface,
-    ScreenInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists
-from mesoscope_preprocessing import extract_frames_from_stack
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
+from ataraxis_communication_interface.communication import MQTTCommunication
 
 
 class MesoscopeExperiment:
@@ -129,7 +126,7 @@ class MesoscopeExperiment:
             )
             console.error(message=message, error=ValueError)
 
-        # Ensures that the output directory exists, if it passed the verification above
+        # Ensures that the output directory exists if it passed the verification above
         ensure_directory_exists(output_directory)
 
         if not isinstance(valve_calibration_data, tuple) or not all(
@@ -385,7 +382,7 @@ class MesoscopeExperiment:
         # noinspection PyTypeChecker
         self._encoder.send_message(self._wheel_encoder.dequeue_command)
 
-        # Toggles the state of the VR screens to be OFF, if the VR screens are currently ON. If the screens are OFF,
+        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
         # keeps them OFF.
         if not self._screen_off:
             # noinspection PyTypeChecker
@@ -564,147 +561,180 @@ class ProjectData:
         return session_path
 
 
-def convert_old_data(root_directory: Path, remove_sources: bool = False, num_processes: int = None) -> None:
-    """A temporary function used to convert old Tyche data to our new format."""
-    # Resolves the number of processes to use for processing the data.
-    if num_processes is None:
-        num_processes = max(1, os.cpu_count() - 4)  # Keeps 4 cores free for other tasks
-
-    # Recursively finds all subdirectories inside the root directory, excluding 'mesoscope_frames'
-    subdirectories = [
-        directory
-        for directory in root_directory.rglob("*")
-        if directory.is_dir() and directory.name != "mesoscope_frames"  # Exclude already processed frames.
-    ]
-
-    # Collects the paths to each directory with TIFF files OR that has a mesoscope_frames subdirectory. This is used as
-    # a heuristic to discover folders with Tyche cohort session data.
-    session_directories = set()
-    for subdirectory in subdirectories:
-        tiff_files_in_subdir = list(subdirectory.glob("*.tif")) + list(subdirectory.glob("*.tiff"))
-
-        # Check for mesoscope_frames subdirectory. This directory would exist in already processed session directories
-        has_mesoscope_frames = (subdirectory / "mesoscope_frames").exists()
-
-        if tiff_files_in_subdir or has_mesoscope_frames:
-            session_directories.add(subdirectory)
-
-    # Processes each directory in parallel
-    for directory in tqdm(session_directories, desc="Processing mesoscope frames for session directories", unit="dir"):
-        extract_frames_from_stack(
-            directory,
-            num_processes,
-            remove_sources,
-            batch=True,
-        )
-
-    # Calculates the checksum for each processed directory
-    for directory in tqdm(session_directories, desc="Calculating checksums for session directories", unit="dir"):
-        calculate_directory_checksum(
-            directory,
-            num_processes,
-            batch=True,
-        )
+def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
+    """Exposes a console-based CLI that interfaces with the encoder connected to the running wheel."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "f":  # CW only
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "r":  # CCW only
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "a":  # Both CW and CCW
+            encoder.reset_pulse_count()
+            encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=delta_threshold)
+            encoder.check_state(repetition_delay=np.uint32(polling_delay))
 
 
-# def test_runtime() -> None:
-#     temp_dir = Path(tempfile.mkdtemp())
-#     data_logger = DataLogger(output_directory=temp_dir, instance_name="test_logger")
-#
-#     console.enable()
-#
-#     encoder = EncoderInterface()
-#     brake = BreakInterface()
-#     lick = LickInterface()
-#     valve = ValveInterface(valve_calibration_data=((1000, 0.001), (5000, 0.005), (10000, 0.01)))
-#
-#     actor_interfaces = (brake, valve)
-#
-#     encoder_interfaces = (encoder,)
-#
-#     sensor_interfaces = (lick,)
-#
-#     actor_interface = MicroControllerInterface(
-#         controller_id=np.uint8(101),
-#         data_logger=data_logger,
-#         module_interfaces=actor_interfaces,
-#         microcontroller_serial_buffer_size=8192,
-#         microcontroller_usb_port="/dev/ttyACM1",
-#         baudrate=115200,
-#     )
-#
-#     encoder_interface = MicroControllerInterface(
-#         controller_id=np.uint8(203),
-#         data_logger=data_logger,
-#         module_interfaces=encoder_interfaces,
-#         microcontroller_serial_buffer_size=8192,
-#         microcontroller_usb_port="/dev/ttyACM2",
-#         baudrate=115200,
-#     )
-#
-#     sensor_interface = MicroControllerInterface(
-#         controller_id=np.uint8(152),
-#         data_logger=data_logger,
-#         module_interfaces=sensor_interfaces,
-#         microcontroller_serial_buffer_size=8192,
-#         microcontroller_usb_port="/dev/ttyACM0",
-#         baudrate=115200,
-#     )
-#
-#     timer = PrecisionTimer("s")
-#
-#     # cue_topic = 'CueSequence/'
-#     # unity_communication = UnityCommunication(monitored_topics=cue_topic)
-#     # unity_communication.connect()
-#
-#     # unity_communication.send_data("Display/Blank/")
-#     # timer.delay_noblock(5)
-#     # unity_communication.send_data("Display/Show/")
-#
-#     # unity_communication.send_data("CueSequenceTrigger/")
-#
-#     # while not unity_communication.has_data:
-#     #     pass
-#
-#     # sequence: bytes = unity_communication.get_data()
-#
-#     data_logger._vacate_shared_memory_buffer()
-#     actor_interface.vacate_shared_memory_buffer()
-#     sensor_interface.vacate_shared_memory_buffer()
-#     encoder_interface.vacate_shared_memory_buffer()
-#
-#     data_logger.start()
-#
-#     actor_interface.start()
-#     encoder_interface.start()
-#     sensor_interface.start()
-#
-#     actor_interface.unlock_controller()
-#
-#     actor_interface.send_message(brake.toggle(state=False))  # Disengage the break
-#
-#     # Calibrate the encoder to only report CCW movement and start position recording
-#     encoder_interface.send_message(encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=20))
-#     encoder_interface.send_message(encoder.check_state(repetition_delay=np.uint32(100)))
-#
-#     # Starts lick monitoring
-#     sensor_interface.send_message(lick.check_state(repetition_delay=np.uint32(20000)))
-#
-#     # Starts reward delivery
-#     actor_interface.send_message(
-#         valve.set_parameters(
-#             pulse_duration=np.uint32(4000000), calibration_delay=np.uint32(10000), calibration_count=np.uint16(100)
-#         )
-#     )  # 1 second
-#
-#     timer.delay_noblock(delay=120)
-#
-#     actor_interface.stop()
-#     encoder_interface.stop()
-#     sensor_interface.stop()
-#     data_logger.stop()
+def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the TTL modules used to start and stop mesoscope frame
+    acquisition.
+    """
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "b":  # Start / Begin
+            start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            start_trigger.send_pulse()
+        elif code == "e":  # Stop / End
+            stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            stop_trigger.send_pulse()
+
+
+def _break_cli(wheel_break: BreakInterface) -> None:
+    """Exposes a console-based CLI that interfaces with the break connected to the running wheel."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "e":  # Engage
+            wheel_break.toggle(state=True)
+        elif code == "d":  # Disengage
+            wheel_break.toggle(state=False)
+
+
+def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the water reward delivery valve."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "r":  # Deliver reward
+            valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            valve.send_pulse()
+        # elif code == "1":
+        #     valve.set_parameters(pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 25 milliseconds
+        #     valve.calibrate()
+        # elif code == "2":
+        #     valve.set_parameters(pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 50 milliseconds
+        #     valve.calibrate()
+        # elif code == "3":
+        #     valve.set_parameters(pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 75 milliseconds
+        #     valve.calibrate()
+        # elif code == "4":
+        #     valve.set_parameters(pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 100 milliseconds
+        #     valve.calibrate()
+        # elif code == "5":
+        #     valve.set_parameters(pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 125 milliseconds
+        #     valve.calibrate()
+        # elif code == "6":
+        #     valve.set_parameters(pulse_duration=np.uint32(150000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 150 milliseconds
+        #     valve.calibrate()
+        # elif code == "7":
+        #     valve.set_parameters(pulse_duration=np.uint32(175000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 175 milliseconds
+        #     valve.calibrate()
+        # elif code == "8":
+        #     valve.set_parameters(pulse_duration=np.uint32(200000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 200 milliseconds
+        #     valve.calibrate()
+        # elif code == "9":
+        #     valve.set_parameters(pulse_duration=np.uint32(250000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 250 milliseconds
+        #     valve.calibrate()
+        # elif code == "10":
+        #     valve.set_parameters(pulse_duration=np.uint32(300000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 300 milliseconds
+        #     valve.calibrate()
+        # elif code == "11":
+        #     valve.set_parameters(pulse_duration=np.uint32(350000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 350 milliseconds
+        #     valve.calibrate()
+        # elif code == "12":
+        #     valve.set_parameters(pulse_duration=np.uint32(400000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(200))  # 400 milliseconds
+        #     valve.calibrate()
+        elif code == "o":
+            valve.toggle(state=True)
+        elif code == "c":
+            valve.toggle(state=False)
+        elif code.isnumeric():
+            pulse_duration = valve.get_duration_from_volume(float(code))
+            valve.set_parameters(pulse_duration=pulse_duration)
+            valve.send_pulse()
+
+
+def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
+    """Exposes a console-based CLI that interfaces with the HDMI translator boards connected to all three VR screens."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "t":  # Toggle
+            screen.set_parameters(pulse_duration=np.uint32(pulse_duration))
+            screen.toggle()
+
+
+def calibration() -> None:
+    # Output dir
+    temp_dir = Path("/home/cybermouse/Desktop/TestOut")
+    data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
+
+    # Defines static assets needed for testing
+    valve_calibration_data = ((25000, 1.2215), (50000, 3.917), (75000, 6.0875), (100000, 10.0325), (125000, 16.047), (150000, 19.471), (175000, 25.3265), (200000, 31.225), (250000, 41.595), (300000, 53.6335), (350000, 67.5435), (400000, 86.321))
+    actor_id = np.uint8(101)
+    sensor_id = np.uint8(152)
+    encoder_id = np.uint8(203)
+    usb = "/dev/ttyACM0"
+
+    # Add console support for print debugging
+    console.enable()
+
+    # Tested module interface
+    module = EncoderInterface(debug=True)
+
+    module_1 = TTLInterface(module_id=np.uint8(1), debug=True)
+    module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
+    module_3 = BreakInterface(debug=True)
+    module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+    module_5 = ScreenInterface(initially_on=False, debug=True)
+
+    # Tested AMC interface
+    interface = MicroControllerInterface(
+        controller_id=actor_id,
+        data_logger=data_logger,
+        module_interfaces=(module_4,),
+        microcontroller_serial_buffer_size=8192,
+        microcontroller_usb_port=usb,
+        baudrate=115200,
+    )
+
+    # Starts interfaces
+    data_logger.start()
+    interface.start()
+
+    # For ACTOR modules, enables writing to output pins
+    interface.unlock_controller()
+
+    # Calls the appropriate CLI to test the target module
+    # _encoder_cli(module, 500, 15)
+    # _mesoscope_ttl_cli(module_1, module_2, 10000)
+    # _break_cli(module_3)
+    _valve_cli(module_4, 800000)
+    # _screen_cli(module_5, 500000)
+
+    # Shutdown
+    interface.stop()
+    data_logger.stop()
+
+    data_logger.compress_logs(remove_sources=True)
+
+    # Checks log parsing
+    # stamps, water = module_4.parse_logged_data()
+    #
+    # print(f"Log data:")
+    # print(f"Timestamps: {stamps}")
+    # print(f"Water: {water}")
 
 if __name__ == "__main__":
-    pass
-    # target = Path("/media/Data/Tyche-A2")
-    # convert_old_data(root_directory=target, remove_sources=True)
+    calibration()

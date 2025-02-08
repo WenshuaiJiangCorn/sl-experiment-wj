@@ -2,12 +2,11 @@
 
 from json import dumps
 import math
-from multiprocessing import Queue as MPQueue
 
 import numpy as np
+from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
-from numpy.polynomial.polynomial import polyfit
 from ataraxis_communication_interface import (
     ModuleData,
     ModuleState,
@@ -17,6 +16,7 @@ from ataraxis_communication_interface import (
     OneOffModuleCommand,
     RepeatedModuleCommand,
 )
+from typing import Any
 
 
 class EncoderInterface(ModuleInterface):
@@ -27,11 +27,10 @@ class EncoderInterface(ModuleInterface):
     handle the pulses sent by the two encoder channels.
 
     Notes:
-        This interface automatically sends CW and CCW motion data to Unity via 'LinearTreadmill/Data' MQTT topic.
+        This interface sends CW and CCW motion data to Unity via 'LinearTreadmill/Data' MQTT topic.
 
         The default initial encoder readout is 0 (no CW or CCW motion). The class instance is zeroed at communication
-        initialization, and it is safe to assume the displacement readout is 0 until the encoder sends the first
-        code 51 or 52 data message.
+        initialization.
 
     Args:
         encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). This is the
@@ -40,16 +39,19 @@ class EncoderInterface(ModuleInterface):
             encoder.
         object_diameter: The diameter of the rotating object connected to the encoder, in centimeters. This is used to
             convert encoder pulses into rotated distance in cm.
-        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the connected object
-             into Unity units. This value works together with object_diameter and encoder_ppr to translate raw
-             encoder pulses received from the microcontroller into Unity-compatible units.
+        cm_per_unity_unit: The length of each Unity 'unit' in centimeters. This is used to translate raw encoder pulses
+            into Unity 'units' before sending the data to Unity.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
         _ppr: Stores the resolution of the managed quadrature encoder.
         _object_diameter: Stores the diameter of the object connected to the encoder.
-        _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
+        _cm_per_pulse: Stores the conversion factor that translates encoder pulses into centimeters.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
+        _communication: Stores the communication class used to send data to Unity over MQTT.
+        _debug: Stores the debug flag.
     """
 
     def __init__(
@@ -57,8 +59,9 @@ class EncoderInterface(ModuleInterface):
         encoder_ppr: int = 8192,
         object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
         cm_per_unity_unit: float = 10.0,
+        debug: bool = False,
     ) -> None:
-        data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
+        data_codes: set[np.uint8] = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kRotatedCCW, kRotatedCW, kPPR
 
         super().__init__(
             module_type=np.uint8(2),
@@ -70,44 +73,74 @@ class EncoderInterface(ModuleInterface):
         )
 
         # Saves additional data to class attributes.
-        self._motion_topic = "LinearTreadmill/Data"  # Hardcoded output topic
-        self._ppr = encoder_ppr
-        self._object_diameter = object_diameter
-        self._cm_per_unity_unit = cm_per_unity_unit
+        self._motion_topic: str = "LinearTreadmill/Data"  # Hardcoded output topic
+        self._ppr: int = encoder_ppr
+        self._object_diameter: float = object_diameter
+        self._debug: bool = debug
 
-        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 12 decimal places for
-        # consistency and to ensure repeatability.
-        self._unity_unit_per_pulse = np.round(
-            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
-            decimals=12,
+        # Computes the conversion factor to go from pulses to centimeters
+        self._cm_per_pulse: np.float64 = np.round(
+            a=np.float64((math.pi * self._object_diameter) / self._ppr),
+            decimals=8,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleState | ModuleData,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # If the incoming message is the PPR report, sends the data to the output queue
+        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 8 decimal places for
+        # consistency and to ensure repeatability.
+        self._unity_unit_per_pulse: np.float64 = np.round(
+            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
+            decimals=8,
+        )
+
+        # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
+        # issues
+        self._communication: MQTTCommunication | None = None
+
+    def initialize_remote_assets(self) -> None:
+        """Initializes the MQTTCommunication class and connects to the MQTT broker."""
+        # MQTT Client is used to send motion data to Unity over MQTT
+        self._communication = MQTTCommunication()
+        self._communication.connect()
+
+    def terminate_remote_assets(self) -> None:
+        """Destroys the MQTTCommunication class."""
+        self._communication.disconnect()
+
+    def process_received_data(self, message: ModuleState | ModuleData) -> None:
+        """Processes incoming data in real time.
+
+        Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
+        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console, so make sure console is enabled.
+
+        Notes:
+            If debug mode is enabled, motion data is also converted to centimeters and printed via console.
+        """
+        # If the incoming message is the PPR report, prints the data via console.
         if message.event == 53:
-            topic = "encoder ppr"
-            ppr = message.data_object
-            mp_queue.put((topic, ppr))
+            console.echo(f"Encoder ppr: {message.data_object}")
 
         # Otherwise, the message necessarily has to be reporting rotation into CCW or CW direction
         # (event code 51 or 52).
 
-        # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
-        # and CCW as positive.
+        # The rotation direction is encoded via the message event code. CW rotation (code 52) is interpreted as negative
+        # and CCW (code 51) as positive.
         sign = 1 if message.event == np.uint8(51) else -1
 
         # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
-        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
+        # using the precomputed conversion factor. Uses float64 and rounds to 8 decimal places for consistency and
         # precision
         signed_motion = np.round(
             a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
-            decimals=12,
+            decimals=8,
         )
+
+        # If the class is in the debug mode, converts the received motion data into centimeters and prints it via
+        # console
+        if self._debug:
+            cm_motion = np.round(
+                a=np.float64(message.data_object) * self._cm_per_pulse * sign,
+                decimals=8,
+            )
+            console.echo(message=f"Encoder moved {cm_motion} cm.")
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -115,7 +148,7 @@ class EncoderInterface(ModuleInterface):
         byte_array = json_string.encode("utf-8")
 
         # Publishes the motion to the appropriate MQTT topic.
-        mqtt_communication.send_data(topic=self._motion_topic, payload=byte_array)
+        self._communication.send_data(topic=self._motion_topic, payload=byte_array)  # type: ignore
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -126,7 +159,7 @@ class EncoderInterface(ModuleInterface):
         report_ccw: np.bool | bool = np.bool(True),
         report_cw: np.bool | bool = np.bool(True),
         delta_threshold: np.uint32 | int = np.uint32(10),
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the EncoderModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the EncoderModule instance managed by
@@ -140,19 +173,16 @@ class EncoderInterface(ModuleInterface):
                 change is 0 (the encoder readout did not change), it will not be reported, regardless of the
                 value of this parameter. Sub-threshold motion will be aggregated (summed) across readouts until a
                 significant overall change in position is reached to justify reporting it to the PC.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(200)) -> None:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
 
         If there has been a significant change in the absolute count of pulses, reports the change and direction to the
@@ -166,41 +196,34 @@ class EncoderInterface(ModuleInterface):
 
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
-            command will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
+                command will only run once.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(False),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),
+                cycle_delay=np.uint32(repetition_delay),
+            )
+        self._input_queue.put(command)  # type: ignore
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=np.uint32(repetition_delay),
-        )
-
-    def reset_pulse_count(self) -> OneOffModuleCommand:
+    def reset_pulse_count(self) -> None:
         """Resets the EncoderModule pulse tracker to 0.
 
         This command allows resetting the encoder without evaluating its current pulse count. Currently, this command
-        is designed ot only run once.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
+        is designed to only run once.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
@@ -208,7 +231,9 @@ class EncoderInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-    def get_ppr(self) -> OneOffModuleCommand:
+        self._input_queue.put(command)  # type: ignore
+
+    def get_ppr(self) -> None:
         """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
 
         The PPR allows converting raw pulse counts the EncoderModule sends to the PC to accurate displacement in
@@ -227,18 +252,15 @@ class EncoderInterface(ModuleInterface):
             The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
             further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, if the
             object is moving too fast (or too slow), the command will not work as intended.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(3),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
     @property
     def mqtt_topic(self) -> str:
@@ -247,11 +269,52 @@ class EncoderInterface(ModuleInterface):
 
     @property
     def cm_per_pulse(self) -> np.float64:
-        """Returns the conversion factor to translate raw encoder pulse count to real world centimeters of motion."""
-        return np.round(
-            a=np.float64((math.pi * self._object_diameter) / self._ppr),
-            decimals=12,
-        )
+        """Returns the conversion factor to translate raw encoder pulse count to distance moved in centimeters."""
+        return self._cm_per_pulse
+
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the absolute position of the
+            animal in centimeters at each timestamp, relative to the beginning of the VR track.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 51 (CCW displacement) and event-codes 52 (CW displacement).
+
+        # Precreates the output arrays, based on the number of recorded CW and CCW displacements.
+        total_length = len(log_data[np.uint8(51)]) + len(log_data[np.uint8(52)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        displacements = np.empty(total_length, dtype=np.float64)
+
+        # Processes CCW rotations (Code 51). CCW rotation is interpreted as positive displacement
+        ccw_data = log_data[np.uint8(51)]
+        n_ccw = len(ccw_data)
+        timestamps[:n_ccw] = [value["timestamp"] for value in ccw_data]  # Extracts timestamps for each value
+        # The values are initially using uint32 type. This converts them to float64 during initial assignment
+        displacements[:n_ccw] = [np.float64(value["data"]) for value in ccw_data]
+
+        # Processes CW rotations (Code 52). CW rotation is interpreted as negative displacement
+        cw_data = log_data[np.uint8(52)]
+        timestamps[n_ccw:] = [value["timestamp"] for value in cw_data]  # CW data just fills remaining space after CCW.
+        displacements[n_ccw:] = [-np.float64(value["data"]) for value in cw_data]
+
+        # Sorts both arrays based on timestamps.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        displacements = displacements[sort_indices]
+
+        # Converts individual displacement vectors into aggregated absolute position of the mouse. The position is also
+        # translated from encoder pulse counts into centimeters. The position is referenced to the start of the
+        # experimental trial (beginning of the VR track) as 0-value. Positive positions means moving forward along the
+        # track, negative positions mean moving backward along the track.
+        positions: NDArray[np.float64] = np.round(np.cumsum(displacements * self.cm_per_pulse), decimals=8)
+
+        # Returns both timestamps and positions as numpy arrays.
+        return timestamps, positions
 
 
 class TTLInterface(ModuleInterface):
@@ -264,31 +327,69 @@ class TTLInterface(ModuleInterface):
     Notes:
         When the TTLModule is configured to output a signal, it will notify the PC about the initial signal state
         (HIGH or LOW) after setup.
+
+    Args:
+        module_id: The unique byte-code identifier of the TTLModule instance. Since the mesoscope data acquisition
+            pipeline uses multiple TTL modules on some microcontrollers, each instance running on the same
+            microcontroller must have a unique identifier. The ID codes are not shared between AMC and other module
+            types.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
+
+    Attributes:
+        _debug: Stores the debug flag.
     """
 
-    def __init__(self) -> None:
-        error_codes = {np.uint8(51), np.uint8(54)}  # kOutputLocked, kInvalidPinMode
-
+    def __init__(self, module_id: np.uint8, debug: bool = False) -> None:
+        error_codes: set[np.uint8] = {np.uint8(51), np.uint8(54)}  # kOutputLocked, kInvalidPinMode
         # kInputOn, kInputOff, kOutputOn, kOutputOff
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
 
+        self._debug: bool = debug
+
+        # If the interface runs in the debug mode, configures the interface to monitor all incoming data codes.
+        # Otherwise, the interface does not need to do any real-time processing of incoming data, so sets data_codes to
+        # None.
+        data_codes: set[np.uint8] | None = None
+        if debug:
+            data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
+
         super().__init__(
             module_type=np.uint8(1),
-            module_id=np.uint8(1),
+            module_id=module_id,
             mqtt_communication=False,
-            data_codes=None,  # None of the data codes needs additional processing, so statically set to None
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
+    def initialize_remote_assets(self) -> None:
+        """Not used."""
+        pass
+
+    def terminate_remote_assets(self) -> None:
         """Not used."""
         return
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """During debug runtime, dumps the data received from the module into the terminal.
+
+        This includes both received and emitted ttl pulses. The method reports rising and falling edges of the TTL
+        pulses.
+
+        Notes:
+            The method is not used during non-debug runtimes. If the interface runs in debug mode, make sure the
+            console is enabled, as it is used to print received data into terminal.
+        """
+        # The method is ONLY called during debug runtime, so prints all received data via console.
+        if message.event == 52:
+            console.echo(f"TTLModule {self.module_id} detects HIGH signal")
+        if message.event == 53:
+            console.echo(f"TTLModule {self.module_id} detects LOW signal")
+        if message.event == 55:
+            console.echo(f"TTLModule {self.module_id} emits HIGH signal")
+        if message.event == 56:
+            console.echo(f"TTLModule {self.module_id} emits LOW signal")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -296,7 +397,7 @@ class TTLInterface(ModuleInterface):
 
     def set_parameters(
         self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the TTLModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the TTLModule instance managed by
@@ -308,21 +409,16 @@ class TTLInterface(ModuleInterface):
             averaging_pool_size: The number of digital pin readouts to average together when checking pin state. This
                 is used during the execution of check_state() command to debounce the pin readout and acts in addition
                 to any built-in debouncing.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, averaging_pool_size),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
-    ) -> RepeatedModuleCommand | OneOffModuleCommand:
+    def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True) -> None:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
 
         This command is well-suited to carry out most forms of TTL communication, but it is adapted for comparatively
@@ -336,42 +432,36 @@ class TTLInterface(ModuleInterface):
             noblock: Determines whether the command should block the microcontroller while emitting the high phase of
                 the pulse or not. Blocking ensures precise pulse duration, non-blocking allows the microcontroller to
                 perform other operations while waiting, increasing its throughput.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(noblock),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(noblock),
+                cycle_delay=repetition_delay,
+            )
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(noblock),
-            cycle_delay=repetition_delay,
-        )
+        self._input_queue.put(command)  # type: ignore
 
-    def toggle(self, state: bool) -> OneOffModuleCommand:
+    def toggle(self, state: bool) -> None:
         """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
 
         This command locks the TTLModule managed by this Interface into delivering the desired logical signal.
 
         Args:
             state: The signal to output. Set to True for HIGH and False for LOW.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
@@ -379,7 +469,9 @@ class TTLInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+        self._input_queue.put(command)  # type: ignore
+
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Checks the state of the TTL signal received by the TTLModule.
 
         This command evaluates the state of the TTLModule's input pin and, if it is different from the previous state,
@@ -388,29 +480,79 @@ class TTLInterface(ModuleInterface):
 
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
-            will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
+                will only run once.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(4),
                 noblock=np.bool(False),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(4),
+                noblock=np.bool(False),
+                cycle_delay=repetition_delay,
+            )
+        self._input_queue.put(command)  # type: ignore
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(4),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
+    def parse_logged_data(self) -> NDArray[np.uint64]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Notes:
+            The returned array of timestamps is used as the 'seed' for the interpolation step of data alignment if
+            this method is called for the TTLModuleInterface used to monitor mesoscope frame acquisition stamps.
+
+        Returns:
+            A numpy array that stores the timestamps for the beginning of each HIGH TTL phase event detected by the
+            module. The timestamps correspond to the time when the LOW phase translates into the HIGH phase
+            (rising edges). Currently, this method is only called for the TTLModule that monitors mesoscope frame
+            acquisition stamps and, therefore, the timestamps denote the time when the mesoscope starts acquiring
+            (scanning) each frame.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 52 (InputON) and event-codes 53 (InputOFF).
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype and the trigger
+        # values are boolean. We use uint8 as it has the same memory footprint as a boolean and allow us to use integer
+        # types across the entire dataset.
+        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        triggers: NDArray[np.uint8] = np.empty(total_length, dtype=np.uint8)
+
+        # Extracts ON (Code 52) trigger codes. Statically assigns the value '1' to denote ON signals.
+        on_data = log_data[np.uint8(52)]
+        n_on = len(on_data)
+        timestamps[:n_on] = [value["timestamp"] for value in on_data]
+        triggers[:n_on] = np.uint8(1)  # All code 52 signals are ON (High)
+
+        # Extracts OFF (Code 53) trigger codes.
+        off_data = log_data[np.uint8(53)]
+        timestamps[n_on:] = [value["timestamp"] for value in off_data]
+        triggers[n_on:] = np.uint8(0)  # All code 53 signals are OFF (Low)
+
+        # Sorts both arrays based on the timestamps, so that the data is in the chronological order.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        triggers = triggers[sort_indices]
+
+        # Finds falling edges (where signal goes from 1 to 0). Then uses the indices for such events to extract the
+        # timestamps associated with each falling edge, before returning them to the caller.
+        # falling_edges = np.where((triggers[:-1] == 1) & (triggers[1:] == 0))[0] + 1
+
+        # Recently we switched to using the rising edges instead of falling edges. The purpose and code are very similar
+        # though
+        rising_edges = np.where((triggers[:-1] == 0) & (triggers[1:] == 1))[0] + 1
+        frame_timestamps = timestamps[rising_edges]
+
+        return frame_timestamps
 
 
 class BreakInterface(ModuleInterface):
@@ -435,6 +577,8 @@ class BreakInterface(ModuleInterface):
             break delivers at maximum voltage (break is fully engaged).
         object_diameter: The diameter of the rotating object connected to the break, in centimeters. This is used to
             calculate the force at the end of the object associated with each torque level of the break.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _newton_per_gram_centimeter: Conversion factor from torque force in g cm to torque force in N cm.
@@ -443,23 +587,32 @@ class BreakInterface(ModuleInterface):
             cm.
         _torque_per_pwm: Conversion factor from break pwm levels to breaking torque in N cm.
         _force_per_pwm: Conversion factor from break pwm levels to breaking force in N at the edge of the object.
+        _debug: Stores the debug flag.
     """
 
     def __init__(
         self,
-        minimum_break_strength: float = 43.2047,  # 0.6 in iz
-        maximum_break_strength: float = 1152.1246,  # 16 in oz
+        minimum_break_strength: float = 43.2047,  # 0.6 oz in
+        maximum_break_strength: float = 1152.1246,  # 16 oz in
         object_diameter: float = 15.0333,
+        debug: bool = False,
     ) -> None:
-        error_codes = {np.uint8(51)}  # kOutputLocked
+        error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kEngaged, kDisengaged, kVariable
+
+        self._debug: bool = debug
+
+        # If the interface runs in the debug mode, configures the interface to monitor engaged and disengaged codes.
+        data_codes: set[np.uint8] | None = None
+        if debug:
+            data_codes = {np.uint8(52), np.uint8(53)}
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             module_type=np.uint8(3),
             module_id=np.uint8(1),
             mqtt_communication=False,
-            data_codes=None,  # None of the data codes need additional processing, so set to None.
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
         )
@@ -470,41 +623,55 @@ class BreakInterface(ModuleInterface):
         # Converts minimum and maximum break strength into Newton centimeter
         self._minimum_break_strength: np.float64 = np.round(
             a=minimum_break_strength * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
         self._maximum_break_strength: np.float64 = np.round(
             a=maximum_break_strength * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
 
         # Computes the conversion factor to translate break pwm levels into breaking torque in Newtons cm. Rounds
         # to 12 decimal places for consistency and to ensure repeatability.
-        self._torque_per_pwm = np.round(
+        self._torque_per_pwm: np.float64 = np.round(
             a=(self._maximum_break_strength - self._minimum_break_strength) / 255,
-            decimals=12,
+            decimals=8,
         )
 
-        # Also computes the conversion factor to translate break pwm levels into force in Newtons. TO overcome the
+        # Also computes the conversion factor to translate break pwm levels into force in Newtons. To overcome the
         # breaking torque, the object has to experience that much force applied to its edge.
-        self._force_per_pwm = np.round(
+        self._force_per_pwm: np.float64 = np.round(
             a=self._torque_per_pwm / (object_diameter / 2),
-            decimals=12,
+            decimals=8,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        queue: MPQueue,  # type: ignore
-    ) -> None:
+    def initialize_remote_assets(self) -> None:
+        """Not used."""
+        pass
+
+    def terminate_remote_assets(self) -> None:
         """Not used."""
         return
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """During debug runtime, dumps the data received from the module into the terminal.
+
+        Currently, this method only works with codes 52 (Engaged) and 53 (Disengaged).
+
+        Notes:
+            The method is not used during non-debug runtimes. If the interface runs in debug mode, make sure the
+            console is enabled, as it is used to print received data into terminal.
+        """
+        # The method is ONLY called during debug runtime, so prints all received data via console.
+        if message.event == 52:
+            console.echo(f"Break is engaged")
+        if message.event == 53:
+            console.echo(f"Break is disengaged")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
-    def set_parameters(self, breaking_strength: np.uint8 = np.uint8(255)) -> ModuleParameters:
+    def set_parameters(self, breaking_strength: np.uint8 = np.uint8(255)) -> None:
         """Changes the PC-addressable runtime parameters of the BreakModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the BreakModule instance managed by this
@@ -518,19 +685,16 @@ class BreakInterface(ModuleInterface):
             breaking_strength: The Pulse-Width-Modulation (PWM) value to use when the BreakModule delivers adjustable
                 breaking power. Depending on this value, the breaking power can be adjusted from none (0) to maximum
                 (255). Use get_pwm_from_force() to translate desired breaking torque into the required PWM value.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(breaking_strength,),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def toggle(self, state: bool) -> OneOffModuleCommand:
+    def toggle(self, state: bool) -> None:
         """Triggers the BreakModule to be permanently engaged at maximum strength or permanently disengaged.
 
         This command locks the BreakModule managed by this Interface into the desired state.
@@ -542,20 +706,17 @@ class BreakInterface(ModuleInterface):
 
         Args:
             state: The desired state of the break. True means the break is engaged; False means the break is disengaged.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1 if state else 2),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
-    def set_breaking_power(self) -> OneOffModuleCommand:
+    def set_breaking_power(self) -> None:
         """Triggers the BreakModule to engage with the strength (torque) defined by the breaking_strength runtime
         parameter.
 
@@ -568,18 +729,15 @@ class BreakInterface(ModuleInterface):
             breaking_strength parameter to the break, but it does not determine the breaking power. To adjust the power,
             use the set_parameters() class method to issue updated breaking_strength value. By default, the break power
             is set to 50% (PWM value 128).
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(3),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
     def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
         """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
@@ -620,6 +778,55 @@ class BreakInterface(ModuleInterface):
         """Returns the conversion factor to translate break pwm levels into breaking force in Newtons."""
         return self._force_per_pwm
 
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Notes:
+            This method assumes that the break was used in the absolute force mode. It does not extract variable
+            breaking power data.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the torque applied by the
+            break to the running wheel at each timestamp in Newton centimeters.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 52 (Engaged) and event-codes 53 (Disengaged) as no experiment requires
+        # variable breaking power. If we ever use variable breaking power, this section would need to be expanded to
+        # allow parsing code 54 events.
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although trigger
+        # values are boolean, we translate them into the actual torque applied by the break in Newton centimeters and
+        # store them as float 64 values.
+        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        torques: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
+
+        # Processes Engaged (code 52) triggers. When the motor is engaged, it applies the maximum possible torque to
+        # the break.
+        engaged_data = log_data[np.uint8(52)]
+        n_engaged = len(engaged_data)
+        timestamps[:n_engaged] = [value["timestamp"] for value in engaged_data]  # Extracts timestamps for each value
+        # Since engaged strength means that the torque is delivering maximum force, uses the maximum force in N cm as
+        # the torque value for each 'engaged' state.
+        torques[:n_engaged] = [self._maximum_break_strength for _ in engaged_data]  # Already in rounded float 64
+
+        # Processes Disengaged (code 53) triggers. Contrary to naive expectation, the torque of a disengaged break is
+        # NOT zero. Instead, it is at least the same as the minimum break strength, likely larger due to all mechanical
+        # couplings in the system.
+        disengaged_data = log_data[np.uint8(53)]
+        timestamps[n_engaged:] = [value["timestamp"] for value in disengaged_data]
+        torques[n_engaged:] = [self._minimum_break_strength for _ in disengaged_data]  # Already in rounded float 64
+
+        # Sorts both arrays based on timestamps.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        torques = torques[sort_indices]
+
+        return timestamps, torques
+
 
 class ValveInterface(ModuleInterface):
     """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
@@ -642,6 +849,8 @@ class ValveInterface(ModuleInterface):
             and a float that specifies the delivered fluid volume in microliters. If you do not know this data,
             initialize the class using a placeholder calibration tuple and use calibration() class method to collect
             this data using the ValveModule.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _microliters_per_microsecond: The conversion factor that maps the valve open time, in microseconds, to the
@@ -650,13 +859,23 @@ class ValveInterface(ModuleInterface):
             may have a minimum open time or dispensed fluid volume, which is captured by the intercept. This improves
             the precision of fluid-volume-to-valve-open-time conversions.
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
+        _debug: Stores the debug flag.
     """
 
-    def __init__(self, valve_calibration_data: tuple[tuple[int | float, int | float], ...]) -> None:
-        error_codes = {np.uint8(51)}  # kOutputLocked
+    def __init__(
+        self, valve_calibration_data: tuple[tuple[int | float, int | float], ...], debug: bool = False
+    ) -> None:
+        error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
-        data_codes = {np.uint8(54)}  # The only code that requires additional processing is kCalibrated
-        mqtt_command_topics = {"Gimbl/Reward/"}
+        data_codes: set[np.uint8] = {np.uint8(54)}
+        mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
+
+        self._debug: bool = debug
+
+        # If the interface runs in the debug mode, expands the list of processed data codes to include all codes used
+        # by the valve module.
+        if debug:
+            data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}
 
         super().__init__(
             module_type=np.uint8(5),
@@ -674,43 +893,64 @@ class ValveInterface(ModuleInterface):
         # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
         slope: np.float64
         intercept: np.float64
-        slope, intercept = polyfit(pulse_durations, fluid_volumes, deg=1)  # type: ignore
-        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
-        self._intercept: np.float64 = np.round(a=intercept, decimals=12)
+        slope, intercept = np.polyfit(pulse_durations, fluid_volumes, deg=1)
+        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=8)
+        self._intercept: np.float64 = np.round(a=intercept, decimals=8)
 
         # Stores the reward topic separately to make it accessible via property
-        self._reward_topic = "Gimbl/Reward/"
+        self._reward_topic: str = "Gimbl/Reward/"
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # Since the only data code that requires further processing is code 54 (kCalibrated), this method statically
-        # puts 'calibrated' into the queue as a one-element tuple.
+    def initialize_remote_assets(self) -> None:
+        """Not used."""
+        pass
+
+    def terminate_remote_assets(self) -> None:
+        """Not used."""
+        return
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """Processes incoming data.
+
+        Valve calibration events (code 54) are sent to the terminal via console. If the class was initialized in the
+        debug mode Valve opening (code 52) and closing (code 52) codes are also sent to the terminal.
+
+        Note:
+            Make sure console is enabled before this method is called.
+        """
         if message.event == 54:
-            mp_queue.put(("Calibrated",))
+            console.echo(f"Valve Calibration: Complete")
+        elif message.event == 52:
+            console.echo(f"Valve Opened")
+        elif message.event == 53:
+            console.echo(f"Valve Closed")
 
-    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-        # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
-        # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
-        # desired amount of water reward.
-        if topic == self._reward_topic:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
-            )
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
+        """When called, this method statically sends a reward delivery command to the ValveModule instance.
+
+        Notes:
+            The method does NOT evaluate the input message or topic. It is written to always send reward trigger
+            commands when called. If future Sun lab pipelines need this method to evaluate the input message, the logic
+            of the method needs to be rewritten.
+        """
+
+        # Currently, the only message that can be processed by this method is the reward trigger message from Unity.
+        # Therefore, whenever this method is triggerd, regardless of the input message, sends a reward delivery
+        # command to the ValveModule instance.
+        command = OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(1),
+            noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
+        )
+        self._input_queue.put(command)  # type: ignore
 
     def set_parameters(
         self,
         pulse_duration: np.uint32 = np.uint32(10000),
         calibration_delay: np.uint32 = np.uint32(10000),
         calibration_count: np.uint16 = np.uint16(100),
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the ValveModule instance managed by this
@@ -726,21 +966,16 @@ class ValveInterface(ModuleInterface):
                 phase before starting the next calibration cycle.
             calibration_count: The number of times to pulse the valve during calibration. A number between 10 and 100 is
                 enough for most use cases.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, calibration_delay, calibration_count),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
-    ) -> RepeatedModuleCommand | OneOffModuleCommand:
+    def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False) -> None:
         """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
         repetitively (recurrently).
 
@@ -759,50 +994,44 @@ class ValveInterface(ModuleInterface):
             noblock: Determines whether the command should block the microcontroller while the valve is kept open or
                 not. Blocking ensures precise pulse duration and, by extension, delivered fluid volume. Non-blocking
                 allows the microcontroller to perform other operations while waiting, increasing its throughput.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(noblock),
             )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(noblock),
+                cycle_delay=repetition_delay,
+            )
+        self._input_queue.put(command)  # type: ignore
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(noblock),
-            cycle_delay=repetition_delay,
-        )
-
-    def toggle(self, state: bool) -> OneOffModuleCommand:
+    def toggle(self, state: bool) -> None:
         """Triggers the ValveModule to be permanently open or closed.
 
         This command locks the ValveModule managed by this Interface into the desired state.
 
         Args:
             state: The desired state of the valve. True means the valve is open; False means the valve is closed.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(2 if state else 3),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
-    def calibrate(self) -> OneOffModuleCommand:
+    def calibrate(self) -> None:
         """Triggers ValveModule to repeatedly pulse the valve using the duration defined by the pulse_duration runtime
         parameter.
 
@@ -819,18 +1048,15 @@ class ValveInterface(ModuleInterface):
             This command does not set any of the parameters involved in the calibration process. Make sure the
             parameters are submitted to the ValveModule's hardware memory via the set_parameters() class method before
             running the calibration() command.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(4),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
 
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
@@ -875,6 +1101,68 @@ class ValveInterface(ModuleInterface):
         """Returns the minimum volume that the valve can reliably dispense."""
         return self._intercept
 
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the total (aggregated) volume
+            of water in microliters received by the animal since the beginning of the experiment, at each timestamp.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although valve
+        # trigger values are boolean, we translate them into the total volume of water, in microliters, dispensed to the
+        # animal at each time-point and store than value as a float64.
+        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        volume: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
+
+        # The water is dispensed gradually while the valve stays open. Therefore, the full reward volume is dispensed
+        # when the valve goes from open to closed. Based on calibration data, we have a conversion factor to translate
+        # the time the valve remains open into the fluid volume dispensed to the animal, which we use to convert each
+        # Open/Close cycle duration into the dispensed volume.
+
+        # Extracts Open (Code 52) trigger codes. Statically assigns the value '1' to denote Open signals.
+        open_data = log_data[np.uint8(52)]
+        n_on = len(open_data)
+        timestamps[:n_on] = [value["timestamp"] for value in open_data]
+        volume[:n_on] = np.uint8(1)  # All code 52 signals are Open (High)
+
+        # Extracts Closed (Code 53) trigger codes.
+        off_data = log_data[np.uint8(53)]
+        timestamps[n_on:] = [value["timestamp"] for value in off_data]
+        volume[n_on:] = np.uint8(0)  # All code 53 signals are Closed (Low)
+
+        # Sorts both arrays based on timestamps.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        volume = volume[sort_indices]
+
+        # Find falling edges (valve closing events)
+        falling_edges = np.where((volume[:-1] == 1) & (volume[1:] == 0))[0] + 1
+
+        # Samples the timestamp array to only include timestamps for the falling edges. That is, the timestamps for
+        # when the valve has fully delivered the requested volume of water.
+        reward_timestamps = timestamps[falling_edges]
+
+        # Inlines multiple processing steps. For each Open/Close cycle, determines the time difference, in microseconds
+        # between Valve Opening and closing. Then, converts the time the Valve stayed open into the dispensed water
+        # volume, in microliters.
+        volumes = np.round(
+            np.cumsum(
+                (timestamps[falling_edges] - timestamps[falling_edges - 1]).astype(np.float64)
+                * self._microliters_per_microsecond
+            ),
+            decimals=8,
+        )
+
+        # Returns processed data to caller.
+        return reward_timestamps, volumes
+
 
 class LickInterface(ModuleInterface):
     """Interfaces with LickModule instances running on Ataraxis MicroControllers.
@@ -882,12 +1170,13 @@ class LickInterface(ModuleInterface):
     LickModule allows interfacing with conductive lick sensors used in the Sun Lab to detect mouse interaction with
     water dispensing tubes. The sensor works by sending a small direct current through the mouse, which is picked up by
     the sensor connected to the metal lick tube. When the mouse completes the circuit by making the contact with the
-    tube, the sensor determines whether the resultant voltage matches the threshold expected for a torque contact and,
+    tube, the sensor determines whether the resultant voltage matches the threshold expected for a tongue contact and,
     if so, notifies the PC about the contact.
 
     Notes:
-        The sensor is calibrated to work with very small currents the animal does not detect, so it does not interfere
-        with behavior during experiments. The sensor will, however, interfere with electrophysiological recordings.
+        The sensor is calibrated to work with very small currents that are not detectable by the animal, so it does not
+        interfere with behavior during experiments. The sensor will, however, interfere with electrophysiological
+        recordings.
 
         The resolution of the sensor is high enough to distinguish licks from paw touches. By default, the
         microcontroller is configured in a way that will likely send both licks and non-lick interactions to the PC.
@@ -895,28 +1184,29 @@ class LickInterface(ModuleInterface):
 
         The interface automatically sends significant lick triggers to Unity via the "LickPort/" MQTT topic. This only
         includes the 'onset' triggers, the interface does not report voltage level reductions (associated with the end
-        of the mouse-to-tube contact).
-
-        The default state of the sensor after setup or reset is 0. Until the sensor sends a state message communicating
-        a non-zero detected value, it can be safely assumed that the sensor detects the voltage of 0.
+        of the tongue-to-tube contact).
 
     Args:
-        lick_threshold: The threshold voltage, in raw analog units recorded by a 12-bit ADC, for detecting the torque
+        lick_threshold: The threshold voltage, in raw analog units recorded by a 12-bit ADC, for detecting the tongue
             contact. Note, 12-bit ADC only supports values between 0 and 4095, so setting the threshold above 4095 will
             result in no licks being reported to Unity.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _sensor_topic: Stores the output MQTT topic.
-        _lick_threshold: The threshold voltage for detecting a torque contact.
+        _lick_threshold: The threshold voltage for detecting a tongue contact.
         _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
+        _communication: Stores the communication class used to send data to Unity over MQTT.
+        _lick_tracker: Stores the SharedMemoryArray object used to communicate the current lick status to other
+            processes.
+        _debug: Stores the debug flag.
     """
 
-    def __init__(
-        self,
-        lick_threshold: int = 200,
-    ) -> None:
-        data_codes = {np.uint8(51)}  # kChanged
+    def __init__(self, lick_threshold: int = 200, debug: bool = False) -> None:
+        data_codes: set[np.uint8] = {np.uint8(51)}  # kChanged
+        self._debug: bool = debug
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
@@ -932,19 +1222,73 @@ class LickInterface(ModuleInterface):
         self._lick_threshold: np.uint16 = np.uint16(lick_threshold)
 
         # Statically computes the voltage resolution of each analog step, assuming a 3.3V ADC with 12-bit resolution.
-        self._volt_per_adc_unit = np.round(a=np.float64(3.3 / (2**12)), decimals=12)
+        self._volt_per_adc_unit: np.float64 = np.round(a=np.float64(3.3 / (2**12)), decimals=8)
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # Currently, the only data_code that requires additional processing is code 51 (sensor readout change code).
-        if message.event == 51 and message.data_object >= self._lick_threshold:  # Threshold is inclusive
+        # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
+        # issues
+        self._communication: MQTTCommunication | None = None
+
+        # Precreates a shared memory array used to track and share the current lick status (detected / not detected)
+        # with other processes. this tracking method is faster than using multiprocessing queue, so it is preferred for
+        # time-critical application. Queue is easier to use though, so we use it for non-time-critical applications.
+        self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"1_lick_tracker", prototype=np.empty(shape=1, dtype=np.uint8), exist_ok=True
+        )
+
+    def __del__(self) -> None:
+        """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
+        self._lick_tracker.disconnect()
+        self._lick_tracker.destroy()
+
+    def initialize_remote_assets(self) -> None:
+        """Initializes the MQTTCommunication class, connects to the MQTT broker and connects to the SharedMemoryArray
+        used to communicate lick status to other processes.
+        """
+        # MQTT Client is used to send lick data to Unity over MQTT
+        self._communication = MQTTCommunication()
+        self._communication.connect()
+        self._lick_tracker.connect()
+
+    def terminate_remote_assets(self) -> None:
+        """Destroys the MQTTCommunication class and disconnects from the lick-tracker SharedMemoryArray."""
+        self._communication.disconnect()
+        self._lick_tracker.disconnect()  # Does not destroy the array to support start / stop cycling.
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """Processes incoming data.
+
+        Lick data (code 51) comes in as a change in the voltage level detected by the sensor pin. This value is then
+        evaluated against the _lick_threshold and if the value exceeds the threshold, a binary lick trigger is sent to
+        Unity via MQTT. Additionally, the method sends both rising and falling lick detection triggers to the
+        central process via the local SharedMemoryArray instance so that the data can be used for closed-loop
+        lick-valve control.
+
+        Notes:
+            If the class is initialized with debug mode, this method sends all received lick sensor voltages to the
+            terminal via console. Make sure console is enabled before calling this method.
+        """
+
+        # Currently, only code 51 messages will be passed to this method. From each, extracts the detected voltage
+        # level.
+        detected_voltage: np.uint16 = message.data_object  # type: ignore
+
+        # If the class is initialized in debug mode, prints each received voltage level to the terminal.
+        if self._debug:
+            console.echo(f"Lick voltage: {detected_voltage}")
+
+        # If the voltage level exceeds the lick threshold, reports it to Unity via MQTT. Threshold is inclusive.
+        if detected_voltage >= self._lick_threshold:
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
             # which acts as a binary lick trigger.
-            mqtt_communication.send_data(topic=self._sensor_topic, payload=None)
+            self._communication.send_data(topic=self._sensor_topic, payload=None)
+
+            # Each time a lick is detected, the lick tracker is set to 1.
+            # noinspection PyTypeChecker
+            self._lick_tracker.write_data(index=0, data=1)
+        else:
+            # Each time the voltage value is below the threshold, sets the lick tracker to 0.
+            # noinspection PyTypeChecker
+            self._lick_tracker.write_data(index=0, data=0)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -956,14 +1300,14 @@ class LickInterface(ModuleInterface):
         upper_threshold: np.uint16 = np.uint16(4095),
         delta_threshold: np.uint16 = np.uint16(50),
         averaging_pool_size: np.uint8 = np.uint8(0),
-    ) -> ModuleParameters:
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the LickModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the LickModule instance managed by this
         Interface class.
 
         Notes:
-            All threshold parameters are inclusive! if you need help determining appropriate threshold levels for
+            All threshold parameters are inclusive! If you need help determining appropriate threshold levels for
             specific targeted voltages, use get_adc_units_from_volts() method of the interface instance.
 
         Args:
@@ -978,21 +1322,18 @@ class LickInterface(ModuleInterface):
                 the change to be reported to the PC. Note, if the change is 0, the signal will not be reported to the
                 PC, regardless of this parameter value.
             averaging_pool_size: The number of analog pin readouts to average together when checking pin state. This
-                is used to smooth the recorded values to avoid communication line noise. It is highly advised to
-                have this enabled and set to at least 10 readouts.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
+                is used to smooth the recorded values to avoid communication line noise. Teensy microcontrollers have
+                built-in analog pin averaging, so this parameter can be safely set to 0 in most use cases.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(upper_threshold, lower_threshold, delta_threshold, averaging_pool_size),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the voltage signal detected by the analog pin monitored by the LickModule.
 
         If there has been a significant change in the detected voltage level and the level is within the reporting
@@ -1007,13 +1348,9 @@ class LickInterface(ModuleInterface):
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
             command will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
@@ -1021,14 +1358,16 @@ class LickInterface(ModuleInterface):
                 noblock=np.bool(False),
             )
 
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),
+                cycle_delay=repetition_delay,
+            )
+        self._input_queue.put(command)  # type: ignore
 
     def get_adc_units_from_volts(self, voltage: float) -> np.uint16:
         """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -1059,6 +1398,61 @@ class LickInterface(ModuleInterface):
         """
         return self._volt_per_adc_unit
 
+    @property
+    def lick_status(self) -> bool:
+        """Returns the current lick status of the lick sensor.
+
+        If the lick sensor is currently detecting a lick, returns True. Otherwise, returns False.
+        """
+        if self._lick_tracker.read_data(index=0) == 1:
+            return True
+        else:
+            return False
+
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Notes:
+            The extraction automatically filters out non-lick events by applying the class lick-threshold value. The
+            time-difference between consecutive ON and OFF event edges corresponds to the time, in microseconds, the
+            tongue maintained contact with the lick tube. This may include both the time the tongue physically
+            touched the tube and the time there was a conductive fluid bridge between the tongue and the lick tube.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores binary levels denoting the
+            lick detection as 1 (Detected, tongue makes contact with the lick tube) and 0 (Not detected, tongue is not
+            making contact with the tube).
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # LickModule only sends messages with code 51 (Voltage level changed). Therefore, this extraction pipeline has
+        # to apply the threshold filter, similar to how the real-time processing method.
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Lick sensor
+        # voltage levels come in as uint16, but we later replace them with binary uint8 1 and 0 values.
+        voltage_data = log_data[np.uint8(51)]
+        total_length = len(voltage_data)
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        voltages: NDArray[np.uint16] = np.empty(total_length, dtype=np.uint16)
+
+        # Extract timestamps and voltage levels
+        timestamps[:] = [value["timestamp"] for value in voltage_data]
+        voltages[:] = [value["data"] for value in voltage_data]
+
+        # Converts voltage levels to binary lick states based on the class threshold. Note, the threshold is inclusive.
+        licks = np.where(voltages >= self._lick_threshold, np.uint8(1), np.uint8(0))
+
+        # Sorts all arrays by timestamp. This is technically not needed as the extracted values are already sorted by
+        # timestamp, but this is still done for additional safety.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        licks = licks[sort_indices]
+
+        # Returns extracted data to caller.
+        return timestamps, licks
+
 
 class TorqueInterface(ModuleInterface):
     """Interfaces with TorqueModule instances running on Ataraxis MicroControllers.
@@ -1076,10 +1470,6 @@ class TorqueInterface(ModuleInterface):
         This interface receives torque as a positive uint16_t value from 0 to at most 2046 raw analog units of 3.3v
         12-bit ADC converter. The direction of the torque is reported by the event-code of the received message.
 
-        The default state of the sensor after setup or reset is 0. Until the sensor sends a state message communicating
-        a non-zero detected value, it can be safely assumed that the sensor detects the torque of 0. The torque of 0
-        essentially has no direction, as it means there is no CW or CCW torque.
-
     Args:
         baseline_voltage: The voltage level, in raw analog units measured by 3.3v ADC at 12-bit resolution after the
             AD620 amplifier, that corresponds to no (0) torque readout. Usually, for a 3.3v ADC, this would be around
@@ -1091,6 +1481,8 @@ class TorqueInterface(ModuleInterface):
         sensor_capacity: The maximum torque detectable by the sensor, in grams centimeter (g cm).
         object_diameter: The diameter of the rotating object connected to the torque sensor, in centimeters. This is
             used to calculate the force at the edge of the object associated with the measured torque at the sensor.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
         _newton_per_gram_centimeter: Stores the hardcoded conversion factor from gram centimeter to Newton centimeter.
@@ -1098,6 +1490,7 @@ class TorqueInterface(ModuleInterface):
         _torque_per_adc_unit: The conversion factor to translate raw analog 3.3v 12-bit ADC values to torque in Newtons
             centimeter.
         _force_per_adc_unit: The conversion factor to translate raw analog 3.3v 12-bit ADC values to force in Newtons.
+        _debug: Stores the debug flag.
     """
 
     def __init__(
@@ -1106,15 +1499,22 @@ class TorqueInterface(ModuleInterface):
         maximum_voltage: int = 4095,
         sensor_capacity: float = 720.0779,  # 10 oz in
         object_diameter: float = 15.0333,
+        debug: bool = False,
     ) -> None:
+        self._debug: bool = debug
         # data_codes = {np.uint8(51), np.uint8(52)}  # kCCWTorque, kCWTorque
+
+        # If the interface runs in the debug mode, configures it to monitor and report detected torque values
+        data_codes: set[np.uint8] | None = None
+        if debug:
+            data_codes = {np.uint8(51), np.uint8(52)}
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             module_type=np.uint8(6),
             module_id=np.uint8(1),
             mqtt_communication=False,
-            data_codes=None,
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=None,
         )
@@ -1125,32 +1525,55 @@ class TorqueInterface(ModuleInterface):
         # Determines the capacity of the torque sensor in Newtons centimeter.
         self._capacity_in_newtons_cm: np.float64 = np.round(
             a=np.float64(sensor_capacity) * self._newton_per_gram_centimeter,
-            decimals=12,
+            decimals=8,
         )
 
         # Computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
         # torque in Newton centimeter. Rounds to 12 decimal places for consistency and to ensure
         # repeatability.
-        self._torque_per_adc_unit = np.round(
+        self._torque_per_adc_unit: np.float64 = np.round(
             a=(self._capacity_in_newtons_cm / (maximum_voltage - baseline_voltage)),
-            decimals=12,
+            decimals=8,
         )
 
         # Also computes the conversion factor to translate the recorded raw analog readouts of the 3.3V 12-bit ADC to
         # force in Newtons.
-        self._force_per_adc_unit = np.round(
+        self._force_per_adc_unit: np.float64 = np.round(
             a=self._torque_per_adc_unit / (object_diameter / 2),
-            decimals=12,
+            decimals=8,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
+    def initialize_remote_assets(self) -> None:
+        """Not used."""
+        pass
+
+    def terminate_remote_assets(self) -> None:
         """Not used."""
         return
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """If the class is initialized in debug mode, prints the received torque data to the terminal via console.
+
+        In debug mode, this method parses incoming code 51 (CW torque) and code 52 (CCW torque) data and dumps it into
+        terminal via console. If the class is not initialized in debug mode, this method does nothing.
+
+        Notes:
+            Make sure console is enabled before calling this method.
+        """
+        # The torque direction is encoded via the message event code. CW torque (code 52) is interpreted as negative
+        # and CCW (code 51) as positive.
+        sign = 1 if message.event == np.uint8(51) else -1
+
+        # Translates the absolute torque into the CW / CCW vector and converts from raw ADC units to Newton centimeters
+        # using the precomputed conversion factor. Uses float64 and rounds to 8 decimal places for consistency and
+        # precision
+        signed_torque = np.round(
+            a=np.float64(message.data_object) * self._torque_per_adc_unit * sign,
+            decimals=8,
+        )
+
+        # Since this method is only called in the debug mode, always prints the data to console
+        console.echo(message=f"Torque: {signed_torque} N cm.")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -1163,8 +1586,8 @@ class TorqueInterface(ModuleInterface):
         lower_threshold: np.uint16 = np.uint16(200),
         upper_threshold: np.uint16 = np.uint16(2046),
         delta_threshold: np.uint16 = np.uint16(100),
-        averaging_pool_size: np.uint8 = np.uint8(50),
-    ) -> ModuleParameters:
+        averaging_pool_size: np.uint8 = np.uint8(0),
+    ) -> None:
         """Changes the PC-addressable runtime parameters of the TorqueModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the TorqueModule instance managed by this
@@ -1187,14 +1610,10 @@ class TorqueInterface(ModuleInterface):
                 the change to be reported to the PC. Note, if the change is 0, the signal will not be reported to the
                 PC, regardless of this parameter value.
             averaging_pool_size: The number of analog pin readouts to average together when checking pin state. This
-                is used to smooth the recorded values to avoid communication line noise. It is highly advised to
-                have this enabled and set to at least 10 readouts.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
+                is used to smooth the recorded values to avoid communication line noise. Teensy microcontrollers have a
+                built-in averaging function when reading analog values, so it is safe to set this value to 0.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
@@ -1207,8 +1626,9 @@ class TorqueInterface(ModuleInterface):
                 averaging_pool_size,
             ),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the torque signal detected by the analog pin monitored by the TorqueModule.
 
         If there has been a significant change in the detected signal (voltage) level and the level is within the
@@ -1227,28 +1647,25 @@ class TorqueInterface(ModuleInterface):
         Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
             command will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
-            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
-            return OneOffModuleCommand(
+            command = OneOffModuleCommand(
                 module_type=self._module_type,
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
                 noblock=np.bool(False),
             )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),
+                cycle_delay=repetition_delay,
+            )
+        self._input_queue.put(command)  # type: ignore
 
     def get_adc_units_from_torque(self, target_torque: float) -> np.uint16:
         """Converts the input torque to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -1281,6 +1698,59 @@ class TorqueInterface(ModuleInterface):
         """
         return self._force_per_adc_unit
 
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Notes:
+            Despite this method trying to translate the detected torque into Newton centimeters, it may not be accurate.
+            Partially, the accuracy of the translation depends on the calibration of the interface class, which is very
+            hard with our current setup. The accuracy also depends on the used hardware, and currently our hardware is
+            not very well suited for working with millivolt differential voltage levels used by the sensor to report
+            torque. Therefore, currently, it is best to treat the torque data extracted from this module as a very rough
+            estimate of how active the animal is at a given point in time.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the torque applied by the
+            animal to the running wheel at each timestamp in Newton centimeters.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 51 (CW Torque) and event-codes 52 (CCW Torque). CCW torque is interpreted
+        # as torque in the positive direction, and CW torque is interpreted as torque in the negative direction.
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although torque
+        # values are uint16, we translate them into the actual torque applied by the animal in Newton centimeters and
+        # store them as float 64 values.
+        total_length = len(log_data[np.uint8(51)]) + len(log_data[np.uint8(52)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        torques: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
+
+        # Processes CCW torques (Code 51). CCW torque is interpreted as positive torque
+        ccw_data = log_data[np.uint8(51)]
+        n_ccw = len(ccw_data)
+        timestamps[:n_ccw] = [value["timestamp"] for value in ccw_data]  # Extracts timestamps for each value
+        # The values are initially using uint16 type. This converts them to float64 and translates from raw ADC units
+        # to Newton centimeters.
+        torques[:n_ccw] = [
+            np.round(np.float64(value["data"]) * self._torque_per_adc_unit, decimals=8) for value in ccw_data
+        ]
+
+        # Processes CW torques (Code 52). CW torque is interpreted as negative torque
+        cw_data = log_data[np.uint8(52)]
+        timestamps[n_ccw:] = [value["timestamp"] for value in cw_data]  # CW data just fills remaining space after CCW.
+        torques[n_ccw:] = [
+            np.round(-np.float64(value["data"]) * self._torque_per_adc_unit, decimals=8) for value in ccw_data
+        ]
+
+        # Sorts both arrays based on timestamps.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        torques = torques[sort_indices]
+
+        return timestamps, torques
+
 
 class ScreenInterface(ModuleInterface):
     """Interfaces with ScreenModule instances running on Ataraxis MicroControllers.
@@ -1290,44 +1760,76 @@ class ScreenInterface(ModuleInterface):
     with their setup on the host PC.
 
     Notes:
-        Since the current VR setup uses 3 screens, the current implementation of ScreenModule is designed to interface
+        Since the current VR setup uses 3 screens, this implementation of ScreenModule is designed to interface
         with all 3 screens at the same time. In the future, the module may be refactored to allow addressing individual
         screens.
 
         The physical wiring of the module also allows manual screen manipulation via the buttons on the control panel
         if the ScreenModule is not actively delivering a toggle pulse. However, changing the state of the screen
         manually is strongly discouraged, as it interferes with tracking the state of the screen via software.
+
+    Args:
+        initially_on: A boolean flag that communicates the initial state of the screen. This is used during log parsing
+            to deduce the state of the screen after each toggle pulse and assumes the screens are only manipulated via
+            this interface.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
+            the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
+
+    Attributes:
+        _initially_on: Stores the initial state of the screens.
+        _debug: Stores the debug flag.
     """
 
-    def __init__(self) -> None:
-        error_codes = {np.uint8(51)}  # kOutputLocked
+    def __init__(self, initially_on: bool, debug: bool = False) -> None:
+        error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
+
+        self._debug: bool = debug
+        self._initially_on: bool = initially_on
 
         # kOn, kOff
         # data_codes = {np.uint8(52), np.uint8(53)}
+
+        # If the interface runs in the debug mode, configures the interface to monitor relay On / Off codes.
+        data_codes: set[np.uint8] | None = None
+        if debug:
+            data_codes = {np.uint8(52), np.uint8(53)}
 
         super().__init__(
             module_type=np.uint8(7),
             module_id=np.uint8(1),
             mqtt_communication=False,
-            data_codes=None,  # None of the data codes needs additional processing, so statically set to None
+            data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
-    def process_received_data(
-        self,
-        message: ModuleData | ModuleState,
-        mqtt_communication: MQTTCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
+    def initialize_remote_assets(self) -> None:
         """Not used."""
-        return
+        pass
+
+    def terminate_remote_assets(self) -> None:
+        """Not used."""
+        pass
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """If the class runs in the debug mode, dumps the received data into the terminal via console class.
+
+        This method is only used in the debug mode to print Screen toggle signal HIGH (On) and LOW (Off) phases.
+
+        Notes:
+            This method uses console to print the data to the terminal. Make sure it is enabled before calling this
+            method.
+        """
+        if message.event == 52:
+            console.echo(f"Screen toggle: HIGH")
+        if message.event == 53:
+            console.echo(f"Screen toggle: LOW")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
         return
 
-    def set_parameters(self, pulse_duration: np.uint32 = np.uint32(1000000)) -> ModuleParameters:
+    def set_parameters(self, pulse_duration: np.uint32 = np.uint32(1000000)) -> None:
         """Changes the PC-addressable runtime parameters of the ScreenModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the ScreenModule instance managed by
@@ -1337,38 +1839,91 @@ class ScreenInterface(ModuleInterface):
             pulse_duration: The duration, in microseconds, of each emitted screen toggle pulse HIGH phase. This is
                 equivalent to the duration of the control panel POWER button press. The main criterion for this
                 parameter is to be long enough for the converter board to register the press.
-
-        Returns:
-            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
-            the MicroControllerInterface class.
         """
-        return ModuleParameters(
+        message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             parameter_data=(pulse_duration,),
         )
+        self._input_queue.put(message)  # type: ignore
 
-    def toggle(self) -> OneOffModuleCommand:
+    def toggle(self) -> None:
         """Triggers the ScreenModule to briefly simulate pressing the POWER button of the scree control board.
 
         This command is used to turn the connected display on or off. The new state of the display depends on the
-        current state of the display when the command is issued. Since the displays can also be controller manually
+        current state of the display when the command is issued. Since the displays can also be controlled manually
         (via the physical control board buttons), the state of the display can also be changed outside this interface,
         although it is highly advised to NOT change screen states manually.
 
         Notes:
-            It is highly recommended to use this command to manipulate display sates, as it ensures that display state
+            It is highly recommended to use this command to manipulate display states, as it ensures that display state
             changes are logged for further data analysis.
-
-        Returns:
-            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
-            MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
+        command = OneOffModuleCommand(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
+
+    def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
+        """Extracts and prepares the data acquired by the module during runtime for further analysis.
+
+        Notes:
+            This extraction method works similar to the TTLModule method. This is intentional, as ScreenInterface is
+            essentially a group of 3 TTLModules.
+
+        Returns:
+            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
+            elapsed since UTC epoch onset. The second element is a numpy array that stores the state of the screens
+            (1 for ON, 0 for OFF) at each timestamp.
+        """
+        # Reads the data logged during runtime as a dictionary of dictionaries.
+        log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
+
+        # Here, we only look for event-codes 52 (pulse ON) and event-codes 53 (pulse OFF).
+
+        # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype and the trigger
+        # values are boolean. We use uint8 as it has the same memory footprint as a boolean and allow us to use integer
+        # types across the entire dataset.
+        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
+        triggers: NDArray[np.uint8] = np.empty(total_length, dtype=np.uint8)
+
+        # Extracts ON (Code 52) trigger codes. Statically assigns the value '1' to denote ON signals.
+        on_data = log_data[np.uint8(52)]
+        n_on = len(on_data)
+        timestamps[:n_on] = [value["timestamp"] for value in on_data]
+        triggers[:n_on] = np.uint8(1)  # All code 52 signals are ON (High)
+
+        # Extracts OFF (Code 53) trigger codes.
+        off_data = log_data[np.uint8(53)]
+        timestamps[n_on:] = [value["timestamp"] for value in off_data]
+        triggers[n_on:] = np.uint8(0)  # All code 53 signals are OFF (Low)
+
+        # Sorts both arrays based on the timestamps, so that the data is in the chronological order.
+        sort_indices = np.argsort(timestamps)
+        timestamps = timestamps[sort_indices]
+        triggers = triggers[sort_indices]
+
+        # Finds rising edges (where signal goes from 0 to 1). Then uses the indices for such events to extract the
+        # timestamps associated with each rising edge, before returning them to the caller.
+        rising_edges = np.where((triggers[:-1] == 0) & (triggers[1:] == 1))[0] + 1
+        screen_timestamps = timestamps[rising_edges]
+
+        # Adds the initial state of the screen using the first recorded timestamp. The module is configured to send the
+        # initial state of the relay (Off) during Setup, so the first recorded timestamp will always be 0 and correspond
+        # to the initial state of the screen.
+        screen_timestamps = np.concatenate(([timestamps[0]], screen_timestamps))
+
+        # Builds an array of screen states. Starts with the initial screen state and then flips the state for each
+        # consecutive timestamp matching a rising edge of the toggle pulse.
+        screen_states = np.zeros(len(screen_timestamps), dtype=np.uint8)
+        screen_states[0] = self._initially_on
+        for i in range(1, len(screen_states)):
+            screen_states[i] = 1 - screen_states[i - 1]  # Flips between 0 and 1
+
+        return screen_timestamps, screen_states

@@ -2,21 +2,34 @@
 preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
 """
 
+import json
+from typing import Any
+import difflib
 from pathlib import Path
+from datetime import datetime
 from functools import partial
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import numpy as np
 import tifffile
-import json
-from ataraxis_base_utilities import console, ensure_directory_exists
+from numpy.typing import NDArray
 import matplotlib.pyplot as plt
-from suite2p.io.binary import BinaryFile
+from suite2p.io.binary import BinaryFile  # type: ignore
+from ataraxis_base_utilities import console, ensure_directory_exists
 
-import re
-import os
-import difflib
+
+def _get_stack_number(tiff_path: Path) -> int | None:
+    """A helper function that determines the number of mesoscope-acquired tiff stacks using its file name.
+
+    This is used to sort all TIFF stacks in a directory before recompressing them with LERC scheme. Like
+    other helpers, this helper is also used to identify and remove non-mesoscope TIFFs from the dataset.
+    """
+    try:
+        return int(tiff_path.stem.split("__")[-1].split("_")[-1])
+    except (ValueError, IndexError):
+        return None  # This is used to filter non-ScanImage TIFFS
 
 
 def _check_stack_size(file: Path) -> int:
@@ -36,497 +49,630 @@ def _check_stack_size(file: Path) -> int:
         If the file is a stack, returns the number of frames (pages) in the stack. Otherwise, returns 0 to indicate that
         the file is not a stack.
     """
-    with tifffile.TiffFile(str(file)) as tif:
+    with tifffile.TiffFile(file) as tif:
         # Gets number of pages (frames) from tiff header
         n_frames = len(tif.pages)
 
         # Considers all files with more than one page and a 2-dimensional (monochrome) image as a stack. For these
-        # stacks, returns the discovered stack size (number of frames).
-        if n_frames > 1 and len(tif.pages[0].shape) == 2:
+        # stacks, returns the discovered stack size (number of frames). Also ensures that the files have the ScanImage
+        # metadata. This latter step will exclude already processed BigTiff files.
+        if n_frames > 1 and len(tif.pages[0].shape) == 2 and tif.scanimage_metadata is not None:
             return n_frames
         # Otherwise, returns 0 to indicate that the file is not a stack.
         return 0
 
 
-def _process_stack(tiff_path: Path, output_dir: Path, stack_size: int, remove_sources: bool) -> None:
-    """Reads a TIFF stack and saves it as a LERC-compressed stacked TIFF file.
+def _process_stack(
+    tiff_path: Path, first_frame_number: int, output_dir: Path, remove_sources: bool, verify_integrity: bool
+) -> dict[str, Any]:
+    """Reads a TIFF stack, extracts its frame-variant ScanImage data, and saves it as a LERC-compressed stacked TIFF
+    file.
 
-    This is a worker function called by the _extract_frames_from_stack() as it parallelizes stack processing for each
-    input directory. Specifically, this function is called for each stack inside each processed TIFF directory. It
-    re-compresses the stack using LERC-compression and verifies that each compressed frame matches the original to
-    ensure data integrity. This function maintains the input stack dimension and layout.
+    This is a worker function called by the process_mesoscope_directory in-parallel for each stack inside each
+    processed directory. It re-compresses the input TIFF stack using LERC-compression and extracts the frame-variant
+    ScanImage metadata for each frame inside the stack. Optionally, the function can be configured to verify data
+    integrity after compression and to remove original TIFF stacks after processing.
+
+    Notes:
+        This function can reserve up to double the processed stack size of RAM bytes to hold the data in memory. If the
+        host-computer does not have enough RAM, reduce the number of concurrent processes or disable verification.
 
     Raises:
         RuntimeError: If any extracted frame does not match the original frame stored inside the TIFF stack.
+        NotImplementedError: If extracted frame-variant metadata contains unexpected keys or expected keys for which
+            we do not have a custom extraction implementation.
 
     Args:
         tiff_path: The path to the TIFF stack to process.
-        output_dir: The path to the directory for the processed frames.
-        stack_size: The size of each TIFF stack.
+        first_frame_number: The position (number) of the first frame stored in the stack, relative to the overall
+            sequence of frames acquired during experiment. This is used to configure the output file name to include
+            the range of frames stored in the stack.
+        output_dir: The path to the directory where to save the processed stacks.
         remove_sources: Determines whether to remove original TIFF stacks after processing.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
+            process.
     """
-    # Loads the stack into RAM
-    original_stack = tifffile.imread(str(tiff_path))
+    # Generates the file handle for the current stack
+    with tifffile.TiffFile(tiff_path) as stack:
+        # Determines the size of the stack
+        stack_size = len(stack.pages)
 
-    # Uses the base stack name to determine the number and ID of frames inside the stack. Specifically, uses the stack
-    # number and the stack size parameters to determine the exact position of each extracted frame in the overall
-    # sequence saved over multiple stacks. This is used to determine the range of frames stored in this particular
-    # stack
-    base_name = tiff_path.stem
-    session_sequence: str = base_name.split("__")[-1]
-    _, stack_number = session_sequence.split("_")
+        # Initializes arrays for storing metadata
+        frame_nums = np.zeros(stack_size, dtype=np.int32)
+        acq_nums = np.zeros(stack_size, dtype=np.int32)
+        frame_num_acq = np.zeros(stack_size, dtype=np.int32)
+        frame_timestamps = np.zeros(stack_size, dtype=np.float64)
+        acq_trigger_timestamps = np.zeros(stack_size, dtype=np.float64)
+        next_file_timestamps = np.zeros(stack_size, dtype=np.float64)
+        end_of_acq = np.zeros(stack_size, dtype=np.int32)
+        end_of_acq_mode = np.zeros(stack_size, dtype=np.int32)
+        dc_over_voltage = np.zeros(stack_size, dtype=np.int32)
+        epoch_timestamps = np.zeros(stack_size, dtype=np.uint64)
 
-    # Computes the starting and ending frame number
-    actual_stack_size = len(original_stack)
-    start_frame = (int(stack_number) - 1) * stack_size + 1
-    end_frame = start_frame + actual_stack_size - 1
+        # Loops over each page in the stack and extracts the metadata associated with each frame
+        for i, page in enumerate(stack.pages):
+            metadata = page.tags["ImageDescription"].value  # type: ignore
 
-    # Creates the output path for the compressed stack. Uses 12-digit padding for frame numbering
-    output_path = output_dir.joinpath(f"{str(start_frame).zfill(12)}_{str(end_frame).zfill(12)}.tiff")
+            # The metadata is returned as a 'newline'-delimited string of key=value pairs. This preprocessing header
+            # splits the string into separate key=value pairs. Then, each pair is further separated and processed as
+            # necessary
+            for line in metadata.splitlines():
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
 
-    tifffile.imwrite(
-        output_path,
-        original_stack,
-        compression="lerc",
-        compressionargs={"level": 0.0},  # Lossless compression
-        predictor=True,
-        resolutionunit="NONE",  # Remove unnecessary metadata
-    )
+                # This section is geared to the output produced by the Sun Lab mesoscope. Any changes to the output
+                # metadata will trigger an error and will require manual code adjustment to support parsing new
+                # metadata tags. Each cycle updates the specific index of each output array with parsed data.
+                if key == "frameNumbers":
+                    frame_nums[i] = int(value)
+                elif key == "acquisitionNumbers":
+                    acq_nums[i] = int(value)
+                elif key == "frameNumberAcquisition":
+                    frame_num_acq[i] = int(value)
+                elif key == "frameTimestamps_sec":
+                    frame_timestamps[i] = float(value)
+                elif key == "acqTriggerTimestamps_sec":
+                    acq_trigger_timestamps[i] = float(value)
+                elif key == "nextFileMarkerTimestamps_sec":
+                    next_file_timestamps[i] = float(value)
+                elif key == "endOfAcquisition":
+                    end_of_acq[i] = int(value)
+                elif key == "endOfAcquisitionMode":
+                    end_of_acq_mode[i] = int(value)
+                elif key == "dcOverVoltage":
+                    dc_over_voltage[i] = int(value)
+                elif key == "epoch":
+                    # Parse epoch [year month day hour minute second.microsecond]
+                    epoch_vals = [float(x) for x in value[1:-1].split()]
+                    timestamp = int(
+                        datetime(
+                            int(epoch_vals[0]),
+                            int(epoch_vals[1]),
+                            int(epoch_vals[2]),
+                            int(epoch_vals[3]),
+                            int(epoch_vals[4]),
+                            int(epoch_vals[5]),
+                            int((epoch_vals[5] % 1) * 1e6),
+                        ).timestamp()
+                        * 1e6
+                    )  # Convert to microseconds
+                    epoch_timestamps[i] = timestamp
+                elif key in ["auxTrigger0", "auxTrigger1", "auxTrigger2", "auxTrigger3", "I2CData"]:
+                    if len(value) > 2:
+                        message = (
+                            f"Non-empty unsupported field '{key}' found in the frame-variant ScanImage metadata "
+                            f"associated with the tiff file {tiff_path}. Update the _load_stack_data() with the logic "
+                            f"for parsing the data associated with this field."
+                        )
+                        console.error(message=message, error=NotImplementedError)
+                else:
+                    message = (
+                        f"Unknown field '{key}' found in the frame-variant ScanImage metadata associated with the tiff "
+                        f"file {tiff_path}. Update the _load_stack_data() with the logic for parsing the data "
+                        f"associated with this field."
+                    )
+                    console.error(message=message, error=NotImplementedError)
 
-    # Verifies the integrity of the compressed stack
-    compressed_stack = tifffile.memmap(output_path)
-    if not np.array_equal(compressed_stack, original_stack):
-        message = f"Compressed stack does not match the original stack in {tiff_path}."
-        console.error(message=message, error=RuntimeError)
+        # Packages arrays into a dictionary with the same key names as the original metadata fields
+        metadata_dict = {
+            "frameNumbers": frame_nums,
+            "acquisitionNumbers": acq_nums,
+            "frameNumberAcquisition": frame_num_acq,
+            "frameTimestamps_sec": frame_timestamps,
+            "acqTriggerTimestamps_sec": acq_trigger_timestamps,
+            "nextFileMarkerTimestamps_sec": next_file_timestamps,
+            "endOfAcquisition": end_of_acq,
+            "endOfAcquisitionMode": end_of_acq_mode,
+            "dcOverVoltage": dc_over_voltage,
+            "epochTimestamps_us": epoch_timestamps,
+        }
 
-    # Remove the original file if requested
+        # Loads stack data
+        original_stack = stack.asarray()  # Reads the data as a numpy array into RAM
+
+        # Computes the starting and ending frame number
+        start_frame = first_frame_number  # This is precomputed to be correct, no adjustment needed
+        end_frame = first_frame_number + stack_size - 1  # Ending frame number is length - 1 + start
+
+        # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
+        output_path = output_dir.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
+
+        # Compresses and writes the data to the output path generated above
+        tifffile.imwrite(
+            output_path,
+            original_stack,
+            compression="lerc",
+            compressionargs={"level": 0.0},  # Lossless compression
+            predictor=True,
+        )
+
+    # Verifies the integrity of the compressed stack.
+    if verify_integrity:
+        compressed_stack = tifffile.imread(output_path)
+        if not np.array_equal(compressed_stack, original_stack):
+            message = f"Compressed stack {output_path} does not match the original stack in {tiff_path}."
+            console.error(message=message, error=RuntimeError)
+
+    # Removes the original file if requested
     if remove_sources:
         tiff_path.unlink()
 
+    # Returns extracted metadata dictionary to caller
+    return metadata_dict
 
-def extract_frames_from_stack(
-    image_directory: Path, num_processes: int, remove_sources: bool = False, batch: bool = False
-) -> None:
-    """Loops over all multi-frame TIFF stacks in the input directory and recompresses them using LERC scheme.
 
-    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
-    long-term storage and streaming over the network. To do so, each stack is re-encoded using LERC scheme,
-    which achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope.
+def _assemble_stack_from_frames(frame_files: tuple[Path, ...], remove_sources: bool, verify_integrity: bool) -> None:
+    """Reads the input sequence of frame TIFF files and assembles them into a single multipage, LERC-compressed TIFF
+    stack.
+
+    This worker function is used by the _fix_mesoscope_frames() function and is overall similar to _process_stack(). It
+    is used to re-encode the frames processed by an earlier version of our mesoscope pipeline that extracted each
+    frame as a one-page TIFF file. Since this process also (accidentally) stripped all metadata from source files,
+    this function only restacks the frames into a LERC-compressed TIFF stack and verifies the processing integrity.
 
     Notes:
-        This function is specifically calibrated to work with TIFF stacks produced by the scanimage matlab software.
-        Critically, these stacks are named using '__' to separate session and stack number from the rest of the
-        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
-        input TIFF files do not follow this naming convention, the function will not work as expected.
-
-        This function assumes that scanimage buffers frames until the stack_size number of frames is available and then
-        saves the frames as a TIFF stack. Therefore, it assumes that the directory contains at most one non-full stack.
-        The function uses this assumption when assigning unique frame IDs to extracted frames.
-
-        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFF at the
-        same time. It uses the stack number and stack size as a heuristic to determine which IDs to assign to each
-        extracted frame while processing stacks in-parallel to avoid collisions.
+        This function can reserve up to double the processed stack size of RAM bytes to hold the data in memory. If the
+        host-computer does not have enough RAM, reduce the number of concurrent processes or disable verification.
 
     Args:
-        image_directory: The directory containing the multi-frame TIFF stacks.
-        num_processes: The maximum number of processes to use while processing the directory.
+        frame_files: A list of paths to the individual frame TIFF files to be assembled into a stack.
+        remove_sources: Determines whether to remove original frame files after processing.
+        verify_integrity: Determines whether to verify the integrity of processed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
+            process.
+
+    Raises:
+        RuntimeError: If the re-encoded stack does not match original frame sources.
+    """
+    # Loads all frames as a list of arrays
+    frames = []
+    for frame_file in frame_files:
+        # Loads frame data into memory
+        frame = tifffile.imread(frame_file)
+        # Adds singleton dimension for concatenation. This is used to convert the data from shape (height, width)
+        # to shape (frames, height, width)
+        frames.append(frame[np.newaxis, ...])
+
+    # Concatenates along the first axis (stack dimension) to assemble the stack data
+    frame_data = np.concatenate(frames, axis=0)
+
+    # Computes the starting and ending frame numbers using the input frame filenames. Assumes the frame filenames are
+    # sorted before being chunked into stacks
+    start_frame = int(frame_files[0].stem)
+    end_frame = int(frame_files[-1].stem)
+
+    # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
+    frame_directory = frame_files[0].parent
+    output_path = frame_directory.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
+
+    # Compresses and writes the data to the output path generated above
+    tifffile.imwrite(
+        output_path,
+        frame_data,
+        compression="lerc",
+        compressionargs={"level": 0.0},  # Lossless compression
+        predictor=True,
+    )
+
+    # Verifies the integrity of the compressed stack.
+    if verify_integrity:
+        compressed_stack = tifffile.imread(output_path)
+        if not np.array_equal(compressed_stack, frame_data):
+            message = f"Compressed stack {output_path} does not match one or more original frames."
+            console.error(message=message, error=RuntimeError)
+
+    # Removes the original files if requested
+    if remove_sources:
+        for frame_file in frame_files:
+            frame_file.unlink()
+
+
+def _generate_ops(
+    metadata: dict[str, Any],
+    frame_data: NDArray[np.int16],
+    data_path: Path,
+    output_path: Path,
+) -> None:
+    """Uses frame-invariant ScanImage metadata and static default values to create an ax_ops.json file in the directory
+    specified by data_path.
+
+    This function is an implementation of the mesoscope data extraction helper from the suite2p library. The helper
+    function has been reworked to work with the metadata parsed by tifffile and reimplemented in Python. It was
+    configured to produce identical output to the ops.json files found in Tyche dataset. Primarily, this function
+    generates the 'fs', 'dx', 'dy', 'lines', 'nroi', 'nplanes' and 'mesoscan' fields of the 'ops' configuration file.
+    These fields are then reused by our dedicated ops-processing class to generate the ops.npy used to control suite2p
+    runtimes.
+
+    Notes:
+        The generated ax_ops.json file will be saved in the data_path directory.
+
+    Args:
+        metadata: A dictionary containing ScanImage metadata extracted from a mesoscope tiff stack file.
+        frame_data: A numpy array containing the data for the first frame of the stack.
+        data_path: The path to the directory where the output ops.json file will be saved.
+    """
+    # Extracts the mesoscope framerate from metadata. Uses a fallback value of 4 HZ
+    try:
+        framerate = float(metadata["FrameData"]["SI.hRoiManager.scanVolumeRate"])  # formerly fs
+    except KeyError:
+        framerate = float(4)
+
+    # The original extractor code looked for 'SI.hFastZ.userZs' tag, but the test images do not have this tag at all.
+    # It is likely that ScanImage changed the tags at some point, and that 'numFastZActuators' tag is the new
+    # equivalent.
+    nplanes = int(metadata["FrameData"]["SI.hStackManager.numFastZActuators"])
+
+    # Extracts the data about all ROIs
+    si_rois: list[dict[str, Any]] = metadata["RoiGroups"]["imagingRoiGroup"]["rois"]
+
+    # Extracts the ROI dimensions for each ROI. Original code says 'for each z-plane; but nplanes is not used anywhere
+    # in these computations:
+
+    # Preallocates output arrays
+    nrois = len(si_rois)
+    roi_heights = np.zeros(nrois)
+    roi_widths = np.zeros(nrois)
+    roi_centers = np.zeros((nrois, 2))
+    roi_sizes = np.zeros((nrois, 2))
+
+    # Loops over all ROIs and extracts dimensional information for each ROI from the metadata.
+    for i in range(nrois):
+        roi_heights[i] = si_rois[i]["scanfields"]["pixelResolutionXY"][1]
+        roi_widths[i] = si_rois[i]["scanfields"]["pixelResolutionXY"][0]
+        roi_centers[i] = si_rois[i]["scanfields"]["centerXY"][::-1]  # Reverse order to match original matlab code
+        roi_sizes[i] = si_rois[i]["scanfields"]["sizeXY"][::-1]
+
+    # Transforms ROI coordinates into pixel-units, while maintaining accurate relative positions for each ROI.
+    roi_centers -= roi_sizes / 2  # Shifts ROI coordinates to mark the top left corner
+    roi_centers -= np.min(roi_centers, axis=0)  # Normalizes ROI coordinates to leftmost/topmost ROI
+    # Calculates pixels-per-unit scaling factor from ROI dimensions
+    scale_factor = np.median(np.column_stack([roi_heights, roi_widths]) / roi_sizes, axis=0)
+    min_positions = roi_centers * scale_factor  # Converts ROI positions to pixel coordinates
+    min_positions = np.ceil(min_positions)  # This was added to match Spruston lab extraction code
+
+    # Calculates total number of rows across all ROIs (rows of pixels acquired while imaging ROIs)
+    total_rows = np.sum(roi_heights)
+
+    # Calculates the number of flyback pixels between ROIs. These are the pixels acquired when the galvos are moving
+    # between frames.
+    n_flyback = (frame_data.shape[0] - total_rows) / max(1, (nrois - 1))
+
+    # Creates an array that stores the start and end row indices for each ROI
+    roi_rows = np.zeros((2, nrois))
+    # noinspection PyTypeChecker
+    temp = np.concatenate([[0], np.cumsum(roi_heights + n_flyback)])
+    roi_rows[0] = temp[:-1]  # Starts are all elements except last
+    roi_rows[1] = roi_rows[0] + roi_heights  # Ends calculation stays same
+
+    # Generates the data to be stored as the JSON config based on the result of the computations above.
+    # Note, most of these values were filled based on the 'prototype' ops.json from Tyche F3. For our pipeline they are
+    # not really relevant, as we have a separate class that deals with suite2p configuration.
+    data = {
+        "fs": framerate,
+        "nplanes": nplanes,
+        "nrois": roi_rows.shape[1],
+        "mesoscan": 0 if roi_rows.shape[1] == 1 else 1,
+        "diameter": [6, 9],
+        "max_iterations": 50,
+        "num_workers_roi": -1,
+        "keep_movie_raw": 0,
+        "delete_bin": 1,
+        "batch_size": 1000,
+        "nimg_init": 400,
+        "tau": 1.25,
+        "combined": 0,
+        "nonrigid": 1,
+        "preclassify": 0.5,
+        "do_registration": 1,
+        "roidetect": 1,
+        "multiplane_parallel": 1,
+    }
+
+    # When the config is generated for a mesoscope scan, stores ROI offsets (dx, dy) and line indices (lines) for
+    # each ROI
+    if data["mesoscan"]:
+        # noinspection PyTypeChecker
+        data["dx"] = [round(min_positions[i, 1]) for i in range(nrois)]
+        # noinspection PyTypeChecker
+        data["dy"] = [round(min_positions[i, 0]) for i in range(nrois)]
+        data["lines"] = [list(range(int(roi_rows[0, i]), int(roi_rows[1, i]))) for i in range(nrois)]
+
+    # Generates fields to store the path to the directory that stores raw data and the directory where processed
+    # (registered) frames will be moved to.
+    data["data_path"] = [str(data_path)]
+    data["save_path0"] = str(output_path)
+
+    # Saves the generated config as JSON file (ops.json)
+    json_path = data_path.joinpath("ax_ops.json")
+    with open(json_path, "w") as f:
+        # noinspection PyTypeChecker
+        json.dump(data, f, separators=(",", ":"), indent=None)  # Maximizes data compression
+
+
+def _fix_mesoscope_frames(
+    mesoscope_directory: Path,
+    num_processes: int,
+    stack_size: int = 500,
+    remove_sources: bool = False,
+    batch: bool = False,
+    verify_integrity: bool = True,
+) -> None:
+    """Recompresses single-page frames stored in the target directory into stacks.
+
+    This function is used to recompress the frames previously saved as single-frame TIFF files into LERC-compressed
+    stacks. This is done to bring the data preprocessed by the early Sun Lab pipeline to the modern format. Since the
+    early pipeline version also stripped all metadata, this function does not contain any variant or invariant
+    metadata processing.
+
+    Notes:
+        To optimize runtime efficiency, this function employs multiple processes to work with multiple stacks at the
+        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
+        operate on the entire folder at the same time. To prevent this, disable verification and use fewer processes.
+
+    Args:
+        mesoscope_directory: The Path to the mesoscope_frames directory containing the individual frame TIFF files.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            assemble a stack of TIFF files in-parallel.
+        stack_size: The number of frames to compress into each stack. For the final stack in the sequence, if the
+            directory does not contain exactly stack_size frames, the size will be less and include all leftover frames.
         remove_sources: Determines whether to remove the original TIFF files after they have been processed.
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
-            to optimize progress reporting to avoid cluttering the terminal.
+            to optimize progress reporting to avoid cluttering the terminal window.
+        verify_integrity: Determines whether to verify the integrity of processed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
     """
-    # Generates a new 'mesoscope_frames' directory to store extracted .tiff frame files.
+    # Generates the list of frame files stored in the directory and sorts them in the order of acquisition.
+    tiff_files = sorted(mesoscope_directory.glob("*.tiff"), key=lambda x: int(x.stem))
+
+    # Chunks the sorted frames into stacks
+    stacks = tuple([tiff_files[i : i + stack_size] for i in range(0, len(tiff_files), stack_size)])
+
+    # Uses partial to bind the constant arguments to the processing function
+    process_func = partial(
+        _assemble_stack_from_frames, remove_sources=remove_sources, verify_integrity=verify_integrity
+    )
+
+    # Processes each tiff stack in parallel
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # Submits all tasks
+        # noinspection PyTypeChecker
+        future_to_file = set()
+        for stack in stacks:
+            future_to_file.add(executor.submit(process_func, stack))
+
+        # Note, this function does not need to parse metadata
+        if not batch:
+            # Shows progress with tqdm when not in batch mode
+            with tqdm(total=len(stacks), desc="Recompressing frames into stacks", unit="stack") as pbar:
+                for future in as_completed(future_to_file):
+                    future.result()  # Gets result to ensure completion
+                    pbar.update(1)
+        else:
+            # For batch mode, processes without progress tracking
+            [future.result() for future in as_completed(future_to_file)]
+
+
+def process_invariant_metadata(file: Path) -> None:
+    """Extracts frame-invariant ScanImage metadata from the target tiff file and outputs it as a JSON file in the same
+    directory.
+
+    This function only needs to be called for one raw ScanImage TIFF stack in each directory. It extracts the
+    ScanImage metadata that is common for all frames across all stacks and outputs it as metadata.json file. This
+    function also calls the _generate_ops() function that generates a suite2p ops.json file from the parsed
+    metadata.
+
+    Notes:
+        This function is primarily designed to preserve the metadata before converting raw TIFF stacks into a
+        single hyperstack and compressing it as LERC. It ensures that all original metadata is preserved for
+        future referencing.
+        
+    Args:
+        file: The path to the mesoscope TIFF stack file. This can be any file in the directory as the
+            frame-invariant metadata is the same for all stacks.
+    """
+
+    # Uses the parent directory of the target tiff file to create the output JSON file
+    metadata_json = Path(file.parent).joinpath("metadata.json")
+
+    # Reads the frame-invariant metadata from the first page (frame) of the stack. This metadata is the same across
+    # all frames and stacks.
+    with tifffile.TiffFile(file) as tiff:
+        metadata = tiff.scanimage_metadata
+        frame_data = tiff.asarray(key=0)  # Loads the data for the first frame in the stack to generate ops.json
+
+    # Writes the metadata as a JSON file.
+    with open(metadata_json, "w") as json_file:
+        # noinspection PyTypeChecker
+        json.dump(metadata, json_file, separators=(",", ":"), indent=None)  # Maximizes data compression
+
+    # Also uses extracted metadata to generate the ops.json configuration file for scanImage processing.
+    _generate_ops(
+        metadata=metadata,  # type: ignore
+        frame_data=frame_data,
+        data_path=file.parent,
+        output_path=file.parent,
+    )
+
+
+def process_mesoscope_directory(
+    image_directory: Path,
+    num_processes: int,
+    remove_sources: bool = False,
+    batch: bool = False,
+    verify_integrity: bool = True,
+) -> None:
+    """Loops over all multi-frame TIFF stacks in the input directory, recompresses them using LERC scheme, and extracts
+    ScanImage metadata.
+
+    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
+    long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
+    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
+    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
+    efficiently encoded JSON and compressed numpy archives to minimize disk space usage.
+
+    Notes:
+        This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
+        Critically, these stacks are named using '__' to separate session and stack number from the rest of the
+        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
+        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
+        stacks do not contain ScanImage metadata, they will be excluded from processing.
+
+        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
+        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
+        operate on the entire folder at the same time. To prevent this, disable verification and use fewer processes.
+
+    Args:
+        image_directory: The directory containing the multi-frame TIFF stacks. This is typically the root directory for
+            one experimental session.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            compress a stack of TIFF files in-parallel.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
+        batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
+            to optimize progress reporting to avoid cluttering the terminal window.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
+    """
+    # Generates the mesoscope_frames directory, where the processed stacks will be saved
     output_dir = image_directory.joinpath("mesoscope_frames")
     ensure_directory_exists(output_dir)
+
+    # Generates the name for the metadata archive file
+    metadata_file = image_directory / "frame_metadata.npz"
+
+    # Precreates the dictionary to store frame-variant metadata extracted from all TIFF frames before they are
+    # compressed into BigTiff.
+    all_metadata = defaultdict(list)
 
     # Finds all TIFF files in the input directory (non-recursive).
     tiff_files = list(image_directory.glob("*.tif")) + list(image_directory.glob("*.tiff"))
 
-    # Loops over each tiff stack and extracts the number of frames inside each stack. If the file is not a stack,
-    # removes it from further processing.
-    maximum_stack_size = 0
+    # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
+    tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
+    tiff_files.sort(key=_get_stack_number)  # type: ignore
+
+    # Goes over each stack and, for each, determines the position of the first frame from the stack in the overall
+    # sequence of frames acquired by all stacks. This is used to map frames stored in multiple stacks to a single
+    # session-wide sequence.
+    frame_numbers = []
+    starting_frame = 1
     for file in tiff_files:
         stack_size = _check_stack_size(file)
+        if stack_size > 0:
+            # Appends the starting frame number to list and increments the stack list
+            frame_numbers.append(starting_frame)
+            starting_frame += stack_size
+        else:
+            # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
+            # processing
+            tiff_files.remove(file)
 
-        if stack_size == 0:
-            tiff_files.remove(file)  # Removes non-stack files from further processing
+    # Converts to tuple for efficiency
+    tiff_files = tuple(tiff_files)  # type: ignore
+    frame_numbers = tuple(frame_numbers)  # type: ignore
 
-        # If any stack has a larger size than the current maximum, updates the maximum size
-        maximum_stack_size = max(stack_size, maximum_stack_size)
+    # Ends the runtime early if there are no valid TIFF files to process after filtering
+    if len(tiff_files) == 0:
+        return
 
-    # If there are TIFFs to process, executes frame extraction
-    if len(tiff_files) > 0:
-        # Uses partial to bind the constant arguments
-        process_func = partial(
-            _process_stack, output_dir=output_dir, stack_size=maximum_stack_size, remove_sources=remove_sources
-        )
+    # Extracts frame invariant metadata using the first frame of the first TIFF stack. Since this metadata is the
+    # same for all stacks, it is safe to use any available stack. We use the first one for consistency with
+    # suite2p helper scripts.
+    process_invariant_metadata(file=tiff_files[0])
 
-        # Processes each tiff stack in parallel
-        with ProcessPoolExecutor(max_workers=num_processes) as executor:
-            # Submits all tasks
-            future_to_file = {executor.submit(process_func, file): file for file in tiff_files}
+    # Uses partial to bind the constant arguments to the processing function
+    process_func = partial(
+        _process_stack, output_dir=output_dir, remove_sources=remove_sources, verify_integrity=verify_integrity
+    )
 
-            if not batch:
-                # Shows progress with tqdm when not in batch mode
-                with tqdm(total=len(tiff_files), desc="Processing TIFF stacks", unit="files") as pbar:
-                    for future in as_completed(future_to_file):
-                        future.result()  # Gets result to ensure completion
-                        pbar.update(1)
-            else:
-                # For batch mode, processes without progress tracking
-                [future.result() for future in as_completed(future_to_file)]
+    # Processes each tiff stack in parallel
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # Submits all tasks
+        future_to_file = set()
+        for file, frame in zip(tiff_files, frame_numbers):
+            future_to_file.add(executor.submit(process_func, file, frame))
+
+        if not batch:
+            # Shows progress with tqdm when not in batch mode
+            with tqdm(total=len(tiff_files), desc="Processing TIFF stacks", unit="stack") as pbar:
+                for future in as_completed(future_to_file):
+                    for key, value in future.result().items():
+                        all_metadata[key].append(value)
+                    pbar.update(1)
+        else:
+            # For batch mode, processes without progress tracking
+            for future in as_completed(future_to_file):
+                for key, value in future.result().items():
+                    all_metadata[key].append(value)
+
+    # Saves concatenated metadata as compressed numpy archive
+    metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
+    np.savez(metadata_file, **metadata_dict)
 
 
-##extracting tags
-from pathlib import Path
-import tifffile
+def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
+    """Prints the difference between the two input 'ops' JSON files.
 
-def extract_metadata_to_json(target_stack: Path):
-    """
-    Extract unique metadata tags from a multi-page TIFF stack and print them.
+    This function is primarily used to debug our metadata extraction pipeline to ensure that the metadata extraction
+    produces the same ops.json as the helper matlab script provided by suite2p authors. It eiter prints the difference
+    between the files to the terminal or a static line informing the user that the files are identical.
 
     Args:
-        target_stack (Path): Path to the input multi-page TIFF stack.
+        ops_1_path: The path to the first 'ops' JSON file.
+        ops_2_path: The path to the second 'ops' JSON file.
+
     """
-    # Resolve the absolute path of the target stack
-    absolute_path = target_stack.resolve()
-
-    # Set to store unique metadata labels
-    unique_labels = set()
-
-    # Opening the tiff stack and iterate over pages to extract metadata
-    with tifffile.TiffFile(absolute_path) as tiff:
-        for i, page in enumerate(tiff.pages):
-            # Extract tags from each page
-            for tag in page.tags.values():
-                label = tag.name
-                unique_labels.add(label)
-            # Optional: Add progress information
-            if i % 50 == 0:  # Log every 50 pages
-                print(f"Processed {i+1}/{len(tiff.pages)} pages...")
-
-    # Print the unique metadata labels
-    print("\nUnique Metadata Labels:")
-    for label in sorted(unique_labels):
-        print(label)
-
-
-# Example usage
-if __name__ == "__main__":
-    # Update the path to point directly to the correct location of `tyche.tif`
-    tiff_stack_path = Path("/Users/katlynn/Documents/portfolio/sl-mesoscope/src/sl_mesoscope_vr/tyche.tif")
-
-    # Extract metadata and print unique labels
-    extract_metadata_to_json(tiff_stack_path)
-
-##sorting stable and unstable tags
-def analyze_stable_and_unstable_tags(target_stack: Path):
-    """
-    Analyze stable and unstable metadata tags in a multi-page TIFF stack.
-
-    Args:
-        target_stack (Path): Path to the input multi-page TIFF stack.
-    """
-    # Resolve the absolute path of the target stack
-    absolute_path = target_stack.resolve()
-
-    # Dictionary to store the last known value for each tag
-    tag_values_memory = {}
-
-    # Set to store unstable tags
-    unstable_tags = set()
-
-    # Dictionary to track the history of unstable tags
-    unstable_history = {}
-
-    # Open the TIFF stack and iterate over pages
-    with tifffile.TiffFile(absolute_path) as tiff:
-        for i, page in enumerate(tiff.pages):
-            # Extract metadata tags and values for the current page
-            for tag in page.tags.values():
-                tag_name = tag.name
-                tag_value = str(tag.value)  # Convert value to string for easier comparison
-
-                # Check if the tag has been seen before
-                if tag_name in tag_values_memory:
-                    # If the value has changed, mark it as unstable
-                    if tag_values_memory[tag_name] != tag_value:
-                        unstable_tags.add(tag_name)
-                        # Store the tag's history if it's not already tracked
-                        if tag_name not in unstable_history:
-                            unstable_history[tag_name] = [tag_values_memory[tag_name]]
-                        # Append the new value to the tag's history
-                        unstable_history[tag_name].append(tag_value)
-                        # Update the memory with the new value
-                        tag_values_memory[tag_name] = tag_value
-                else:
-                    # Add the tag to memory if it's seen for the first time
-                    tag_values_memory[tag_name] = tag_value
-
-            # Optional: Progress logging
-            if i % 50 == 0:  # Log every 50 pages
-                print(f"Processed {i+1}/{len(tiff.pages)} pages...")
-
-    # Output stable and unstable tags
-    print("\nStable Tags:")
-    stable_tags = set(tag_values_memory.keys()) - unstable_tags
-    print(f"Count: {len(stable_tags)}")  # Print the number of stable tags
-    for tag in sorted(stable_tags):
-        print(tag)
-
-    print("\nUnstable Tags:")
-    print(f"Count: {len(unstable_tags)}")  # Print the number of unstable tags
-    for tag in sorted(unstable_tags):
-        print(f"{tag}: History = {unstable_history[tag]}")
-
-
-# Example usage
-if __name__ == "__main__":
-    # Update the path to point directly to the correct location of `tyche.tif`
-    tiff_stack_path = Path("/Users/katlynn/Documents/portfolio/sl-mesoscope/src/sl_mesoscope_vr/tyche.tif")
-
-    # Analyze stable and unstable tags
-    analyze_stable_and_unstable_tags(tiff_stack_path)
-
-
-def generate_ops_from_metadata(metadata_json_path, output_ops_json="ops.json"):
-    """
-    Generate ops.json from the metadata in metadata_json_path (extracted TIFF tags).
-    If `tiff_path` is provided and `stack_first_frame=True`, we will load the first
-    frame to get the actual 'height' for computing flyback frames.
-
-    If you already know the height or don't need the flyback logic, you can omit it
-    or pass in a known value some other way.
-    """
-
-    # ----------------------------------------------------------------
-    # 0) Load the extracted metadata from JSON
-    #    The JSON is assumed to have keys like "Software", "Artist", etc.
-    # ----------------------------------------------------------------
-    with open(metadata_json_path, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-
-    # For convenience, we'll do:
-    software_tag = metadata.get("Software", "")
-    artist_tag = metadata.get("Artist", "")
-
-    # ----------------------------------------------------------------
-    # 1) Determine the image height (stack_height) from the tags.
-    # ----------------------------------------------------------------
-    stack_height = metadata.get("ImageLength", None)
-
-    path_to_use = metadata_json_path
-    root = os.path.dirname(os.path.abspath(path_to_use))
-
-    # ----------------------------------------------------------------
-    # 2) Parse the frame rate `fs` from the software line
-    #    - The MATLAB code searches for "SI.hRoiManager.scanVolumeRate"
-    # ----------------------------------------------------------------
-    fs = 4  # fallback
-    # Split software_tag by lines
-    lines_software = software_tag.splitlines()
-    for line in lines_software:
-        # e.g., "SI.hRoiManager.scanVolumeRate = 5"
-        if "SI.hRoiManager.scanVolumeRate" in line:
-            parts = line.split("=")
-            if len(parts) > 1:
-                try:
-                    fs = float(parts[1].strip())
-                except ValueError:
-                    pass
-        # e.g., "SI.hFastZ.userZs = [0 15 30]"
-        if "SI.hFastZ.userZs" in line:
-            # parse array
-            match_z = re.search(r"\[(.*)\]", line)
-            if match_z:
-                zs_str = match_z.group(1).strip()
-                zs_vals = zs_str.split()
-                nplanes = len(zs_vals)
-            else:
-                nplanes = 1
-        else:
-            nplanes = 1
-
-    # ----------------------------------------------------------------
-    # 3) Parse the "Artist" tag as JSON to get rois
-    #    - The MATLAB code extracts sub-fields from artist.RoiGroups.imagingRoiGroup.rois
-    # ----------------------------------------------------------------
-    # The MATLAB snippet does:
-    #   artist_info = artist_info(1:find(artist_info == '}', 1, 'last'));
-    #   artist = jsondecode(artist_info);
-    #   si_rois = artist.RoiGroups.imagingRoiGroup.rois;
-    # We do something similar in Python:
-
-    si_rois = []
-    # try to find the trailing brace if there's extra content
-    match = re.search(r"(.*\})", artist_tag)
-    if match:
-        trimmed_json = match.group(1)
-    else:
-        trimmed_json = artist_tag  # fallback to entire string
-    try:
-        artist_dict = json.loads(trimmed_json)
-        si_rois = artist_dict["RoiGroups"]["imagingRoiGroup"]["rois"]
-    except Exception:
-        si_rois = []
-
-    nrois = len(si_rois)
-
-    Ly = []
-    Lx = []
-    cXY = []
-    szXY = []
-
-    for r in si_rois:
-        # rois[k].scanfields(1).pixelResolutionXY => [W, H]
-        sf = r["scanfields"]
-        # Sometimes it's a list; sometimes just one dict
-        sf0 = sf[0] if isinstance(sf, list) else sf
-
-        pixel_res_xy = sf0.get("pixelResolutionXY", [0, 0])
-        center_xy = sf0.get("centerXY", [0, 0])
-        size_xy = sf0.get("sizeXY", [0, 0])
-
-        # MATLAB does:
-        # Ly(k,1) = .pixelResolutionXY(2)
-        # Lx(k,1) = .pixelResolutionXY(1)
-        Ly.append(pixel_res_xy[1])
-        Lx.append(pixel_res_xy[0])
-
-        # cXY(k, [2,1]) = .centerXY
-        # szXY(k, [2,1]) = .sizeXY
-        cXY.append([center_xy[1], center_xy[0]])
-        szXY.append([size_xy[1], size_xy[0]])
-
-    Ly = np.array(Ly)
-    Lx = np.array(Lx)
-    cXY = np.array(cXY)
-    szXY = np.array(szXY)
-
-    # cXY = cXY - szXY/2; cXY = cXY - min(cXY,[],1);
-    if len(cXY) > 0:
-        cXY = cXY - (szXY / 2.0)
-        cXY = cXY - np.min(cXY, axis=0)
-
-    # mu = median([Ly, Lx]./szXY,1);
-    # => we can do a column stack of (Ly, Lx), then elementwise divide by szXY
-    if len(Ly) > 0:
-        stack_lylx = np.column_stack((Ly, Lx))
-        safe_szxy = np.copy(szXY)
-        safe_szxy[safe_szxy == 0] = 1e-9
-        ratio = stack_lylx / safe_szxy
-        mu = np.median(ratio, axis=0)  # shape (2,)
-    else:
-        mu = np.array([1, 1], dtype=float)
-
-    # imin = cXY .* mu
-    if len(cXY) > 0:
-        imin = cXY * mu
-    else:
-        imin = np.zeros((0, 2))
-
-    # deduce flyback frames from the most filled z-plane
-    # (the MATLAB code uses size(stack,1) for total # of rows.)
-    if stack_height is not None and len(Ly) > 0:
-        n_rows_sum = np.sum(Ly)
-        if nrois > 1:
-            n_flyback = (stack_height - n_rows_sum) / (nrois - 1)
-        else:
-            n_flyback = 0
-    else:
-        # fallback
-        n_rows_sum = 0
-        n_flyback = 0
-
-    # irow = [0 cumsum(Ly'+n_flyback)]
-    # irow(end) = [];
-    # irow(2,:) = irow(1,:) + Ly';
-    irow_starts = [0]
-    irow_ends = []
-    for val in Ly:
-        irow_ends.append(irow_starts[-1] + val)
-        irow_starts.append(irow_starts[-1] + val + n_flyback)
-    # remove last start if it overshoots
-    if len(irow_starts) > len(irow_ends):
-        irow_starts.pop()
-
-    # ----------------------------------------------------------------
-    # 4) Construct the "data" structure, matching the MATLAB logic
-    # ----------------------------------------------------------------
-    data = {}
-    data["fs"] = fs
-    data["nplanes"] = nplanes
-    data["nrois"] = nrois
-    data["mesoscan"] = 1 if nrois > 1 else 0
-    data["diameter"] = [6, 9]
-    data["num_workers_roi"] = 5
-    data["keep_movie_raw"] = 0
-    data["delete_bin"] = 1
-    data["batch_size"] = 1000
-    data["nimg_init"] = 400
-    data["tau"] = 2.0
-    data["combined"] = 1
-    data["nonrigid"] = 1
-
-    if data["mesoscan"]:
-        data["dx"] = []
-        data["dy"] = []
-        data["lines"] = []
-        for i, (start_val, end_val) in enumerate(zip(irow_starts, irow_ends)):
-            data["lines"].append(list(range(int(start_val), int(end_val))))
-            if i < len(imin):
-                data["dx"].append(int(imin[i, 1]))
-                data["dy"].append(int(imin[i, 0]))
-            else:
-                data["dx"].append(0)
-                data["dy"].append(0)
-
-    # ----------------------------------------------------------------
-    # 5) Derive data_path and save_path0 from `root`
-    #    The MATLAB code does some string manipulation for that
-    # ----------------------------------------------------------------
-    # We'll just store `root` as data_path[0] for simplicity:
-    # You can adapt if you want different logic
-    normalized_root = os.path.abspath(root)
-    data["data_path"] = [normalized_root]
-
-    # The MATLAB code modifies the drive letter to "G:". We'll do a simple approach
-    # or you can replicate exactly if you want:
-    data["save_path0"] = f"G:{os.path.abspath(root)[2:]}"  # e.g. G:\DATA\...
-    # Or just store the same root in case you don't want to alter the drive:
-    # data["save_path0"] = normalized_root
-
-    # ----------------------------------------------------------------
-    # 6) Write ops.json
-    # ----------------------------------------------------------------
-    output_path = os.path.join(root, output_ops_json)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
-
-    print(f"Saved ops.json to {output_path}")
-
-
-def diff_ops_files_json(ops_path1, ops_path2):
-    with open(ops_path1, "r", encoding="utf-8") as f1:
+    # Loads both files into memory
+    with open(ops_1_path, "r", encoding="utf-8") as f1:
         data1 = json.load(f1)
-    with open(ops_path2, "r", encoding="utf-8") as f2:
+    with open(ops_2_path, "r", encoding="utf-8") as f2:
         data2 = json.load(f2)
 
-    # Convert back to JSON with sorted keys, so differences are consistent
+    # Converts back to JSON with sorted keys, so differences are consistent
     json1 = json.dumps(data1, sort_keys=True, indent=2)
     json2 = json.dumps(data2, sort_keys=True, indent=2)
 
-    # Compare line by line
+    # Compares line by line
     diff = difflib.unified_diff(
-        json1.splitlines(), json2.splitlines(), fromfile=ops_path1, tofile=ops_path2, lineterm=""
+        json1.splitlines(), json2.splitlines(), fromfile=str(ops_1_path), tofile=str(ops_2_path), lineterm=""
     )
 
-    # Print the diff
+    # Prints the difference
     printed = False
     for line in diff:
         printed = True
         print(line)
     if not printed:
-        print("No differences found! The JSON content is identical.")
+        print("No differences found! The ops JSON content is identical.")
 
 
 def compare_mesoscope_frames(
@@ -588,11 +734,11 @@ def compare_mesoscope_frames(
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6), dpi=render_dpi)
 
     # Plots raw frame
-    im1 = ax1.imshow(raw_plane, cmap="gray")
+    ax1.imshow(raw_plane, cmap="gray")
     ax1.set_title("Raw Frame")
 
     # Plots registered frame
-    im2 = ax2.imshow(registered_plane, cmap="gray")
+    ax2.imshow(registered_plane, cmap="gray")
     ax2.set_title("Registered Frame")
 
     # Plots difference
@@ -606,31 +752,3 @@ def compare_mesoscope_frames(
 
     # Shows the plot
     plt.show()
-
-
-if __name__ == "__main__":
-    print("")
-    # input_file = "/media/Data/Tyche-A2/2022_01_25/1/Tyche-A7_2022_01_25_1__00001_00008.tif"
-    # extract_metadata_to_json(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.json")
-    # export_metadata_only(input_file, "/media/Data/Tyche-A2/2022_01_25/1/metadata.tiff")
-    #
-    # generate_ops_from_metadata(
-    #     metadata_json_path="/media/Data/Tyche-A2/2022_01_25/1/metadata.json", output_ops_json="ops.json"
-    # )
-
-    # ops_1 = "/media/Data/2022_01_25/1/ops.json"
-    # ops_2 = "/media/Data/Tyche-A2/2022_01_25/1/ops.json"
-    # diff_ops_files_json(ops_1, ops_2)
-
-    # tiff_path = Path(
-    #     "/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/tyche.tif"
-    # )  # Raw
-    # bin_path = Path("/home/cyberaxolotl/Desktop/processed/Tyche-F2/2023_02_27/1/suite2p/plane0/data.bin")  # Registered
-    # ops_path = Path("/home/cyberaxolotl/Desktop/raw/Tyche-F2/2023_02_27/1/ops.json")  #
-    # tiff_index = 250
-    # bin_index = 250
-    # plane_index = 0
-    # render_dpi = 300
-    #
-    # # Generates and displays the difference between the raw and registered frame
-    # compare_mesoscope_frames(tiff_path, bin_path, ops_path, tiff_index, plane_index, render_dpi=300)
