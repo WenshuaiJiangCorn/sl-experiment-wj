@@ -623,7 +623,11 @@ def process_mesoscope_directory(
 
         if not batch:
             # Shows progress with tqdm when not in batch mode
-            with tqdm(total=len(tiff_files), desc="Processing TIFF stacks", unit="stack") as pbar:
+            with tqdm(
+                total=len(tiff_files),
+                desc=f"Processing TIFF stacks for {Path(*image_directory.parts[-6:])}",
+                unit="stack",
+            ) as pbar:
                 for future in as_completed(future_to_file):
                     for key, value in future.result().items():
                         all_metadata[key].append(value)

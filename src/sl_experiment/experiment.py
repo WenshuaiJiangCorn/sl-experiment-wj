@@ -1,6 +1,7 @@
 """This module provides the main VR class that abstracts working with Sun lab's mesoscope-VR system"""
 
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,10 @@ from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
 from ataraxis_communication_interface.communication import MQTTCommunication
+from transfer_tools import transfer_directory
+from packaging_tools import calculate_directory_checksum
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import shutil
 
 
 class MesoscopeExperiment:
@@ -499,124 +504,230 @@ class MesoscopeExperiment:
             source_id=0, time_stamp=timestamp, serialized_data=np.array([new_state], dtype=np.uint8)
         )
         self._amc_logger.input_queue.put(log_package)
-        # TODO Add VS logger
+        # TODO Add VS logger`
 
 
 class ProjectData:
-    """Provides methods for managing the experimental data acquired by all Sun lab pipelines.
+    """Provides methods for managing the experimental data acquired by all Sun lab pipelines for a given project and
+    animal combination.
 
-    This class functions as the central hub for managing the data across all destinations: The PC(s) that acquire the
-    data, the NAS, and the data analysis server(s). Its primary purpose is to maintain the project data structure
-    across all supported destinations and efficiently and safely move the data between these destinations with minimal
-    redundancy and footprint.
+    This class functions as the central hub for collecting the data from all local PCs involved in the acquisition
+    process and pushing it to the NAS and the data analysis server(s). Its primary purpose is to maintain the project
+    data structure across all supported destinations and to efficiently and safely move the data to these
+    destinations with minimal redundancy and footprint.
 
     Note:
-        The class is written to be data-agnostic. It does not contain methods for preprocessing or analyzing the data
-        and does not expect any particular dta format beyond adhering to the project-animal-session structure employed
-        by the Sun lab.
+        It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
+        SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
+        the OS has full access to these directories and filesystems.
+
+        This class is specifically designed for working with raw data for a single animal used in the managed project.
+        Processed data is managed by the processing pipeline classes.
+
+        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each session
+        directory.
+
+        If this class is instantiated with the 'create' flag for an already existing project and / or animal, it will
+        NOT recreate the project and animal directories. Instead, the instance will use the path to the already existing
+        directories.
 
     Args:
-        project_directory: The path to the root directory managed the project.
-        animal_name: The name of the animal whose' data will be managed by this class.
+        project_name: The name of the project whose data will be managed by the class.
+        animal_name: The name of the animal whose data will be managed by the class.
+        create: A boolean flag indicating whether to create the project directory if it does not exist.
+        local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
+            this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
+        server_root_directory: The path to the root directory where all projects are stored on the server-machine.
+            Usually, this is the 'storage' (RAID 6) volume of the BioHPC server.
+        nas_root_directory: The path to the root directory where all projects are stored on the Synology NAS. Usually,
+            this is a non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes.
+        mesoscope_data_directory: The path to the directory where the mesoscope saves acquired frame data. Usually, this
+            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime.
+
+    Attributes:
+        _local: The absolute path to the host-machine animal directory for the managed project.
+        _nas: The absolute path to the Synology NAS animal directory for the managed project.
+        _server: The absolute path to the BioHPC server-machine animal directory for the managed project.
+        _mesoscope: The absolute path to the mesoscope data directory.
+        _project_name: Stores the name of the project whose data is currently manage by the class.
+        _animal_name: Stores the name of the animal whose data is currently manage by the class.
+        _session_name: Stores the name of the last generated session directory.
+
+    Raises:
+        FileNotFoundError: If the project and animal directory path does not exist and the 'create' flag is not set.
     """
 
-    def __init__(self, project_directory: Path, animal_name: str) -> None:
-        # Combines project directory and animal name to get the animal directory path
-        self._animal_directory = project_directory.joinpath(animal_name)
+    def __init__(
+        self,
+        project_name: str,
+        animal_name: str,
+        create: bool = True,
+        local_root_directory: Path = Path("/media/Data/Experiments"),
+        server_root_directory: Path = Path("/media/Data/Experiments"),
+        nas_root_directory: Path = Path("/media/Data/Experiments"),
+        mesoscope_data_directory: Path = Path("/media/Data/Experiments"),
+    ) -> None:
+        # Ensures that each root path is absolute
+        self._local: Path = local_root_directory.absolute()
+        self._nas: Path = nas_root_directory.absolute()
+        self._server: Path = server_root_directory.absolute()
+        self._mesoscope: Path = mesoscope_data_directory.absolute()
 
-        # Loops over the input directory and resolves available session folders. If the directory does not exist,
-        # sets the variable to an empty tuple and generates the animal directory
-        self._sessions: tuple[str, ...]
-        if self._animal_directory.exists():
-            session: Path
-            self._sessions = tuple([str(session.stem) for session in project_directory.glob("*") if session.is_dir()])
-        else:
-            ensure_directory_exists(self._animal_directory)
-            self._sessions = tuple()
+        # Computes the project + animal directory paths for all destinations
+        local_project_directory = self._local / project_name / animal_name
+        nas_project_directory = self._nas / project_name / animal_name
+        server_project_directory = self._server / project_name / animal_name
 
-    def add_animal(self, animal_name: str) -> Path:
-        """Creates directories for a new animal with 'raw' and 'processed' subdirectories."""
-        animal_directory = self._project_directory / animal_name
-        raw_directory = animal_directory / "raw"
-        processed_directory = animal_directory / "processed"
+        # If requested, creates the directories on all destinations and locally
+        if create:
+            ensure_directory_exists(local_project_directory)
+            ensure_directory_exists(nas_project_directory)
+            ensure_directory_exists(server_project_directory)
 
-        ensure_directory_exists(raw_directory)
-        ensure_directory_exists(processed_directory)
+            self._local = local_project_directory
+            self._nas = nas_project_directory
+            self._server = server_project_directory
 
-        return animal_directory
-    
-    def create_session(self, animal_name: str) -> Path:
+        # If 'create' flag is off, raises an error if the target directory does not exist.
+        elif not local_project_directory.exists():
+            message = (
+                f"Unable to initialize the ProjectData class, as the directory for the animal '{animal_name}' of the "
+                f"project '{project_name}' does not exist. Initialize the class with the 'create' flag if you need to "
+                f"create the project and animal directories."
+            )
+            console.error(message=message, error=FileNotFoundError)
+
+        # Records animal and project names to attributes
+        self._project_name: str = project_name
+        self._animal_name: str = animal_name
+        self._session_name: str | None = None  # Placeholder
+
+    def create_session(self) -> None:
         """Creates a new session directory within the broader project-animal data structure.
+
         Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
-        name within the broader project-animal structure has a unique name that accurately preserves the order of
-        the sessions.
+        name within the project-animal structure has a unique name that accurately preserves the order of the sessions.
 
         Notes:
-            You can use the 'stem' property of the returned path to get the session name.
+            Most other class methods require this method to be called at least once before they can be used.
+
+            To retrieve the name of the generated session, use 'session_name' property. To retrieve the full path to the
+            session raw_data directory, use 'session_path' property.'
 
         Returns:
-            The Path to the newly created session directory.
+            The Path to the root session directory.
         """
-        animal_directory = self._project_directory / animal_name
-        raw_directory = animal_directory / "raw"
-        processed_directory = animal_directory / "processed"
-        
-        # Animal not in the project directory
-        if not raw_directory.exists():
-            self.add_animal(animal_name) #Add the animal
-        
+        # Acquires the UTC timestamp to use as the session name
         session_name = get_timestamp(time_separator="-")
 
-        raw_session_path = raw_directory / session_name
-        processed_session_path = processed_directory / session_name
+        # Constructs the session directory path and generates the directory
+        raw_session_path = self._local.joinpath(session_name)
 
-        # Handles conflicts when adding same session to the same animal
-        counter = 1
-        while raw_session_path.exists() or processed_session_path.exists():
-            new_session_name = f"{session_name}_{counter}"
-            raw_session_path = raw_directory / new_session_name
-            processed_session_path = processed_directory / new_session_name
+        # Handles potential session name conflicts. While this is extremely unlikely, it is not impossible for
+        # such conflicts to occur.
+        counter = 0
+        while raw_session_path.exists():
             counter += 1
+            new_session_name = f"{session_name}_{counter}"
+            raw_session_path = self._local.joinpath(new_session_name)
 
-        ensure_directory_exists(raw_session_path)
-        ensure_directory_exists(processed_session_path)
+        if counter > 0:
+            message = (
+                f"Session name conflict occurred for animal '{self._animal_name}' of project '{self._project_name}' "
+                f"when adding the new session. The newly created session directory uses a '_{counter}' postfix to "
+                f"distinguish itself from the already existing session directory."
+            )
+            warnings.warn(message=message)
 
-        return raw_session_path, processed_session_path
-    
-    def get_animals(self, return_paths: bool = False) -> list[str | Path]:
-        """Returns either all animal names or their absolute paths based on the return_paths flag.
+        # Creates the session directory and the raw_data subdirectory
+        ensure_directory_exists(raw_session_path.joinpath("raw_data"))
+        self._session_name = raw_session_path.stem
+
+    @property
+    def session_name(self) -> str:
+        """Returns the name of the last generated session directory."""
+        if self._session_name is None:
+            message = (
+                f"Unable to retrieve the last generates session name for the animal '{self._animal_name}' of project "
+                f"'{self._project_name}'. Call create_session() method before using this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._session_name
+
+    @property
+    def session_path(self) -> Path:
+        """Returns the full path to the last generated session raw_data directory."""
+        if self._session_name is None:
+            message = (
+                f"Unable to retrieve the 'raw_data' folder path for the last generated session of the animal "
+                f"'{self._animal_name}' of project '{self._project_name}'. Call create_session() method before using "
+                f"this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(self._session_name, "raw_data")
+
+    def pull_mesoscope_data(self) -> None:
+        # TODO add this method!
+        pass
+
+    def push_to_destinations(self, parallel: bool = True, num_threads: int = 10):
+        """Pushes the raw_data directory of the last created session to the NAS and the SunLab BioHPC server.
+
+        This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and
+        the server. This method generates the xxHash3-128 checksum for the source folder and uses it to verify the
+        integrity of transferred data at each destination before removing the source folder.
+
+        Notes:
+            This method is configured to run data transfer and checksum calculation in-parallel where possible. It is
+            advised to minimize the use of the host-machine while it is running this method, as most CPU resources will
+            be consumed by the data transfer process.
+
+        Args:
+            parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
+                data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
+                of parallel threads used by each transfer process or the number of threads used to compute the
+                xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
+            num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
+                the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
+                advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
+                number of CPU cores - 4.
         """
-        if return_paths:
-            return [animal.resolve() for animal in self._project_directory.iterdir() if animal.is_dir()]
+        # Generates the path to session raw_data folder
+        source = self._local.joinpath(self._session_name, "raw_data")
+
+        # Ensures that the source folder has been checksummed. If not, generates the checksum before executing the
+        # transfer operation
+        if not source.joinpath("ax_checksum.txt").exists():
+            calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
+
+        # Generates the paths to the destination folders. Bundles them with descriptive names to enhance progress
+        # reporting
+        destinations = (
+            (self._nas.joinpath(self._session_name, "raw_data"), "NAS"),
+            (self._server.joinpath(self._session_name, "raw_data"), "Server"),
+        )
+
+        # If the method is configured to transfer files in-parallel, submits tasks to a ProcessPoolExecutor
+        if parallel:
+            with ProcessPoolExecutor(max_workers=len(destinations)) as executor:
+                futures = {
+                    executor.submit(
+                        transfer_directory, source=source, destination=dest[0], num_threads=num_threads
+                    ): dest
+                    for dest in destinations
+                }
+                for future in as_completed(futures):
+                    # Propagates any exceptions from the transfers
+                    future.result()
+
+        # Otherwise, runs the transfers sequentially. Note, transferring individual files is still done in-parallel, but
+        # the transfer is performed for each destination sequentially.
         else:
-            return [animal.name for animal in self._project_directory.iterdir() if animal.is_dir()]
+            for destination in destinations:
+                transfer_directory(source=source, destination=destination[0], num_threads=num_threads)
 
-
-    def get_sessions(self, return_paths: bool = False) -> tuple[list[str | Path], list[str | Path]]:
-        """Returns a tuple (raw_sessions, processed_sessions), where each is a list containing session names or paths
-        for all animals. If return_paths is True, absolute paths are returned instead of session names.
-        """
-        raw_sessions = []
-        processed_sessions = []
-
-        for animal_directory in self._project_directory.iterdir():
-            if animal_directory.is_dir():
-                raw_directory = animal_directory / "raw"
-                processed_directory = animal_directory / "processed"
-
-                if raw_directory.exists():
-                    raw_sessions.append(
-                        session.resolve() if return_paths else session.name
-                        for session in raw_directory.iterdir() if session.is_dir()
-                    )
-
-                if processed_directory.exists():
-                    processed_sessions.append(
-                        session.resolve() if return_paths else session.name
-                        for session in processed_directory.iterdir() if session.is_dir()
-                    )
-
-        return raw_sessions, processed_sessions
+        # After all transfers complete successfully (including integrity verification), removes the source directory
+        shutil.rmtree(source)
 
 
 def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
@@ -792,4 +903,25 @@ def calibration() -> None:
 
 
 if __name__ == "__main__":
-    calibration()
+    # calibration()
+    root = Path("/home/cybermouse/Desktop/Folder_test")
+    session_dir = ProjectData(
+        project_name="TestProject",
+        animal_name="TM1",
+        create=True,
+        local_root_directory=root.joinpath("Local"),
+        server_root_directory=root.joinpath("Server"),
+        nas_root_directory=root.joinpath("NAS"),
+        mesoscope_data_directory=root.joinpath("Mesoscope"),
+    )
+    session_dir.create_session()
+    print(session_dir.session_name)
+    print(session_dir.session_path)
+
+    # Generates 10000 files with random arrays
+    for i in range(10000):
+        arr = np.random.rand(100, 100)  # 100x100 array of random floats
+        filename = session_dir.session_path.joinpath(f"test_{i:03d}.npy")
+        np.save(filename, arr)
+
+    session_dir.push_to_destinations()
