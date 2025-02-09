@@ -1,4 +1,6 @@
-"""This module provides methods for moving data between the local machine, the NAS drive and the Sun lab BioHPC cluster."""
+"""This module provides methods for moving data between the local machine, the Synology NAS drive and the Sun lab
+BioHPC cluster.
+"""
 
 import shutil
 from pathlib import Path
@@ -54,6 +56,9 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
             type of transfer (local or remote) and is not guaranteed to provide improved transfer performance. For local
             transfers, setting this number above 1 will likely provide a performance boost. For remote transfers using
             a single TCP / IP socket (such as non-multichannel SMB protocol), the number should be set to 1.
+
+    Raises:
+        RuntimeError: If the transferred files do not pass xxHas3-128 checksum integrity verification.
     """
     if not source.exists():
         message = f"Unable to move the directory {source}, as it does not exist."
