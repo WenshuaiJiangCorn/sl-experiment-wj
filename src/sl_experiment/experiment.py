@@ -825,27 +825,27 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
         elif code == "r":  # Deliver reward
             valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
             valve.send_pulse()
-        elif code == "1":
+        elif code == "c1":
             valve.set_parameters(
                 pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 25 milliseconds
             valve.calibrate()
-        elif code == "2":
+        elif code == "c2":
             valve.set_parameters(
                 pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 50 milliseconds
             valve.calibrate()
-        elif code == "3":
+        elif code == "c3":
             valve.set_parameters(
                 pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 75 milliseconds
             valve.calibrate()
-        elif code == "4":
+        elif code == "c4":
             valve.set_parameters(
                 pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 100 milliseconds
             valve.calibrate()
-        elif code == "5":
+        elif code == "c5":
             valve.set_parameters(
                 pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 125 milliseconds
@@ -854,10 +854,16 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
             valve.toggle(state=True)
         elif code == "c":
             valve.toggle(state=False)
+        elif code == "t":
+            valve.set_parameters(
+                pulse_duration=np.uint32(17841), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+            )  # 4 ul x 1000 times
+            valve.calibrate()
         elif code.isnumeric():
             pulse_duration = valve.get_duration_from_volume(float(code))
-            valve.set_parameters(pulse_duration=pulse_duration)
-            valve.send_pulse()
+            print(pulse_duration)
+            # valve.set_parameters(pulse_duration=pulse_duration)
+            # valve.send_pulse()
 
 
 def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
@@ -879,11 +885,11 @@ def calibration() -> None:
     # Defines static assets needed for testing
     valve_calibration_data = (
         (0, 0),  # Need to add this logical constraint to prevent irrational computations, such as negative intercept
-        (25000, 1.2215),
-        (50000, 3.917),
-        (75000, 6.0875),
-        (100000, 10.0325),
-        (125000, 16.047),
+        (25000, 2.36),
+        (50000, 6.44),
+        (75000, 12.47),
+        (100000, 17.85),
+        (125000, 28.73),
     )
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)
