@@ -563,9 +563,9 @@ class ProjectData:
         animal_name: str,
         create: bool = True,
         local_root_directory: Path = Path("/media/Data/Experiments"),
-        server_root_directory: Path = Path("/media/Data/Experiments"),
-        nas_root_directory: Path = Path("/media/Data/Experiments"),
-        mesoscope_data_directory: Path = Path("/media/Data/Experiments"),
+        server_root_directory: Path = Path("/media/cybermouse/Extra Data/server/storage"),
+        nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
+        mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata/mesoscope_frames"),
     ) -> None:
         # Ensures that each root path is absolute
         self._local: Path = local_root_directory.absolute()
@@ -789,27 +789,27 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
             valve.send_pulse()
         elif code == "1":
             valve.set_parameters(
-                pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+                pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 25 milliseconds
             valve.calibrate()
         elif code == "2":
             valve.set_parameters(
-                pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+                pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 50 milliseconds
             valve.calibrate()
         elif code == "3":
             valve.set_parameters(
-                pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+                pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 75 milliseconds
             valve.calibrate()
         elif code == "4":
             valve.set_parameters(
-                pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+                pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 100 milliseconds
             valve.calibrate()
         elif code == "5":
             valve.set_parameters(
-                pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
+                pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
             )  # 125 milliseconds
             valve.calibrate()
         elif code == "o":
@@ -903,25 +903,25 @@ def calibration() -> None:
 
 
 if __name__ == "__main__":
-    # calibration()
-    root = Path("/home/cybermouse/Desktop/Folder_test")
-    session_dir = ProjectData(
-        project_name="TestProject",
-        animal_name="TM1",
-        create=True,
-        local_root_directory=root.joinpath("Local"),
-        server_root_directory=root.joinpath("Server"),
-        nas_root_directory=root.joinpath("NAS"),
-        mesoscope_data_directory=root.joinpath("Mesoscope"),
-    )
-    session_dir.create_session()
-    print(session_dir.session_name)
-    print(session_dir.session_path)
-
-    # Generates 10000 files with random arrays
-    for i in range(10000):
-        arr = np.random.rand(100, 100)  # 100x100 array of random floats
-        filename = session_dir.session_path.joinpath(f"test_{i:03d}.npy")
-        np.save(filename, arr)
-
-    session_dir.push_to_destinations()
+    calibration()
+    # session_dir = ProjectData(
+    #     project_name="TestProject",
+    #     animal_name="TM1",
+    #     create=True,
+    # )
+    # session_dir.create_session()
+    # print(session_dir.session_name)
+    # print(session_dir.session_path)
+    #
+    # # Generates 10000 files with random arrays
+    # # for i in range(10000):
+    # #     arr = np.random.rand(100, 100)  # 100x100 array of random floats
+    # #     filename = session_dir.session_path.joinpath(f"test_{i:03d}.npy")
+    # #     np.save(filename, arr)
+    #
+    # # Moves test data from holdout to the generated session
+    # root_data = Path("/media/Data/Holdout")
+    # calculate_directory_checksum(root_data)
+    # transfer_directory(root_data, session_dir.session_path, num_threads=30)
+    #
+    # session_dir.push_to_destinations()
