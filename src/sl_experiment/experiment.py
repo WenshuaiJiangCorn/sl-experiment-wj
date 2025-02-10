@@ -18,8 +18,8 @@ from module_interfaces import (
 from ataraxis_base_utilities import console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
-from ataraxis_communication_interface import MicroControllerInterface
-from ataraxis_communication_interface.communication import MQTTCommunication
+from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
+from ataraxis_video_system import VideoSystem
 from transfer_tools import transfer_directory
 from packaging_tools import calculate_directory_checksum
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -105,6 +105,9 @@ class MesoscopeExperiment:
         unity_ip: str = "127.0.0.1",
         unity_port: int = 1883,
         valve_calibration_data: tuple[tuple[int | float, int | float], ...] = ((10, 10),),
+        face_camera_index: int = 0,
+        left_camera_index: int = 0,
+        right_camera_index: int = 1,
     ) -> None:
         # As with other pipelines that use intelligent resource termination, presets the _started flags first to avoid
         # leaks if the initialization method fails.
@@ -666,11 +669,46 @@ class ProjectData:
             console.error(message=message, error=ValueError)
         return self._local.joinpath(self._session_name, "raw_data")
 
-    def pull_mesoscope_data(self) -> None:
-        # TODO add this method!
-        pass
+    def pull_mesoscope_data(self, num_threads: int = 28) -> None:
+        """Pulls the frames acquired by the Mesoscope from the ScanImage PC to the raw_data directory of the last
+        created session.
 
-    def push_to_destinations(self, parallel: bool = True, num_threads: int = 10):
+        This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
+        before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
+        contains only the frames acquired during the current session runtime, in addition to the MotionEstimator.me and
+        zstack.mat used for motion registration.
+
+        Notes:
+            This method is configured to parallelize data transfer and verification to optimize runtime speeds where
+            possible.
+
+        Args:
+            num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
+                the local machine. Depending on the connection speed between the PCs, it may be useful to set this
+                number to the number of available CPU cores - 4.
+
+        """
+        # The mesoscope path statically points to the mesoscope_frames folder. It is expected that the folder ONLY
+        # contains the frames acquired during this session's runtime. First, generates the checksum for the raw
+        # mesoscope frames
+        calculate_directory_checksum(directory=self._mesoscope, num_processes=None, save_checksum=True)
+
+        # Generates the path to the local session raw_data folder
+        destination = self._local.joinpath(self._session_name, "raw_data")
+
+        # Transfers the mesoscope frames data from the Mesoscope PC to the local machine.
+        transfer_directory(source=self._mesoscope, destination=destination, num_threads=num_threads)
+
+        # Removes the checksum file after the transfer is complete. The checksum will be recalculated for the whole
+        # session directory during preprocessing, so there is no point in keeping the original mesoscope checksum file.
+        destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
+
+        # After the transfer completes successfully (including integrity verification), recreates the mesoscope_frames
+        # folder to clear the transferred images.
+        shutil.rmtree(self._mesoscope)
+        ensure_directory_exists(self._mesoscope)
+
+    def push_to_destinations(self, parallel: bool = True, num_threads: int = 10) -> None:
         """Pushes the raw_data directory of the last created session to the NAS and the SunLab BioHPC server.
 
         This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and

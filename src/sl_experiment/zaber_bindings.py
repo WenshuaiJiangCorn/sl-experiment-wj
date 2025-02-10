@@ -1,5 +1,4 @@
-"""This module provides interfaces for Zaber devices (motors) used to position the mouse headbar and the lickport in
-our Mesoscope-VR setup."""
+"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR setup."""
 
 from zaber_motion import Tools
 from tabulate import tabulate
@@ -1005,7 +1004,7 @@ class ZaberConnection:
         for device in self._devices:
             device.shutdown()
 
-        # Resets the device list, closes the connection and sets the connection tracker to False.
+        # Resets the device list, closes the connection, and sets the connection tracker to False.
         self._devices: list[ZaberDevice] = []
         self._is_connected: bool = False
         self._connection.close()

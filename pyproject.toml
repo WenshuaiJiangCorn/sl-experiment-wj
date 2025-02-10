@@ -45,7 +45,6 @@ dependencies = [
     "click>=8,<9",
     "numpy>=2,<3",
     "numba>=0,<1",
-    "suite2p>=0,<1",
     "matplotlib>=3,<4",
     "ataraxis-time>=3,<4",
     "ataraxis-base-utilities>=3,<4",
@@ -142,8 +141,8 @@ dev = [
 
 # Future support for CLI interface(s) can be realizied through this section.
 [project.scripts]
-#axz-crc = "sl-experiment:calculate_crc"
-#find-axz-devices = "experiment:discover_zaber_devices"
+sl-crc = "sl-experiment:cli:calculate_crc"
+sl-devices = "sl-experiment:cli:list_devices"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

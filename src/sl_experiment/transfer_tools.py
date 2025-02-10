@@ -1,4 +1,4 @@
-"""This module provides methods for moving data between the local machine, the Synology NAS drive and the Sun lab
+"""This module provides methods for moving data between the local machine, the Synology NAS drive, and the Sun lab
 BioHPC cluster.
 """
 
