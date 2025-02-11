@@ -17,6 +17,7 @@ from ataraxis_communication_interface import (
     RepeatedModuleCommand,
 )
 from typing import Any
+from scipy.optimize import curve_fit
 
 
 class EncoderInterface(ModuleInterface):
@@ -853,11 +854,12 @@ class ValveInterface(ModuleInterface):
             the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
-        _microliters_per_microsecond: The conversion factor that maps the valve open time, in microseconds, to the
-            volume of dispensed fluid, in microliters.
-        _intercept; The intercept of the valve calibration curve. This is used to account for the fact that some valves
+        _scale_coefficient: Stores the scale coefficient derived from the calibration data. We use the power law to
+            fit the data, which results in better overall fit than using the linera equation.
+        _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that some valves
             may have a minimum open time or dispensed fluid volume, which is captured by the intercept. This improves
             the precision of fluid-volume-to-valve-open-time conversions.
+        _calibration_cov
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
     """
@@ -890,12 +892,19 @@ class ValveInterface(ModuleInterface):
         pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
         fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
 
-        # Computes the conversion factor by finding the slope and the intercept of the calibration curve.
-        slope: np.float64
-        intercept: np.float64
-        slope, intercept = np.polyfit(pulse_durations, fluid_volumes, deg=1)
-        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=8)
-        self._intercept: np.float64 = np.round(a=intercept, decimals=8)
+        # Defines the power-law model. Our calibration data suggests that the Valve performs in a non-linear fashion
+        # and is better calibrated using the power law, rather than a linear fit
+        def power_law_model(pulse_duration, a, b):
+            return a * np.power(pulse_duration, b)
+
+        # Fits the power-law model to the input calibration data and saves the fit parameters and covariance matrix to
+        # class attributes
+        # noinspection PyTupleAssignmentBalance
+        params, fit_cov_matrix = curve_fit(f=power_law_model, xdata=pulse_durations, ydata=fluid_volumes)
+        scale_coefficient, nonlinearity_exponent = params
+        self._calibration_cov: NDArray[np.float64] = fit_cov_matrix
+        self._scale_coefficient: np.float64 = np.round(a=np.float64(scale_coefficient), decimals=8)
+        self._nonlinearity_exponent: np.float64 = np.round(a=np.float64(nonlinearity_exponent), decimals=8)
 
         # Stores the reward topic separately to make it accessible via property
         self._reward_topic: str = "Gimbl/Reward/"
@@ -1075,14 +1084,23 @@ class ValveInterface(ModuleInterface):
         Returns:
             The microsecond pulse duration that would be used to deliver the specified volume.
         """
-        if target_volume < self._intercept:
+        # Determines the minimum valid pulse duration. We hardcode this at 10 ms as this is the lower calibration
+        # boundary
+        min_pulse_duration = 10.0  # microseconds
+        min_dispensed_volume = self._scale_coefficient * np.power(min_pulse_duration, self._nonlinearity_exponent)
+
+        if target_volume < min_dispensed_volume:
             message = (
                 f"The requested volume {target_volume} uL is too small to be reliably dispensed by the ValveModule "
                 f"{self._module_id}. Specifically, the smallest volume of fluid the valve can reliably dispense is "
-                f"{self._intercept} uL."
+                f"{min_dispensed_volume} uL."
             )
             console.error(message=message, error=ValueError)
-        return np.uint32(np.round(target_volume / self._microliters_per_microsecond + self._intercept))
+
+        # Inverts the power-law calibration to obtain the pulse duration.
+        pulse_duration = (target_volume / self._scale_coefficient) ** (1.0 / self._nonlinearity_exponent)
+
+        return np.uint32(np.round(pulse_duration))
 
     @property
     def mqtt_topic(self) -> str:
@@ -1090,16 +1108,39 @@ class ValveInterface(ModuleInterface):
         return self._reward_topic
 
     @property
-    def microliter_per_microsecond(self) -> np.float64:
-        """Returns the conversion factor to translate valve open time, in microseconds, into the volume of dispensed
-        fluid, in microliters.
+    def scale_coefficient(self) -> np.float64:
+        """Returns the scaling coefficient (A) from the power‐law calibration.
+
+        In the calibration model, fluid_volume = A * (pulse_duration)^B, this coefficient
+        converts pulse duration (in microseconds) into the appropriate fluid volume (in microliters)
+        when used together with the nonlinearity exponent.
         """
-        return self._microliters_per_microsecond
+        return self._scale_coefficient
 
     @property
-    def minimum_dispensed_volume(self) -> np.float64:
-        """Returns the minimum volume that the valve can reliably dispense."""
-        return self._intercept
+    def nonlinearity_exponent(self) -> np.float64:
+        """Returns the nonlinearity exponent (B) from the power‐law calibration.
+
+        In the calibration model, fluid_volume = A * (pulse_duration)^B, this exponent indicates
+        the degree of nonlinearity in how the dispensed volume scales with the valve’s pulse duration.
+        For example, an exponent of 1 would indicate a linear relationship.
+        """
+        return self._nonlinearity_exponent
+
+    @property
+    def calibration_covariance(self) -> np.ndarray:
+        """mReturns the 2x2 covariance matrix associated with the power‐law calibration fit.
+
+        The covariance matrix contains the estimated variances of the calibration parameters
+        on its diagonal (i.e. variance of the scale coefficient and the nonlinearity exponent)
+        and the covariances between these parameters in its off-diagonal elements.
+
+        This information can be used to assess the uncertainty in the calibration.
+
+        Returns:
+            A NumPy array (2x2) representing the covariance matrix.
+        """
+        return self._calibration_cov
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
@@ -1149,14 +1190,15 @@ class ValveInterface(ModuleInterface):
         # when the valve has fully delivered the requested volume of water.
         reward_timestamps = timestamps[falling_edges]
 
-        # Inlines multiple processing steps. For each Open/Close cycle, determines the time difference, in microseconds
-        # between Valve Opening and closing. Then, converts the time the Valve stayed open into the dispensed water
-        # volume, in microliters.
-        volumes = np.round(
-            np.cumsum(
-                (timestamps[falling_edges] - timestamps[falling_edges - 1]).astype(np.float64)
-                * self._microliters_per_microsecond
-            ),
+        # Calculates pulse durations in microseconds for each open-close cycle
+        pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[falling_edges - 1]).astype(
+            np.float64
+        )
+
+        # Converts the time the Valve stayed open into the dispensed water volume, in microliters.
+        # noinspection PyTypeChecker
+        volumes: NDArray[np.float64] = np.round(
+            np.cumsum(self._scale_coefficient * np.power(pulse_durations, self._nonlinearity_exponent)),
             decimals=8,
         )
 

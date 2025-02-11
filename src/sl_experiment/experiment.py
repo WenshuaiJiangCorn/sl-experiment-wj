@@ -827,43 +827,41 @@ def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
             valve.send_pulse()
         elif code == "c1":
             valve.set_parameters(
-                pulse_duration=np.uint32(25000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
-            )  # 25 milliseconds
+                pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+            )  # 15 milliseconds
             valve.calibrate()
         elif code == "c2":
             valve.set_parameters(
-                pulse_duration=np.uint32(50000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
-            )  # 50 milliseconds
+                pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+            )  # 30 milliseconds
             valve.calibrate()
         elif code == "c3":
             valve.set_parameters(
-                pulse_duration=np.uint32(75000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
-            )  # 75 milliseconds
+                pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+            )  # 45 milliseconds
             valve.calibrate()
         elif code == "c4":
             valve.set_parameters(
-                pulse_duration=np.uint32(100000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
-            )  # 100 milliseconds
-            valve.calibrate()
-        elif code == "c5":
-            valve.set_parameters(
-                pulse_duration=np.uint32(125000), calibration_delay=np.uint32(100000), calibration_count=np.uint16(500)
-            )  # 125 milliseconds
+                pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+            )  # 60 milliseconds
             valve.calibrate()
         elif code == "o":
             valve.toggle(state=True)
         elif code == "c":
             valve.toggle(state=False)
-        elif code == "t":
+        elif code == "t":  # Test
             valve.set_parameters(
-                pulse_duration=np.uint32(17841), calibration_delay=np.uint32(100000), calibration_count=np.uint16(1000)
-            )  # 4 ul x 1000 times
+                pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
+            )  # 5 ul x 200 times
             valve.calibrate()
-        elif code.isnumeric():
-            pulse_duration = valve.get_duration_from_volume(float(code))
-            print(pulse_duration)
-            # valve.set_parameters(pulse_duration=pulse_duration)
-            # valve.send_pulse()
+        else:
+            # noinspection PyBroadException
+            try:
+                pulse_duration = valve.get_duration_from_volume(float(code))
+                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.send_pulse()
+            except:
+                print(f"Unknown command: {code}")
 
 
 def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
@@ -884,12 +882,10 @@ def calibration() -> None:
 
     # Defines static assets needed for testing
     valve_calibration_data = (
-        (0, 0),  # Need to add this logical constraint to prevent irrational computations, such as negative intercept
-        (25000, 2.36),
-        (50000, 6.44),
-        (75000, 12.47),
-        (100000, 17.85),
-        (125000, 28.73),
+        (15000, 1.8556),
+        (30000, 3.4844),
+        (45000, 7.1846),
+        (60000, 10.0854),
     )
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)
@@ -929,7 +925,7 @@ def calibration() -> None:
     # _encoder_cli(module, 500, 15)
     # _mesoscope_ttl_cli(module_1, module_2, 10000)
     # _break_cli(module_3)
-    _valve_cli(module_4, 800000)
+    _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
 
     # Shutdown
@@ -938,12 +934,12 @@ def calibration() -> None:
 
     data_logger.compress_logs(remove_sources=True)
 
-    # Checks log parsing
-    # stamps, water = module_4.parse_logged_data()
-    #
-    # print(f"Log data:")
-    # print(f"Timestamps: {stamps}")
-    # print(f"Water: {water}")
+    #Checks log parsing
+    stamps, water = module_4.parse_logged_data()
+
+    print(f"Log data:")
+    print(f"Timestamps: {stamps}")
+    print(f"Water: {water}")
 
 
 if __name__ == "__main__":
