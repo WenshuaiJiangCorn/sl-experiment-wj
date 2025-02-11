@@ -956,14 +956,19 @@ class ValveInterface(ModuleInterface):
 
     def set_parameters(
         self,
-        pulse_duration: np.uint32 = np.uint32(10000),
-        calibration_delay: np.uint32 = np.uint32(10000),
-        calibration_count: np.uint16 = np.uint16(100),
+        pulse_duration: np.uint32 = np.uint32(35590),
+        calibration_delay: np.uint32 = np.uint32(200000),
+        calibration_count: np.uint16 = np.uint16(200),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the ValveModule instance managed by this
         Interface class.
+
+        Note:
+            Default parameters are configured to support 'reference' calibration run. When calibrate() is called with
+            these default parameters, the Valve should deliver ~5 uL of water, which is the value used during Sun lab
+            experiments. If the reference calibration fails, you have to fully recalibrate the valve!
 
         Args:
             pulse_duration: The time, in microseconds, the valve stays open when it is pulsed (opened and closed). This
