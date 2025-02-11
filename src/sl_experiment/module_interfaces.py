@@ -509,6 +509,10 @@ class TTLInterface(ModuleInterface):
             The returned array of timestamps is used as the 'seed' for the interpolation step of data alignment if
             this method is called for the TTLModuleInterface used to monitor mesoscope frame acquisition stamps.
 
+            This parsing code include the 'blip' correction. If the first detected pulse is less than 10 ms duration,
+            the corresponding event is removed from the returned array. This is used to filter the 'blip' associated
+            with starting the mesoscope frame acquisition.
+
         Returns:
             A numpy array that stores the timestamps for the beginning of each HIGH TTL phase event detected by the
             module. The timestamps correspond to the time when the LOW phase translates into the HIGH phase
@@ -552,6 +556,19 @@ class TTLInterface(ModuleInterface):
         # though
         rising_edges = np.where((triggers[:-1] == 0) & (triggers[1:] == 1))[0] + 1
         frame_timestamps = timestamps[rising_edges]
+
+        # Calculate pulse durations by looking ahead to the next falling edge
+        # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
+
+        # Determines the durations of all detected pulses. This is needed to filter out the 'blip' in the mesoscope
+        # frame stamps. The blip pulse is usually under 5 ms, vs a real frame pulse that is ~100 ms, and it happens
+        # at the very beginning of the mesoscope acquisition sequence. Since timestamps alternates rising and falling
+        # edges, rising edge + 1 corresponds to the falling edge of that pulse.
+        pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
+
+        # If the very first recorded pulse has a duration below 10 ms, removes the pulse from the returned array
+        if pulse_durations[0] < 10000:  # The timestamps use microseconds, so the check uses 10000 us
+            frame_timestamps = frame_timestamps[1:]
 
         return frame_timestamps
 
@@ -1195,7 +1212,9 @@ class ValveInterface(ModuleInterface):
         # when the valve has fully delivered the requested volume of water.
         reward_timestamps = timestamps[falling_edges]
 
-        # Calculates pulse durations in microseconds for each open-close cycle
+        # Calculates pulse durations in microseconds for each open-close cycle. Since the original timestamp array
+        # contains alternating HIGH / LOW edges, falling edge - 1 corresponds to the rising edge of that very same
+        # pulse.
         pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[falling_edges - 1]).astype(
             np.float64
         )
@@ -1321,7 +1340,8 @@ class LickInterface(ModuleInterface):
 
         # If the class is initialized in debug mode, prints each received voltage level to the terminal.
         if self._debug:
-            console.echo(f"Lick voltage: {detected_voltage}")
+            console.echo(f"Lick ADC signal: {detected_voltage}")
+
 
         # If the voltage level exceeds the lick threshold, reports it to Unity via MQTT. Threshold is inclusive.
         if detected_voltage >= self._lick_threshold:
@@ -1343,8 +1363,7 @@ class LickInterface(ModuleInterface):
 
     def set_parameters(
         self,
-        lower_threshold: np.uint16 = np.uint16(100),
-        upper_threshold: np.uint16 = np.uint16(4095),
+        signal_threshold: np.uint16 = np.uint16(100),
         delta_threshold: np.uint16 = np.uint16(50),
         averaging_pool_size: np.uint8 = np.uint8(0),
     ) -> None:
@@ -1358,13 +1377,9 @@ class LickInterface(ModuleInterface):
             specific targeted voltages, use get_adc_units_from_volts() method of the interface instance.
 
         Args:
-            lower_threshold: The minimum voltage level, in raw analog units of 12-bit Analog-to-Digital-Converter (ADC),
-                that needs to be reported to the PC. Setting this threshold to a number above zero allows high-pass
-                filtering the incoming signals. Note, the threshold only applies to the rising edge of the signal,
-                going from a high to low value does not respect this threshold.
-            upper_threshold: The maximum voltage level, in raw analog units of 12-bit Analog-to-Digital-Converter (ADC),
-                that needs to be reported to the PC. Setting this threshold to a number below 4095 allows low-pass
-                filtering the incoming signals.
+            signal_threshold: The minimum voltage level, in raw analog units of 12-bit Analog-to-Digital-Converter
+                (ADC), that needs to be reported to the PC. Setting this threshold to a number above zero allows
+                high-pass filtering the incoming signals. Note, Signals below the threshold will be pulled to 0.
             delta_threshold: The minimum value by which the signal has to change, relative to the previous check, for
                 the change to be reported to the PC. Note, if the change is 0, the signal will not be reported to the
                 PC, regardless of this parameter value.
@@ -1376,7 +1391,7 @@ class LickInterface(ModuleInterface):
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(upper_threshold, lower_threshold, delta_threshold, averaging_pool_size),
+            parameter_data=(signal_threshold, delta_threshold, averaging_pool_size),
         )
         self._input_queue.put(message)  # type: ignore
 
@@ -1465,6 +1480,11 @@ class LickInterface(ModuleInterface):
             tongue maintained contact with the lick tube. This may include both the time the tongue physically
             touched the tube and the time there was a conductive fluid bridge between the tongue and the lick tube.
 
+            In addition to filtering out non-lick events, the code also converts multiple consecutive above-threshold or
+            below-threshold readouts into LOW and HIGH epochs. Each HIGH epoch denotes the duration, for that particular
+            lick, that the tongue maintained contact with the sensor. Each LOW epoch denotes the duration between licks
+            that the tongue was not making contact with the sensor.
+
         Returns:
             A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
             elapsed since UTC epoch onset. The second element is a numpy array that stores binary levels denoting the
@@ -1497,8 +1517,20 @@ class LickInterface(ModuleInterface):
         timestamps = timestamps[sort_indices]
         licks = licks[sort_indices]
 
-        # Returns extracted data to caller.
-        return timestamps, licks
+        # Finds indices where lick state changes (either 0->1 or 1->0)
+        state_changes = np.where(licks[:-1] != licks[1:])[0] + 1
+
+        # Extracts the state values and corresponding timestamps for each change
+        state_stamps = timestamps[state_changes]
+        states = licks[state_changes]
+
+        # The transformation above removes the initial lick state (0). Re-adds the initial timestamp and state to
+        # the output array
+        timestamps = np.concatenate(([timestamps[0]], state_stamps))
+        states = np.concatenate(([licks[0]], states))
+
+        # Returns timestamps and states at transition points
+        return timestamps, states
 
 
 class TorqueInterface(ModuleInterface):

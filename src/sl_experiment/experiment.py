@@ -875,6 +875,36 @@ def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
             screen.toggle()
 
 
+def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> None:
+    """Exposes a console-based CLI that interfaces with the TTL module used to receive mesoscope frame acquisition
+    timestamps sent by the ScanImage PC.
+    """
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "b":  # Start / Begin
+            frame_watcher.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "e":  # Stop / End
+            frame_watcher.reset_command_queue()
+
+
+def _lick_cli(
+    lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int
+) -> None:
+    """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "b":  # Start / Begin
+            lick.set_parameters(
+                signal_threshold=np.uint16(signal_threshold),
+                delta_threshold=np.uint16(delta_threshold),
+            )
+            lick.check_state(repetition_delay=np.uint32(polling_delay))
+
+
 def calibration() -> None:
     # Output dir
     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
@@ -904,11 +934,14 @@ def calibration() -> None:
     module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
     module_5 = ScreenInterface(initially_on=False, debug=True)
 
+    module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
+    module_11 = LickInterface(debug=True)
+
     # Tested AMC interface
     interface = MicroControllerInterface(
-        controller_id=actor_id,
+        controller_id=sensor_id,
         data_logger=data_logger,
-        module_interfaces=(module_4,),
+        module_interfaces=(module_11,),
         microcontroller_serial_buffer_size=8192,
         microcontroller_usb_port=usb,
         baudrate=115200,
@@ -925,8 +958,10 @@ def calibration() -> None:
     # _encoder_cli(module, 500, 15)
     # _mesoscope_ttl_cli(module_1, module_2, 10000)
     # _break_cli(module_3)
-    _valve_cli(module_4, 35590)
+    # _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
+    # _mesoscope_frames_cli(module_10, 500)
+    _lick_cli(module_11, 500, 100, 100)
 
     # Shutdown
     interface.stop()
@@ -934,12 +969,12 @@ def calibration() -> None:
 
     data_logger.compress_logs(remove_sources=True)
 
-    #Checks log parsing
-    stamps, water = module_4.parse_logged_data()
+    # Checks log parsing
+    stamps, licks = module_11.parse_logged_data()
 
     print(f"Log data:")
     print(f"Timestamps: {stamps}")
-    print(f"Water: {water}")
+    print(f"Licks: {licks}")
 
 
 if __name__ == "__main__":
