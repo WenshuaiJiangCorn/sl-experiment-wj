@@ -1050,7 +1050,7 @@ def calibration() -> None:
     module_5 = ScreenInterface(initially_on=False, debug=True)
 
     module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
-    module_11 = LickInterface(debug=True)
+    module_11 = LickInterface(debug=True, lick_threshold=1000)
 
     # Tested AMC interface
     interface = MicroControllerInterface(
@@ -1076,7 +1076,7 @@ def calibration() -> None:
     # _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
-    _lick_cli(module_11, 500, 100, 100)
+    _lick_cli(module_11, 500, 200, 150)
 
     # Shutdown
     interface.stop()

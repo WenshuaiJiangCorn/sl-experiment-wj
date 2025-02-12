@@ -1362,9 +1362,9 @@ class LickInterface(ModuleInterface):
 
     def set_parameters(
         self,
-        signal_threshold: np.uint16 = np.uint16(100),
-        delta_threshold: np.uint16 = np.uint16(50),
-        averaging_pool_size: np.uint8 = np.uint8(0),
+        signal_threshold: np.uint16 = np.uint16(200),
+        delta_threshold: np.uint16 = np.uint16(180),
+        averaging_pool_size: np.uint8 = np.uint8(30),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the LickModule instance.
 
