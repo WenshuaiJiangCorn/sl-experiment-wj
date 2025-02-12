@@ -1342,7 +1342,6 @@ class LickInterface(ModuleInterface):
         if self._debug:
             console.echo(f"Lick ADC signal: {detected_voltage}")
 
-
         # If the voltage level exceeds the lick threshold, reports it to Unity via MQTT. Threshold is inclusive.
         if detected_voltage >= self._lick_threshold:
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,

@@ -19,7 +19,15 @@ from ataraxis_base_utilities import console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
-from ataraxis_video_system import VideoSystem
+from ataraxis_video_system import (
+    VideoSystem,
+    CameraBackends,
+    VideoFormats,
+    VideoCodecs,
+    GPUEncoderPresets,
+    InputPixelFormats,
+    OutputPixelFormats,
+)
 from transfer_tools import transfer_directory
 from packaging_tools import calculate_directory_checksum
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -39,53 +47,73 @@ class MesoscopeExperiment:
 
     Notes:
         Calling the initializer does not start the underlying processes. Use start() method before issuing other
-        commands to properly initialize all remote processes. In the current configuration, this class reserves ~10
+        commands to properly initialize all remote processes. In the current configuration, this class reserves ~11
         CPU cores during runtime.
+
+        See 'axtl-ports' cli command from the ataraxis-transport-layer-pc library if you need help discovering the
+        USB ports used by Ataraxis Micro Controller (AMC) devices.
+
+        See 'axvs-ids' cli command from ataraxis-video-system if you need help discovering the camera indices used by
+        the Harvesters-managed and OpenCV-managed cameras.
+
+        See 'sl-devices' cli command from this library if you need help discovering the serial ports used by the Zaber
+        motion controllers.
 
     Args:
         output_directory: The directory where all experiment data should be saved. Typically, this is the output of the
             ProjectData class create_session() method.
-        screens_off: Determines whether the VR screens are OFF or ON when this class is called. This is used to
-            determine the initial state of the VR screens, which is essential for this class to be able to track the
-            state of the VR screens during runtime.
+        screens_on: Determines whether the VR screens are ON when this class is initialized. Since there is no way of
+            getting this information via hardware, the initial screen state has to be supplied by the user as an
+            argument. The class will manage and track the state after initialization.
         experiment_state: The integer code that represents the initial state of the experiment. Experiment state codes
             are used to mark different stages of each experiment (such as setup, rest, task 1, task 2, etc.). During
             analysis, these codes can be used to segment experimental data into sections.
         actor_port: The USB port used by the actor Microcontroller.
         sensor_port: The USB port used by the sensor Microcontroller.
         encoder_port: The USB port used by the encoder Microcontroller.
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is teh volume of dispensed water, in
-            microliters. It is expected that the valve will be frequently replaced and recalibrated, so this parameter
-            is kept addressable.
         unity_ip: The IP address of the MQTT broker used to communicate with Unity game engine.
         unity_port: The port number of the MQTT broker used to communicate with Unity game engine.
+        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
+            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
+            microliters.
+        face_camera_index: The index of the face camera in the list of all available Harvester-managed cameras.
+        left_camera_index: The index of the left camera in the list of all available OpenCV-managed cameras.
+        right_camera_index: The index of the right camera in the list of all available OpenCV-managed cameras.
 
     Attributes:
-        _started: A flag indicating whether the VR system and experiment runtime are currently running.
-        _amc_logger: A DataLogger instance that collects data from all microcontrollers.
-        _mesoscope_trigger: The interface that triggers Mesoscope frame acquisition via TTL signaling.
+        _started: Tracks whether the VR system and experiment runtime are currently running.
+        _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
+            cameras, and the MesoscopeExperiment instance.
+        _mesoscope_start: The interface that starts Mesoscope frame acquisition via TTL pulse.
+        _mesoscope_stop: The interface that stops Mesoscope frame acquisition via TTL pulse.
         _break: The interface that controls the electromagnetic break attached to the running wheel.
-        _reward: The interface that controls the solenoid water valve to deliver water rewards to the animal.
-        _screens: The interface that allows turning VR displays on and off.
-        _actor: The main actor AMC interface.
-        _mesoscope_frame: The interface that receives frame acquisition timestamp signals from the Mesoscope.
-        _lick: The interface that monitors and records animal's interactions with the lick sensor.
-        _torque: The interface that monitors and records the torque applied by the animal to the running wheel.
-        _sensor: The main sensor AMC interface.
+        _reward: The interface that controls the solenoid water valve that delivers water to the animal.
+        _screens: The interface that controls the power state of the VR display screens.
+        _actor: The main interface for the 'Actor' Ataraxis Micro Controller (AMC) device.
+        _mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the Mesoscope.
+        _lick: The interface that monitors animal's interactions with the lick sensor (detects licks).
+        _torque: The interface that monitors the torque applied by the animal to the running wheel.
+        _sensor: The main interface for the 'Sensor' Ataraxis Micro Controller (AMC) device.
         _wheel_encoder: The interface that monitors the rotation of the running wheel and converts it into the distance
             traveled by the animal.
-        _encoder: The main encoder AMC interface.
-        _screen_off: Tracks whether the VR displays are currently ON or OFF.
-        _mesoscope_off: Tracks whether the mesoscope is currently acquiring images.
+        _encoder: The main interface for the 'Encoder' Ataraxis Micro Controller (AMC) device.
+        _unity: The interface used to directly communicate with the Unity game engine (Gimbl) via the MQTT. Consider
+            this the Unity binding interface.
+        _face-camera: The interface that captures and saves the frames acquired by the 9MP scientific camera aimed at
+            the animal's face and eye from the left side (via a hot mirror).
+        _left_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
+            the left side of the animal and the right and center VR screens.
+        _right_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
+            the right side of the animal and the left VR screen.
+        _screen_on: Tracks whether the VR displays are currently ON.
+        _mesoscope_on: Tracks whether the mesoscope is currently acquiring images.
         _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _state_map: Maps the integer state-codes used to represent VR system states to human-readable string-names.
         _experiment_state: Stores the user-defined experiment state. Experiment states are defined by the user and
             are expected to be unique for each project and, potentially, experiment. Different experiment states can
             reuse the same VR state.
-        _timestamp-timer: A PrecisionTimer instance used to timestamp log entries generated by the experiment class
-            instance.
+        _timestamp-timer: A PrecisionTimer instance used to timestamp log entries generated by the class instance.
 
     Raises:
         TypeError: If any of the arguments are not of the expected type.
@@ -97,28 +125,34 @@ class MesoscopeExperiment:
     def __init__(
         self,
         output_directory: Path,
-        screens_off: bool,
+        screens_on: bool,
         experiment_state: int = 0,
         actor_port: str = "/dev/ttyACM0",
         sensor_port: str = "/dev/ttyACM1",
         encoder_port: str = "/dev/ttyACM2",
         unity_ip: str = "127.0.0.1",
         unity_port: int = 1883,
-        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = ((10, 10),),
+        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
+            (15000, 1.8556),
+            (30000, 3.4844),
+            (45000, 7.1846),
+            (60000, 10.0854),
+        ),
         face_camera_index: int = 0,
         left_camera_index: int = 0,
         right_camera_index: int = 1,
+        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
     ) -> None:
-        # As with other pipelines that use intelligent resource termination, presets the _started flags first to avoid
+        # As with other pipelines that use intelligent resource termination, presets the _started flag first to avoid
         # leaks if the initialization method fails.
         self._started: bool = False
 
         # Defines other flags used during runtime:
-        self._screen_off = screens_off
-        self._mesoscope_off = True  # Expects the mesoscope to NOT be acquiring images
+        self._screen_on: bool = screens_on  # Usually this would be false, but this is not guaranteed
+        self._mesoscope_on: bool = False  # Since we start mesoscope via ttl triggers, it should be off at this point
         self._vr_state: int = 0  # Stores the current state of the VR system
-        self._experiment_state = experiment_state  # Stores user-defined experiment state
-        self._timestamp_timer = PrecisionTimer("us")  # A timer to log changes to VR and Experiment states
+        self._experiment_state: int = experiment_state  # Stores user-defined experiment state
+        self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp local log entries
 
         # Input verification:
         if not isinstance(output_directory, Path):
@@ -139,45 +173,52 @@ class MesoscopeExperiment:
 
         if not isinstance(valve_calibration_data, tuple) or not all(
             isinstance(item, tuple)
-            and len(item)
+            and len(item) == 2
             and isinstance(item[0], (int, float))
-            and isinstance(item[1], (int, float)) == 2
+            and isinstance(item[1], (int, float))
             for item in valve_calibration_data
         ):
             message = (
                 f"Unable to initialize the MesoscopeExperiment class. Expected a tuple of 2-element tuples with "
                 f"integer or float values for 'valve_calibration_data' argument, but instead encountered "
-                f"{valve_calibration_data} of type {type(valve_calibration_data).__name__}."
+                f"{valve_calibration_data} of type {type(valve_calibration_data).__name__} with at least one "
+                f"incompatible element."
             )
             console.error(message=message, error=TypeError)
 
-        # The rest of the arguments are verified directly by the Communication and Interface classes.
-
-        # Initializes the microcontroller data logger. This datalogger works exclusively with microcontroller-generated
-        # data and aggregates the data streams for all used microcontrollers.
-        self._amc_logger: DataLogger = DataLogger(output_directory=output_directory, instance_name="amc", sleep_timer=0)
+        # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers and this
+        # class instance.
+        self._logger: DataLogger = DataLogger(
+            output_directory=output_directory,
+            instance_name="behavior",
+            sleep_timer=0,
+            exist_ok=True,
+            process_count=1,
+            thread_count=10,
+        )
 
         # ACTOR. Actor AMC controls the hardware that needs to be triggered by PC at irregular intervals. Most of such
         # hardware is designed to produce some form of an output: deliver water reward, engage wheel breaks, issue a
         # TTL trigger, etc.
 
         # Module interfaces:
-        self._mesoscope_trigger: TTLInterface = TTLInterface()  # Mesoscope trigger
+        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1))  # Mesoscope acquisition start
+        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2))  # Mesoscope acquisition stop
         self._break = BreakInterface(
             minimum_break_strength=43.2047,  # 0.6 in oz
             maximum_break_strength=1152.1246,  # 16 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
         )  # Wheel break
         self._reward = ValveInterface(valve_calibration_data=valve_calibration_data)  # Reward solenoid valve
-        self._screens = ScreenInterface()  # VR Display On/Off switch
+        self._screens = ScreenInterface(initially_on=screens_on)  # VR Display On/Off switch
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=actor_port,
-            data_logger=self._amc_logger,
-            module_interfaces=(self._mesoscope_trigger, self._break, self._reward, self._screens),
+            data_logger=self._logger,
+            module_interfaces=(self._mesoscope_start, self._mesoscope_stop, self._break, self._reward, self._screens),
             mqtt_broker_ip=unity_ip,
             mqtt_broker_port=unity_port,
         )
@@ -187,11 +228,11 @@ class MesoscopeExperiment:
         # logic to maintain the necessary precision.
 
         # Module interfaces:
-        self._mesoscope_frame: TTLInterface = TTLInterface()  # Mesoscope frame timestamp recorder
-        self._lick: LickInterface = LickInterface(lick_threshold=200)  # Main lick sensor
+        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1))  # Mesoscope frame timestamp recorder
+        self._lick: LickInterface = LickInterface(lick_threshold=200)  # Lick sensor
         self._torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
-            maximum_voltage=4095,  # ~3.3 V  # TODO adjust based on calibration data
+            maximum_voltage=4095,  # ~3.3 V
             sensor_capacity=720.0779,  # 10 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
         )  # Wheel torque sensor
@@ -201,7 +242,7 @@ class MesoscopeExperiment:
             controller_id=np.uint8(152),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=sensor_port,
-            data_logger=self._amc_logger,
+            data_logger=self._logger,
             module_interfaces=(self._mesoscope_frame, self._lick, self._torque),
             mqtt_broker_ip=unity_ip,
             mqtt_broker_port=unity_port,
@@ -221,18 +262,94 @@ class MesoscopeExperiment:
             controller_id=np.uint8(203),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=encoder_port,
-            data_logger=self._amc_logger,
+            data_logger=self._logger,
             module_interfaces=(self._wheel_encoder,),
             mqtt_broker_ip=unity_ip,
             mqtt_broker_port=unity_port,
         )
 
         # Also instantiates a separate MQTTCommunication instance to directly communicate with Unity. Primarily, this
-        # is used to support direct VR screen manipulation (for example, to black them out) and to collect data
-        # generated by unity, such as the sequence of VR corridors.
+        # is used to collect data generated by unity, such as the sequence of VR corridors.
         monitored_topics = ("CueSequence/",)
         self._unity: MQTTCommunication = MQTTCommunication(
             ip=unity_ip, port=unity_port, monitored_topics=monitored_topics
+        )
+
+        # FACE CAMERA. This is the high-grade scientific camera aimed at the animal's face using the hot-mirror. It is
+        # a 10-gigabit 9MP camera with a red long-pass filter and has to be interfaced through the GeniCam API. Since
+        # the VRPC has a 4090 with 2 hardware acceleration chips, we are using the GPU to save all of our frame data.
+        self._face_camera: VideoSystem = VideoSystem(
+            system_id=np.uint8(51),
+            data_logger=self._logger,
+            output_directory=output_directory,
+            harvesters_cti_path=harvesters_cti_path,
+        )
+        self._face_camera.add_camera(
+            save_frames=True,
+            camera_index=face_camera_index,
+            camera_backend=CameraBackends.HARVESTERS,
+            output_frames=False,
+            display_frames=True,
+            display_frame_rate=25,
+            acquisition_frame_rate=60,
+        )
+        self._face_camera.add_video_saver(
+            hardware_encoding=True,
+            video_format=VideoFormats.MP4,
+            video_codec=VideoCodecs.H265,
+            preset=GPUEncoderPresets.FAST,
+            input_pixel_format=InputPixelFormats.MONOCHROME,
+            output_pixel_format=OutputPixelFormats.YUV420,
+            quantization_parameter=30,
+        )
+
+        # LEFT CAMERA. A 1080P security camera mounted on the left side from the mouse's perspective (viewing left side
+        # of the mouse and the right screen). This camera is interfaced with through the OpenCV backend.
+        self._left_camera: VideoSystem = VideoSystem(
+            system_id=np.uint8(62), data_logger=self._logger, output_directory=output_directory
+        )
+        self._left_camera.add_camera(
+            save_frames=True,
+            camera_index=left_camera_index,
+            camera_backend=CameraBackends.OPENCV,
+            output_frames=False,
+            display_frames=True,
+            display_frame_rate=25,
+            acquisition_frame_rate=25,
+            color=False,
+        )
+        self._left_camera.add_video_saver(
+            hardware_encoding=True,
+            video_format=VideoFormats.MP4,
+            video_codec=VideoCodecs.H265,
+            preset=GPUEncoderPresets.FASTER,
+            input_pixel_format=InputPixelFormats.MONOCHROME,
+            output_pixel_format=OutputPixelFormats.YUV420,
+            quantization_parameter=30,
+        )
+
+        # RIGHT CAMERA. Same as the left camera, but mounted on the right side from the mouse's perspective.
+        self._right_camera: VideoSystem = VideoSystem(
+            system_id=np.uint8(73), data_logger=self._logger, output_directory=output_directory
+        )
+        self._right_camera.add_camera(
+            save_frames=True,
+            camera_index=right_camera_index,  # The only difference between left and right cameras.
+            camera_backend=CameraBackends.OPENCV,
+            output_frames=False,
+            display_frames=True,
+            display_frame_rate=25,
+            acquisition_frame_rate=25,
+            color=False,
+        )
+        self._right_camera.add_video_saver(
+            hardware_encoding=True,
+            video_format=VideoFormats.MP4,
+            video_codec=VideoCodecs.H265,
+            preset=GPUEncoderPresets.FASTER,
+            input_pixel_format=InputPixelFormats.MONOCHROME,
+            output_pixel_format=OutputPixelFormats.YUV420,
+            quantization_parameter=30,
         )
 
     def __del__(self) -> None:
@@ -242,14 +359,14 @@ class MesoscopeExperiment:
     def start(self) -> None:
         """Sets up all assets used to support realtime experiment control and data acquisition.
 
-        This method establishes the communication with the microcontrollers, data logger cores, and video system
-        processes. Until this method is called, the instance will not be able to carry out any commands, as it will not
-        have access to the necessary resources.
+        This method establishes the communication with the microcontrollers, data logger cores, video system processes,
+        and zaber controller devices. Until this method is called, the instance will not be able to carry out any
+        commands, as it will not have access to the necessary resources.
 
         Notes:
              This process will not execute unless the host PC has access to the necessary number of logical CPU cores
-             and any other hardware resources. This prevents using the class on machines that are unlikely to sustain
-             the runtime requirements.
+             and other required hardware resources (GPU for video encoding, etc.). This prevents using the class on
+             machines that are unlikely to sustain the runtime requirements.
 
         Raises:
             RuntimeError: If the host PC does not have enough logical CPU cores available.
@@ -259,29 +376,22 @@ class MesoscopeExperiment:
         if self._started:
             return
 
-        # 3 cores for microcontrollers, 2 cores for data loggers, 3 cores for the current video_system
-        # configuration (2 producers, 1 consumer), 1 core for the central process calling this method. 9 cores
+        # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
+        # configuration (3 producers, 3 consumer), 1 core for the central process calling this method. 11 cores
         # total.
-        if not os.cpu_count() >= 9:
+        if not os.cpu_count() >= 11:
             message = (
-                f"Unable to start the MesoscopeExperiment runtime. The host PC must have at least 9 logical CPU "
+                f"Unable to start the MesoscopeExperiment runtime. The host PC must have at least 11 logical CPU "
                 f"cores available for this class to work as expected, but only {os.cpu_count()} cores are "
                 f"available."
             )
             console.error(message=message, error=RuntimeError)
 
-        # Ensures that shared memory buffers used by the managed classes are available for instantiation
-        self._amc_logger._vacate_shared_memory_buffer()
-        self._actor.vacate_shared_memory_buffer()
-        self._sensor.vacate_shared_memory_buffer()
-        self._encoder.vacate_shared_memory_buffer()
-
         # Starts the data logger
-        self._amc_logger.start()
+        self._logger.start()
 
         # Generates and logs the onset timestamp for the VR system as a whole. The MesoscopeExperiment class logs
-        # changes to VR and Experiment state during runtime. Since we maintain two logs, one for microcontroller data
-        # and one for video data, this information is saved to both log files:
+        # changes to VR and Experiment state during runtime.
 
         # Constructs a timezone-aware stamp using UTC time. This creates a reference point for all later delta time
         # readouts. The time is returned as an array of bytes.
@@ -289,31 +399,52 @@ class MesoscopeExperiment:
         self._timestamp_timer.reset()  # Immediately resets the timer to make it as close as possible to the onset time
 
         # Logs the onset timestamp. All further timestamps will be treated as integer time deltas (in microseconds)
-        # relative to the onset timestamp. Note, ID of 0 is used to mark the main experiment system.
-        package = LogPackage(0, 0, onset)  # Packages the id, timestamp, and data.
-        self._amc_logger.input_queue.put(package)
+        # relative to the onset timestamp. Note, ID of 1 is used to mark the main experiment system.
+        package = LogPackage(np.uint8(1), np.uint8(0), onset)  # Packages the id, timestamp, and data.
+        self._logger.input_queue.put(package)
 
-        # TODO ADD VS SECTION HERE
+        # Starts all video systems. Note, this initializes frame acquisition, but not saving. Frame saving is controlled
+        # via MesoscopeExperiment methods.
+        self._face_camera.start()
+        self._left_camera.start()
+        self._right_camera.start()
 
         # Starts all microcontroller interfaces
         self._actor.start()
         self._actor.unlock_controller()  # Only Actor outputs data, so no need to unlock other controllers.
         self._sensor.start()
         self._encoder.start()
-        self._unity.connect()  # Also connects to the Unity communication channels.
+        self._unity.connect()  # Directly connects to some Unity communication channels.
 
-        # Engages the modules that need to stay on during the entire experiment duration:
+        # CConfigures the encoder to only report forward motion (CW) if the motion exceeds ~ 1 mm of distance.
+        self._wheel_encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=15)
 
-        # The mesoscope acquires frames at ~10 Hz and sends triggers with the on-phase duration of ~50 ms, so a
-        # 100 Hz polling frequency should be enough to detect all triggers.
-        # noinspection PyTypeChecker
-        self._sensor.send_message(self._mesoscope_frame.check_state(repetition_delay=np.uint32(10000)))
+        # Configures mesoscope start and stop triggers to use 10 ms pulses
+        self._mesoscope_start.set_parameters(pulse_duration=np.uint32(10000))
+        self._mesoscope_stop.set_parameters(pulse_duration=np.uint32(10000))
 
-        # Starts monitoring licks. Uses 100 Hz polling frequency, since mice are expected to lick at ~10 Hz rate.
-        # This resolution should be sufficient to resolve individual licks of variable duration and lick bouts
-        # (bursts).
-        # noinspection PyTypeChecker
-        self._sensor.send_message(self._lick.check_state(repetition_delay=np.uint32(10000)))
+        # Configures screen trigger to use 500 ms pulses
+        self._screens.set_parameters(pulse_duration=np.uint32(500000))
+
+        # Configures the water valve to deliver ~ 5 uL of water. Also configures the valve calibration method to run the
+        # 'reference' calibration for 5 uL rewards used to verify the valve calibration before every experiment.
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )
+
+        # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
+        # (used as a proxy for detecting licks).
+        self._lick.set_parameters(
+            signal_threshold=np.uint16(200), delta_threshold=np.uint16(100), averaging_pool_size=np.uint8(0)
+        )
+
+        # The mesoscope acquires frames at ~10 Hz and sends triggers with the on-phase duration of ~100 ms. We use a
+        # polling frequency of ~1000 Hz here to ensure frame acquisition times are accurately detected.
+        self._mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
+
+        # Starts monitoring licks. Uses 1000 Hz polling frequency, which should be enough to resolve individual
+        # licks of variable duration.
+        self._lick.check_state(repetition_delay=np.uint32(1000))
 
         # Sets up other VR systems according to REST state specifications.
         self.vr_rest()
@@ -340,7 +471,7 @@ class MesoscopeExperiment:
         self.vr_rest()
 
         # If the mesoscope is still acquiring images, ensures frame acquisition is disabled.
-        if not self._mesoscope_off:
+        if not self._mesoscope_on:
             self.mesoscope_off()
             timer.delay_noblock(2)  # Delays for 2 seconds. This ensures all mesoscope frame triggers are received.
 
@@ -357,14 +488,14 @@ class MesoscopeExperiment:
         timer.delay_noblock(2)
 
         # Stops all interfaces
-        self._amc_logger.stop()
+        self._logger.stop()
         self._actor.stop()
         self._sensor.stop()
         self._encoder.stop()
 
         # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
         # allow parsing the data.
-        self._amc_logger.compress_logs(remove_sources=True, verbose=True)
+        self._logger.compress_logs(remove_sources=True, verbose=True)
         # TODO ADD VS SECTION HERE
 
     def vr_rest(self) -> None:
@@ -376,26 +507,22 @@ class MesoscopeExperiment:
         """
 
         # Engages the break to prevent the mouse from moving the wheel
-        # noinspection PyTypeChecker
-        self._actor.send_message(self._break.toggle(True))
+        self._break.toggle(state=True)
 
         # Initiates torque monitoring at 100 Hz. The torque can only be accurately measured when the wheel is locked,
         # as it requires a resistance force to trigger the sensor. Since we downsample all data to the mesoscope
         # acquisition rate of ~10 Hz, and do not use torque data in real time, the sampling rate is seto to a 100 Hz.
-        # noinspection PyTypeChecker
-        self._sensor.send_message(self._torque.check_state(repetition_delay=np.uint32(10000)))
+        self._torque.check_state(repetition_delay=np.uint32(10000))  # TODO adjust
 
         # Temporarily suspends encoder monitoring. Since the wheel is locked, the mouse should not be able to produce
         # meaningful motion data.
-        # noinspection PyTypeChecker
-        self._encoder.send_message(self._wheel_encoder.dequeue_command)
+        self._wheel_encoder.reset_command_queue()
 
         # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
         # keeps them OFF.
-        if not self._screen_off:
-            # noinspection PyTypeChecker
-            self._actor.send_message(self._screens.toggle())
-            self._screen_off = True
+        if self._screen_on:
+            self._screens.toggle()
+            self._screen_on = False
 
         # Configures the state tracker to reflect REST state
         self._change_vr_state(1)
@@ -408,65 +535,53 @@ class MesoscopeExperiment:
         switched on to render the VR environment.
         """
 
-        # Initializes encoder monitoring at 1 kHz rate. The encoder aggregates wheel data at native speeds; this rate
+        # Initializes encoder monitoring at 2 kHz rate. The encoder aggregates wheel data at native speeds; this rate
         # only determines how often the aggregated data is sent to PC and Unity.
-        # noinspection PyTypeChecker
-        self._encoder.send_message(self._wheel_encoder.check_state(repetition_delay=np.uint32(1000)))
+        self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
 
         # Disables torque monitoring. To accurately measure torque, the sensor requires a resistance force provided by
-        # the break. During running, measuring torque is not very reliable and adds little in addition to the
+        # the break. During running, measuring torque is not very reliable and adds little value compared to the
         # encoder.
-        # noinspection PyTypeChecker
-        self._sensor.send_message(self._torque.dequeue_command)
+        self._torque.reset_command_queue()
 
         # Disengages the break to allow the mouse to move the wheel
-        # noinspection PyTypeChecker
-        self._actor.send_message(self._break.toggle(False))
+        self._break.toggle(False)
 
         # Toggles the state of the VR screens to be ON if the VR screens are currently OFF. If the screens are ON,
         # keeps them ON.
-        if self._screen_off:
-            # noinspection PyTypeChecker
-            self._actor.send_message(self._screens.toggle())
-            self._screen_off = False
+        if not self._screen_on:
+            self._screens.toggle()
+            self._screen_on = True
 
         # Configures the state tracker to reflect RUN state
         self._change_vr_state(2)
 
     def mesoscope_on(self) -> None:
-        """Instructs the mesoscope to continuously acquire frames.
+        """Instructs the mesoscope to start acquiring images.
 
         Notes:
             This relies on the ScanImage being configured to recognize and accept triggers via TTL and for the
-            ScanImage to be armed before receiving the trigger.
+            ScanImage to be armed (external triggers being enabled) before receiving the trigger.
         """
-
-        # Toggles the mesoscope acquisition trigger to continuously deliver a HIGH signal. The mesoscope will
-        # continuously acquire frames as long as the trigger is HIGH.
-        if self._mesoscope_off:  # Guards against multiple start calls.
-            # noinspection PyTypeChecker
-            self._actor.send_message(self._mesoscope_trigger.toggle(True))
-            self._mesoscope_off = False
+        if self._mesoscope_on:  # Guards against multiple start calls.
+            self._mesoscope_start.send_pulse()
+            self._mesoscope_on = True
 
     def mesoscope_off(self) -> None:
         """Instructs the mesoscope to stop acquiring frames.
 
         Notes:
             This relies on the ScanImage being configured to recognize and accept triggers via TTL and for the
-            ScanImage to be armed before receiving the trigger.
+            ScanImage to be armed (external triggers being enabled) before receiving the trigger.
         """
-
-        # Toggles the mesoscope acquisition trigger to continuously deliver a LOW signal. When the trigger is LOW,
-        # the mesoscope will not acquire frames.
-        if not self._mesoscope_off:
-            # noinspection PyTypeChecker
-            self._actor.send_message(self._mesoscope_trigger.toggle(False))
-            self._mesoscope_off = True
+        if not self._mesoscope_on:
+            self._mesoscope_stop.send_pulse()
+            self._mesoscope_on = False
 
     @property
     def mesoscope_state(self) -> bool:
-        """Returns True if the mesoscope is currently acquiring frames, False otherwise."""
-        return self._mesoscope_off
+        """Returns True if the mesoscope has been instructed to acquire frames, False otherwise."""
+        return self._mesoscope_on
 
     @property
     def vr_state(self) -> str:
@@ -483,10 +598,11 @@ class MesoscopeExperiment:
         # Logs the VR state update
         timestamp = self._timestamp_timer.elapsed
         log_package = LogPackage(
-            source_id=0, time_stamp=timestamp, serialized_data=np.array([new_state], dtype=np.uint8)
+            source_id=np.uint8(1),
+            time_stamp=np.uint64(timestamp),
+            serialized_data=np.array([new_state], dtype=np.uint8),
         )
-        self._amc_logger.input_queue.put(log_package)
-        # TODO Add VS logger
+        self._logger.input_queue.put(log_package)
 
     @property
     def experiment_state(self) -> int:
@@ -496,18 +612,19 @@ class MesoscopeExperiment:
     def change_experiment_state(self, new_state: int) -> None:
         """Updates the experiment state tracker and logs the change to the experiment state.
 
-        Use this method to timestamp and log experiment state (stage) changes. The state change is logged to both the
-        amc and the video loggers.
+        Use this method to timestamp and log experiment state (stage) changes, such as transitioning between different
+        task versions.
         """
         self._experiment_state = new_state  # Updates the Experiment state
 
         # Logs the VR state update
         timestamp = self._timestamp_timer.elapsed
         log_package = LogPackage(
-            source_id=0, time_stamp=timestamp, serialized_data=np.array([new_state], dtype=np.uint8)
+            source_id=np.uint8(1),
+            time_stamp=np.uint64(timestamp),
+            serialized_data=np.array([new_state], dtype=np.uint8),
         )
-        self._amc_logger.input_queue.put(log_package)
-        # TODO Add VS logger`
+        self._logger.input_queue.put(log_package)
 
 
 class ProjectData:
@@ -889,9 +1006,7 @@ def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> No
             frame_watcher.reset_command_queue()
 
 
-def _lick_cli(
-    lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int
-) -> None:
+def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int) -> None:
     """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
     while True:
         code = input()  # Sneaky UI
