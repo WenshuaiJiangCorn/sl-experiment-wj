@@ -509,7 +509,7 @@ class TTLInterface(ModuleInterface):
             The returned array of timestamps is used as the 'seed' for the interpolation step of data alignment if
             this method is called for the TTLModuleInterface used to monitor mesoscope frame acquisition stamps.
 
-            This parsing code include the 'blip' correction. If the first detected pulse is less than 10 ms duration,
+            This parsing code includes the 'blip' correction. If the first detected pulse is less than 10 ms duration,
             the corresponding event is removed from the returned array. This is used to filter the 'blip' associated
             with starting the mesoscope frame acquisition.
 
@@ -561,7 +561,7 @@ class TTLInterface(ModuleInterface):
         # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
 
         # Determines the durations of all detected pulses. This is needed to filter out the 'blip' in the mesoscope
-        # frame stamps. The blip pulse is usually under 5 ms, vs a real frame pulse that is ~100 ms, and it happens
+        # frame stamps. The blip pulse is usually under 5 ms, vs. a real frame pulse that is ~100 ms, and it happens
         # at the very beginning of the mesoscope acquisition sequence. Since timestamps alternates rising and falling
         # edges, rising edge + 1 corresponds to the falling edge of that pulse.
         pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
@@ -873,9 +873,9 @@ class ValveInterface(ModuleInterface):
     Attributes:
         _scale_coefficient: Stores the scale coefficient derived from the calibration data. We use the power law to
             fit the data, which results in better overall fit than using the linera equation.
-        _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that some valves
-            may have a minimum open time or dispensed fluid volume, which is captured by the intercept. This improves
-            the precision of fluid-volume-to-valve-open-time conversions.
+        _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that
+            some valves may have a minimum open time or dispensed fluid volume, which is captured by the intercept.
+            This improves the precision of fluid-volume-to-valve-open-time conversions.
         _calibration_cov
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
@@ -1119,7 +1119,7 @@ class ValveInterface(ModuleInterface):
             )
             console.error(message=message, error=ValueError)
 
-        # Inverts the power-law calibration to obtain the pulse duration.
+        # Inverts the power-law calibration to get the pulse duration.
         pulse_duration = (target_volume / self._scale_coefficient) ** (1.0 / self._nonlinearity_exponent)
 
         return np.uint32(np.round(pulse_duration))
@@ -1154,7 +1154,7 @@ class ValveInterface(ModuleInterface):
         """mReturns the 2x2 covariance matrix associated with the power‐law calibration fit.
 
         The covariance matrix contains the estimated variances of the calibration parameters
-        on its diagonal (i.e. variance of the scale coefficient and the nonlinearity exponent)
+        on its diagonal (i.e., variance of the scale coefficient and the nonlinearity exponent)
         and the covariances between these parameters in its off-diagonal elements.
 
         This information can be used to assess the uncertainty in the calibration.
