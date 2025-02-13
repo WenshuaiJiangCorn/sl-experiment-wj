@@ -1270,7 +1270,7 @@ class LickInterface(ModuleInterface):
         _debug: Stores the debug flag.
     """
 
-    def __init__(self, lick_threshold: int = 200, debug: bool = False) -> None:
+    def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None:
         data_codes: set[np.uint8] = {np.uint8(51)}  # kChanged
         self._debug: bool = debug
 
@@ -1575,7 +1575,7 @@ class TorqueInterface(ModuleInterface):
     def __init__(
         self,
         baseline_voltage: int = 2046,
-        maximum_voltage: int = 4095,
+        maximum_voltage: int = 2750,
         sensor_capacity: float = 720.0779,  # 10 oz in
         object_diameter: float = 15.0333,
         debug: bool = False,
@@ -1652,7 +1652,7 @@ class TorqueInterface(ModuleInterface):
         )
 
         # Since this method is only called in the debug mode, always prints the data to console
-        console.echo(message=f"Torque: {signed_torque} N cm.")
+        console.echo(message=f"Torque: {signed_torque} N cm, ADC: {np.int32(message.data_object) * sign}.")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -1662,10 +1662,9 @@ class TorqueInterface(ModuleInterface):
         self,
         report_ccw: np.bool = np.bool(True),
         report_cw: np.bool = np.bool(True),
-        lower_threshold: np.uint16 = np.uint16(200),
-        upper_threshold: np.uint16 = np.uint16(2046),
-        delta_threshold: np.uint16 = np.uint16(100),
-        averaging_pool_size: np.uint8 = np.uint8(0),
+        signal_threshold: np.uint16 = np.uint16(100),
+        delta_threshold: np.uint16 = np.uint16(70),
+        averaging_pool_size: np.uint8 = np.uint8(10),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the TorqueModule instance.
 
@@ -1679,18 +1678,16 @@ class TorqueInterface(ModuleInterface):
         Args:
             report_ccw: Determines whether the sensor should report torque in the CounterClockwise (CCW) direction.
             report_cw: Determines whether the sensor should report torque in the Clockwise (CW) direction.
-            lower_threshold: The minimum torque level, in raw analog units of 12-bit Analog-to-Digital-Converter (ADC),
-                that needs to be reported to the PC. Setting this threshold to a number above zero allows high-pass
-                filtering the incoming signals.
-            upper_threshold: The maximum torque level, in raw analog units of 12-bit Analog-to-Digital-Converter (ADC),
-                that needs to be reported to the PC. Setting this threshold to a number below 4095 allows low-pass
-                filtering the incoming signals.
+            signal_threshold: The minimum torque level, in raw analog units of 12-bit Analog-to-Digital-Converter
+                (ADC), that needs to be reported to the PC. Setting this threshold to a number above zero allows
+                high-pass filtering the incoming signals. Note, Signals below the threshold will be pulled to 0.
             delta_threshold: The minimum value by which the signal has to change, relative to the previous check, for
                 the change to be reported to the PC. Note, if the change is 0, the signal will not be reported to the
                 PC, regardless of this parameter value.
             averaging_pool_size: The number of analog pin readouts to average together when checking pin state. This
-                is used to smooth the recorded values to avoid communication line noise. Teensy microcontrollers have a
-                built-in averaging function when reading analog values, so it is safe to set this value to 0.
+                is used to smooth the recorded values to avoid communication line noise. Teensy microcontrollers have
+                built-in analog pin averaging, but we disable it by default and use this averaging method instead. It is
+                recommended to set this value between 15 and 30 readouts.
         """
         message = ModuleParameters(
             module_type=self._module_type,
@@ -1699,8 +1696,7 @@ class TorqueInterface(ModuleInterface):
             parameter_data=(
                 report_ccw,
                 report_cw,
-                upper_threshold,
-                lower_threshold,
+                signal_threshold,
                 delta_threshold,
                 averaging_pool_size,
             ),
@@ -1820,7 +1816,7 @@ class TorqueInterface(ModuleInterface):
         cw_data = log_data[np.uint8(52)]
         timestamps[n_ccw:] = [value["timestamp"] for value in cw_data]  # CW data just fills remaining space after CCW.
         torques[n_ccw:] = [
-            np.round(-np.float64(value["data"]) * self._torque_per_adc_unit, decimals=8) for value in ccw_data
+            np.round(-np.float64(value["data"]) * self._torque_per_adc_unit, decimals=8) for value in cw_data
         ]
 
         # Sorts both arrays based on timestamps.

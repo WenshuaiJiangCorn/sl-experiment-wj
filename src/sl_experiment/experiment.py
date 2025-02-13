@@ -229,7 +229,7 @@ class MesoscopeExperiment:
 
         # Module interfaces:
         self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1))  # Mesoscope frame timestamp recorder
-        self._lick: LickInterface = LickInterface(lick_threshold=200)  # Lick sensor
+        self._lick: LickInterface = LickInterface(lick_threshold=1000)  # Lick sensor
         self._torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
             maximum_voltage=4095,  # ~3.3 V
@@ -435,7 +435,7 @@ class MesoscopeExperiment:
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
         self._lick.set_parameters(
-            signal_threshold=np.uint16(200), delta_threshold=np.uint16(100), averaging_pool_size=np.uint8(0)
+            signal_threshold=np.uint16(300), delta_threshold=np.uint16(300), averaging_pool_size=np.uint8(30)
         )
 
         # The mesoscope acquires frames at ~10 Hz and sends triggers with the on-phase duration of ~100 ms. We use a
@@ -1021,6 +1021,39 @@ def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, de
             lick.check_state(repetition_delay=np.uint32(polling_delay))
 
 
+def _torque_cli(torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int) -> None:
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "f":  # Forward Torque only
+            torque.set_parameters(
+                report_cw=False,
+                report_ccw=True,
+                signal_threshold=np.uint16(signal_threshold),
+                delta_threshold=np.uint16(delta_threshold),
+                averaging_pool_size=np.uint8(averaging)
+            )
+            torque.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "r":  # Forward Torque only
+            torque.set_parameters(
+                report_cw=True,
+                report_ccw=False,
+                signal_threshold=np.uint16(signal_threshold),
+                delta_threshold=np.uint16(delta_threshold),
+                averaging_pool_size=np.uint8(averaging)
+            )
+            torque.check_state(repetition_delay=np.uint32(polling_delay))
+        elif code == "a":  # Both directions
+            torque.set_parameters(
+                report_cw=True,
+                report_ccw=True,
+                signal_threshold = np.uint16(signal_threshold),
+                delta_threshold = np.uint16(delta_threshold),
+                averaging_pool_size = np.uint8(averaging)
+            )
+            torque.check_state(repetition_delay=np.uint32(polling_delay))
+
 def calibration() -> None:
     # Output dir
     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
@@ -1036,7 +1069,9 @@ def calibration() -> None:
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)
     encoder_id = np.uint8(203)
-    usb = "/dev/ttyACM0"
+    sensor_usb = "/dev/ttyACM0"
+    actor_usb = "/dev/ttyACM1"
+    encoder_usb = "/dev/ttyACM2"
 
     # Add console support for print debugging
     console.enable()
@@ -1052,14 +1087,15 @@ def calibration() -> None:
 
     module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
     module_11 = LickInterface(debug=True, lick_threshold=1000)
+    module_12 = TorqueInterface(debug=True)
 
     # Tested AMC interface
     interface = MicroControllerInterface(
         controller_id=sensor_id,
         data_logger=data_logger,
-        module_interfaces=(module_11,),
+        module_interfaces=(module_12,),
         microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port=usb,
+        microcontroller_usb_port=sensor_usb,
         baudrate=115200,
     )
 
@@ -1077,20 +1113,21 @@ def calibration() -> None:
     # _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
-    _lick_cli(module_11, 1000, 300, 300, 30)
+    # _lick_cli(module_11, 1000, 300, 300, 30)
+    _torque_cli(module_12, 1000, 100, 70, 5)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
 
-    data_logger.compress_logs(remove_sources=True)
+    data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
 
     # Checks log parsing
-    stamps, licks = module_11.parse_logged_data()
+    stamps, torques = module_12.parse_logged_data()
 
     print(f"Log data:")
     print(f"Timestamps: {stamps}")
-    print(f"Licks: {licks}")
+    print(f"Torques: {torques}")
 
 
 if __name__ == "__main__":
