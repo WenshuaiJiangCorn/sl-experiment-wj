@@ -239,13 +239,18 @@ class _ZaberSettings:
     """The boolean flag that tracks whether the device has been properly shut down during the previous runtime. This 
     acts as a secondary verification mechanism to ensure that the device has been set to the correct parking position 
     before connection cycles. Uses USER_DATA 1 variable."""
-    axis_linear_flag: str = SettingConstants.USER_DATA_2
+    axis_linear_flag: str = SettingConstants.USER_DATA_10
     """The boolean flag that specifies if axis 1 motor is linear or rotary. This indirectly controls how this library 
-    interfaces with the motor. Uses USER_DATA 2 variable."""
-    axis_park_position: str = SettingConstants.USER_DATA_3
+    interfaces with the motor. Uses USER_DATA 10 variable."""
+    axis_park_position: str = SettingConstants.USER_DATA_11
     """The absolute position, in native motor units, where the motor should be moved to before parking and shutting 
     down. This is used to ensure the motor will not collide with any physical boundaries when it is homed after 
-    re-connection. Uses USER_DATA 3 variable."""
+    re-connection. Uses USER_DATA 11 variable."""
+    axis_calibration_position: str = SettingConstants.USER_DATA_12
+    """ The absolute position, in native motor units, where the motor should be moved for the water valve calibration 
+    procedure. THis position is optimized for collecting a large volume of water that will be dispensed through the 
+    valve during calibration. Uses USER_DATA 12 variable.
+    """
 
 
 @dataclass(frozen=True)

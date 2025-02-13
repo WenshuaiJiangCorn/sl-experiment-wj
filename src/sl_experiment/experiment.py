@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from ataraxis_time import PrecisionTimer
+
 from module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -140,7 +141,7 @@ class MesoscopeExperiment:
         ),
         face_camera_index: int = 0,
         left_camera_index: int = 0,
-        right_camera_index: int = 1,
+        right_camera_index: int = 2,
         harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
     ) -> None:
         # As with other pipelines that use intelligent resource termination, presets the _started flag first to avoid
@@ -297,10 +298,10 @@ class MesoscopeExperiment:
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FAST,
+            preset=GPUEncoderPresets.MEDIUM,
             input_pixel_format=InputPixelFormats.MONOCHROME,
-            output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=30,
+            output_pixel_format=OutputPixelFormats.YUV444,
+            quantization_parameter=15,
         )
 
         # LEFT CAMERA. A 1080P security camera mounted on the left side from the mouse's perspective (viewing left side
@@ -308,6 +309,8 @@ class MesoscopeExperiment:
         self._left_camera: VideoSystem = VideoSystem(
             system_id=np.uint8(62), data_logger=self._logger, output_directory=output_directory
         )
+
+        # DO NOT try to force acquisition rate. If it is not 30 (default) the video will not save.
         self._left_camera.add_camera(
             save_frames=True,
             camera_index=left_camera_index,
@@ -315,14 +318,13 @@ class MesoscopeExperiment:
             output_frames=False,
             display_frames=True,
             display_frame_rate=25,
-            acquisition_frame_rate=25,
             color=False,
         )
         self._left_camera.add_video_saver(
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTER,
+            preset=GPUEncoderPresets.FASTEST,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=30,
@@ -332,6 +334,7 @@ class MesoscopeExperiment:
         self._right_camera: VideoSystem = VideoSystem(
             system_id=np.uint8(73), data_logger=self._logger, output_directory=output_directory
         )
+        # Same as above, DO NOT force acquisition rate
         self._right_camera.add_camera(
             save_frames=True,
             camera_index=right_camera_index,  # The only difference between left and right cameras.
@@ -339,14 +342,13 @@ class MesoscopeExperiment:
             output_frames=False,
             display_frames=True,
             display_frame_rate=25,
-            acquisition_frame_rate=25,
             color=False,
         )
         self._right_camera.add_video_saver(
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTER,
+            preset=GPUEncoderPresets.FASTEST,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=30,
@@ -1054,10 +1056,50 @@ def _torque_cli(torque: TorqueInterface, polling_delay: int, signal_threshold: i
             )
             torque.check_state(repetition_delay=np.uint32(polling_delay))
 
+def _camera_cli(camera: VideoSystem):
+    while True:
+        code = input()  # Sneaky UI
+        if code == "q":
+            break
+        elif code == "a":  # Start saving
+            camera.start_frame_saving()
+            print(camera.started)
+        elif code == "s":  # Stop saving
+            camera.stop_frame_saving()
+            print(f"Not Saving")
+
+
 def calibration() -> None:
     # Output dir
     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
+
+    # camera: VideoSystem = VideoSystem(
+    #     system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir
+    # )
+    # camera.add_camera(
+    #     save_frames=True,
+    #     camera_index=0,
+    #     camera_backend=CameraBackends.OPENCV,
+    #     output_frames=False,
+    #     display_frames=True,
+    #     display_frame_rate=25,
+    #     color=False,
+    # )
+    # camera.add_video_saver(
+    #     hardware_encoding=True,
+    #     video_format=VideoFormats.MP4,
+    #     video_codec=VideoCodecs.H265,
+    #     preset=GPUEncoderPresets.FASTEST,
+    #     input_pixel_format=InputPixelFormats.MONOCHROME,
+    #     output_pixel_format=OutputPixelFormats.YUV420,
+    #     quantization_parameter=30
+    # )
+    #
+    # camera.start()
+    # _camera_cli(camera)
+    # camera.stop()
+    # data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
 
     # Defines static assets needed for testing
     valve_calibration_data = (
@@ -1069,8 +1111,8 @@ def calibration() -> None:
     actor_id = np.uint8(101)
     sensor_id = np.uint8(152)
     encoder_id = np.uint8(203)
-    sensor_usb = "/dev/ttyACM0"
-    actor_usb = "/dev/ttyACM1"
+    sensor_usb = "/dev/ttyACM1"
+    actor_usb = "/dev/ttyACM0"
     encoder_usb = "/dev/ttyACM2"
 
     # Add console support for print debugging
@@ -1091,11 +1133,11 @@ def calibration() -> None:
 
     # Tested AMC interface
     interface = MicroControllerInterface(
-        controller_id=sensor_id,
+        controller_id=actor_id,
         data_logger=data_logger,
-        module_interfaces=(module_12,),
+        module_interfaces=(module_4,),
         microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port=sensor_usb,
+        microcontroller_usb_port=actor_usb,
         baudrate=115200,
     )
 
@@ -1110,25 +1152,17 @@ def calibration() -> None:
     # _encoder_cli(module, 500, 15)
     # _mesoscope_ttl_cli(module_1, module_2, 10000)
     # _break_cli(module_3)
-    # _valve_cli(module_4, 35590)
+    _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
     # _lick_cli(module_11, 1000, 300, 300, 30)
-    _torque_cli(module_12, 1000, 100, 70, 5)
+    #_torque_cli(module_12, 1000, 100, 70, 5)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
 
     data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
-
-    # Checks log parsing
-    stamps, torques = module_12.parse_logged_data()
-
-    print(f"Log data:")
-    print(f"Timestamps: {stamps}")
-    print(f"Torques: {torques}")
-
 
 if __name__ == "__main__":
     calibration()
