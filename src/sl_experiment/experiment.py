@@ -1006,7 +1006,7 @@ def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> No
             frame_watcher.reset_command_queue()
 
 
-def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int) -> None:
+def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int) -> None:
     """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
     while True:
         code = input()  # Sneaky UI
@@ -1016,6 +1016,7 @@ def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, de
             lick.set_parameters(
                 signal_threshold=np.uint16(signal_threshold),
                 delta_threshold=np.uint16(delta_threshold),
+                averaging_pool_size=np.uint8(averaging)
             )
             lick.check_state(repetition_delay=np.uint32(polling_delay))
 
@@ -1076,7 +1077,7 @@ def calibration() -> None:
     # _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
-    _lick_cli(module_11, 500, 200, 150)
+    _lick_cli(module_11, 1000, 300, 300, 30)
 
     # Shutdown
     interface.stop()

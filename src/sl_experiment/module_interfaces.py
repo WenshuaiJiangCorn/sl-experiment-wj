@@ -1384,7 +1384,8 @@ class LickInterface(ModuleInterface):
                 PC, regardless of this parameter value.
             averaging_pool_size: The number of analog pin readouts to average together when checking pin state. This
                 is used to smooth the recorded values to avoid communication line noise. Teensy microcontrollers have
-                built-in analog pin averaging, so this parameter can be safely set to 0 in most use cases.
+                built-in analog pin averaging, but we disable it by default and use this averaging method instead. It is
+                recommended to set this value between 15 and 30 readouts.
         """
         message = ModuleParameters(
             module_type=self._module_type,
