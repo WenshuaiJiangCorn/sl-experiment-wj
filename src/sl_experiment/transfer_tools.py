@@ -1,5 +1,6 @@
 """This module provides methods for moving data between the local machine, the Synology NAS drive, and the Sun lab
-BioHPC cluster.
+BioHPC cluster. All methods in this module expect that the destinations and sources are mounted on the host file-system
+and use the os tools for moving the data.
 """
 
 import shutil

@@ -1,4 +1,5 @@
-"""This module provides the main VR class that abstracts working with Sun lab's mesoscope-VR system"""
+"""This module provides the main MesoscopeExperiment class that abstracts working with Sun lab's mesoscope-VR system
+and ProjectData class that abstracts working with experimental data."""
 
 import os
 import warnings
@@ -1008,7 +1009,9 @@ def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> No
             frame_watcher.reset_command_queue()
 
 
-def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int) -> None:
+def _lick_cli(
+    lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
+) -> None:
     """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
     while True:
         code = input()  # Sneaky UI
@@ -1018,12 +1021,14 @@ def _lick_cli(lick: LickInterface, polling_delay: int, signal_threshold: int, de
             lick.set_parameters(
                 signal_threshold=np.uint16(signal_threshold),
                 delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging)
+                averaging_pool_size=np.uint8(averaging),
             )
             lick.check_state(repetition_delay=np.uint32(polling_delay))
 
 
-def _torque_cli(torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int) -> None:
+def _torque_cli(
+    torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
+) -> None:
     while True:
         code = input()  # Sneaky UI
         if code == "q":
@@ -1034,7 +1039,7 @@ def _torque_cli(torque: TorqueInterface, polling_delay: int, signal_threshold: i
                 report_ccw=True,
                 signal_threshold=np.uint16(signal_threshold),
                 delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging)
+                averaging_pool_size=np.uint8(averaging),
             )
             torque.check_state(repetition_delay=np.uint32(polling_delay))
         elif code == "r":  # Forward Torque only
@@ -1043,18 +1048,19 @@ def _torque_cli(torque: TorqueInterface, polling_delay: int, signal_threshold: i
                 report_ccw=False,
                 signal_threshold=np.uint16(signal_threshold),
                 delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging)
+                averaging_pool_size=np.uint8(averaging),
             )
             torque.check_state(repetition_delay=np.uint32(polling_delay))
         elif code == "a":  # Both directions
             torque.set_parameters(
                 report_cw=True,
                 report_ccw=True,
-                signal_threshold = np.uint16(signal_threshold),
-                delta_threshold = np.uint16(delta_threshold),
-                averaging_pool_size = np.uint8(averaging)
+                signal_threshold=np.uint16(signal_threshold),
+                delta_threshold=np.uint16(delta_threshold),
+                averaging_pool_size=np.uint8(averaging),
             )
             torque.check_state(repetition_delay=np.uint32(polling_delay))
+
 
 def _camera_cli(camera: VideoSystem):
     while True:
@@ -1156,13 +1162,14 @@ def calibration() -> None:
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
     # _lick_cli(module_11, 1000, 300, 300, 30)
-    #_torque_cli(module_12, 1000, 100, 70, 5)
+    # _torque_cli(module_12, 1000, 100, 70, 5)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
 
     data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
+
 
 if __name__ == "__main__":
     calibration()

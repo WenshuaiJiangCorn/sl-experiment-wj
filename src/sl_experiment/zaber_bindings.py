@@ -336,6 +336,11 @@ class ZaberAxis:
             should be parked at before shutting the axis down. This is used to position the motor in a way that is
             guaranteed to successfully home without colliding with surrounding objects after powering-up. This is
             especially relevant for rotary than linear axes.
+        _valve_position: The absolute position relative to the home sensor position, in native motor units, the motor
+            should be moved to support water reward valve calibration. Since the space inside the Mesoscope-VR rig
+            is constrained, it is helpful to orient the headbar and lickport motors in a way that provides easy access
+            to the lickport tube. These positions are stored in the non-volatile memory and are used similar to how the
+            park position is used.
         _max_limit: The maximum absolute position relative to the home sensor position, in native motor units,
             the motor hardware can reach.
         _min_limit: Same as the _hardware_max_limit, but specifies the minimum absolute position relative to
@@ -377,6 +382,9 @@ class ZaberAxis:
         self._name: str = motor.label
         self._linear: bool = bool(self._motor.device.settings.get(setting=_ZaberSettings.axis_linear_flag))
         self._park_position: int = int(self._motor.device.settings.get(setting=_ZaberSettings.axis_park_position))
+        self._valve_position: int = int(
+            self._motor.device.settings.get(setting=_ZaberSettings.axis_calibration_position)
+        )
         self._max_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_maximum_limit)
         self._min_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_minimum_limit)
 
@@ -392,6 +400,15 @@ class ZaberAxis:
             message = (
                 f"Invalid park_position hardware parameter value encountered when initializing ZaberAxis class for "
                 f"{self._name} axis of the Device {self._motor.device.label}. Expected a value between "
+                f"{self._min_limit} and {self._max_limit}, but read {self._park_position}."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Same as above, but for the valve calibration position
+        if self._valve_position < self._min_limit or self._valve_position > self._max_limit:
+            message = (
+                f"Invalid valve calibration position hardware parameter value encountered when initializing ZaberAxis "
+                f"class for {self._name} axis of the Device {self._motor.device.label}. Expected a value between "
                 f"{self._min_limit} and {self._max_limit}, but read {self._park_position}."
             )
             console.error(message=message, error=ValueError)
@@ -544,6 +561,27 @@ class ZaberAxis:
         )
         self._reset_pad_timer()
         return limit
+
+    @property
+    def park_position(self) -> int:
+        """Returns the absolute position, in native motor units, where the motor needs to be moved before it is parked.
+
+        This position is applied to the motor before parking to promote safe homing procedure once the motor is
+        unparked. Parking the motor in a predetermined position avoids colliding with other objects in the environment
+        during homing and provides a starting point for calibrating the motor's position for new animals.
+        """
+        return self._park_position
+
+    @property
+    def valve_position(self) -> int:
+        """Returns the absolute position, in native motor units, where the motor needs to be moved before calibrating
+        the water reward valve of the Mesoscope-VR system.
+
+        Applying this position to the motor orients the headbar and lickport system in a way that provides easy access
+        to the components of the water delivery system. In turn, this simplifies calibrating, flushing, and filling the
+        system with water.
+        """
+        return self._valve_position
 
     def home(self) -> bool:
         """Homes the motor by moving it towards the home sensor position until it triggers the sensor.
