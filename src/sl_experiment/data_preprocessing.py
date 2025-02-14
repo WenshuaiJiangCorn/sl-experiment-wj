@@ -1,4 +1,4 @@
-"""This module provides the methods used to preprocess mesoscope data after acquisition. The primary purpose of this
+"""This module provides the methods used to preprocess experimental data after acquisition. The primary purpose of this
 preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
 """
 
@@ -543,3 +543,60 @@ def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
         print(line)
     if not printed:
         print("No differences found! The ops JSON content is identical.")
+
+
+def interpolate_data(
+    timestamps: NDArray[np.uint64],
+    data: NDArray[np.signedinteger[Any], np.unsignedinteger[Any], np.floating[Any]],
+    seed_timestamps: NDArray[np.uint64],
+    is_discrete: bool,
+) -> NDArray[np.signedinteger[Any], np.unsignedinteger[Any], np.floating[Any]]:
+    """Interpolates data values for the provided seed timestamps.
+
+    This function is primarily used during behavioral data preprocessing to align all behavioral data to the mesoscope
+    frame acquisition timestamps. In turn, this aligns behavioral recordings to the brain activity data, simplifying
+    future data analysis.
+
+    Notes:
+        This function expects seed_timestamps and timestamps arrays to be monotonically increasing.
+
+        Discrete interpolated data will be returned as an array with the same datatype as the input data. Continuous
+        interpolated data will always use float_64 datatype.
+
+    Args:
+        timestamps: The one-dimensional numpy array that stores the timestamps for source datapoints.
+        data: The two-dimensional numpy array that stores the source datapoints.
+        seed_timestamps: The one-dimensional numpy array that stores the timestamps for which to interpolate the data
+            values.
+        is_discrete: A boolean flag that determines whether the data is discrete or continuous.
+
+    Returns:
+        A numpy NDArray with the same dimension as the seed_timestamps array that stores the interpolated data values.
+    """
+    # Discrete data
+    if is_discrete:
+        # Preallocates the output array
+        interpolated_data = np.empty(seed_timestamps.shape, dtype=data.dtype)
+
+        # Handles boundary conditions in bulk using boolean masks. All seed timestamps below the minimum source
+        # timestamp are statically set to data[0], and all seed timestamps above the maximum source timestamp are set
+        # to data[-1].
+        below_min = seed_timestamps < timestamps[0]
+        above_max = seed_timestamps > timestamps[-1]
+        within_bounds = ~(below_min | above_max)  # The portion of the seed that is within source timestamp boundary
+
+        # Assigns out of bounds values in-bulk
+        interpolated_data[below_min] = data[0]
+        interpolated_data[above_max] = data[-1]
+
+        # Processes within-boundary timestamps by finding the last known certain value to the left of each seed
+        # timestamp and setting each seed timestamp to that value.
+        if np.any(within_bounds):
+            indices = np.searchsorted(timestamps, seed_timestamps[within_bounds], side="right") - 1
+            interpolated_data[within_bounds] = data[indices]
+
+        return interpolated_data
+
+    # Continuous data. Note, due to interpolation, continuous data is always returned using float_64 datatype.
+    else:
+        return np.interp(seed_timestamps, timestamps, data)
