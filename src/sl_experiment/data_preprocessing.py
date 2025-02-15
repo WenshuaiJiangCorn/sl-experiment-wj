@@ -83,7 +83,7 @@ def _process_stack(
     Args:
         tiff_path: The path to the TIFF stack to process.
         first_frame_number: The position (number) of the first frame stored in the stack, relative to the overall
-            sequence of frames acquired during experiment. This is used to configure the output file name to include
+            sequence of frames acquired during the experiment. This is used to configure the output file name to include
             the range of frames stored in the stack.
         output_dir: The path to the directory where to save the processed stacks.
         remove_sources: Determines whether to remove original TIFF stacks after processing.
@@ -276,7 +276,7 @@ def _generate_ops(
     for i in range(nrois):
         roi_heights[i] = si_rois[i]["scanfields"]["pixelResolutionXY"][1]
         roi_widths[i] = si_rois[i]["scanfields"]["pixelResolutionXY"][0]
-        roi_centers[i] = si_rois[i]["scanfields"]["centerXY"][::-1]  # Reverse order to match original matlab code
+        roi_centers[i] = si_rois[i]["scanfields"]["centerXY"][::-1]  # Reverse order to match the original matlab code
         roi_sizes[i] = si_rois[i]["scanfields"]["sizeXY"][::-1]
 
     # Transforms ROI coordinates into pixel-units, while maintaining accurate relative positions for each ROI.
@@ -287,7 +287,7 @@ def _generate_ops(
     min_positions = roi_centers * scale_factor  # Converts ROI positions to pixel coordinates
     min_positions = np.ceil(min_positions)  # This was added to match Spruston lab extraction code
 
-    # Calculates total number of rows across all ROIs (rows of pixels acquired while imaging ROIs)
+    # Calculates the total number of rows across all ROIs (rows of pixels acquired while imaging ROIs)
     total_rows = np.sum(roi_heights)
 
     # Calculates the number of flyback pixels between ROIs. These are the pixels acquired when the galvos are moving
@@ -298,8 +298,8 @@ def _generate_ops(
     roi_rows = np.zeros((2, nrois))
     # noinspection PyTypeChecker
     temp = np.concatenate([[0], np.cumsum(roi_heights + n_flyback)])
-    roi_rows[0] = temp[:-1]  # Starts are all elements except last
-    roi_rows[1] = roi_rows[0] + roi_heights  # Ends calculation stays same
+    roi_rows[0] = temp[:-1]  # Starts are all elements except the last
+    roi_rows[1] = roi_rows[0] + roi_heights  # Ends calculation stays the same
 
     # Generates the data to be stored as the JSON config based on the result of the computations above.
     # Note, most of these values were filled based on the 'prototype' ops.json from Tyche F3. For our pipeline they are
@@ -351,7 +351,7 @@ def process_invariant_metadata(file: Path) -> None:
     directory.
 
     This function only needs to be called for one raw ScanImage TIFF stack in each directory. It extracts the
-    ScanImage metadata that is common for all frames across all stacks and outputs it as metadata.json file. This
+    ScanImage metadata that is common for all frames across all stacks and outputs it as a metadata.json file. This
     function also calls the _generate_ops() function that generates a suite2p ops.json file from the parsed
     metadata.
 
@@ -419,7 +419,7 @@ def process_mesoscope_directory(
         image_directory: The directory containing the multi-frame TIFF stacks. This is typically the root directory for
             one experimental session.
         num_processes: The maximum number of processes to use while processing the directory. Each process is used to
-            compress a stack of TIFF files in-parallel.
+            compress a stack of TIFF files in parallel.
         remove_sources: Determines whether to remove the original TIFF files after they have been processed.
         batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
             to optimize progress reporting to avoid cluttering the terminal window.
@@ -454,7 +454,7 @@ def process_mesoscope_directory(
     for file in tiff_files:
         stack_size = _check_stack_size(file)
         if stack_size > 0:
-            # Appends the starting frame number to list and increments the stack list
+            # Appends the starting frame number to the list and increments the stack list
             frame_numbers.append(starting_frame)
             starting_frame += stack_size
         else:
@@ -513,7 +513,7 @@ def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
     """Prints the difference between the two input 'ops' JSON files.
 
     This function is primarily used to debug our metadata extraction pipeline to ensure that the metadata extraction
-    produces the same ops.json as the helper matlab script provided by suite2p authors. It eiter prints the difference
+    produces the same ops.json as the helper matlab script provided by suite2p authors. It either prints the difference
     between the files to the terminal or a static line informing the user that the files are identical.
 
     Args:
@@ -583,9 +583,9 @@ def interpolate_data(
         # to data[-1].
         below_min = seed_timestamps < timestamps[0]
         above_max = seed_timestamps > timestamps[-1]
-        within_bounds = ~(below_min | above_max)  # The portion of the seed that is within source timestamp boundary
+        within_bounds = ~(below_min | above_max)  # The portion of the seed that is within the source timestamp boundary
 
-        # Assigns out of bounds values in-bulk
+        # Assigns out-of-bounds values in-bulk
         interpolated_data[below_min] = data[0]
         interpolated_data[above_max] = data[-1]
 

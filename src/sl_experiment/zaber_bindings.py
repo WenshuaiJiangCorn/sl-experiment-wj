@@ -22,11 +22,11 @@ def _attempt_connection(port: str) -> dict[int, Any] | str:
         devices were not found, returns the error message
     """
     try:
-        # Uses 'with' to automatically close connection at the end of the runtime. If the port is used by a Zaber
+        # Uses 'with' to automatically close the connection at the end of the runtime. If the port is used by a Zaber
         # device, this statement will open the connection. Otherwise, the statement will raise an exception
         # handled below
         with Connection.open_serial_port(port_name=port, direct=False) as connection:
-            # Detects all devices, connected to the port
+            # Detects all devices connected to the port
             devices = connection.detect_devices()
 
             # If devices are detected, uses (embedded) dictionary comprehension to parse and save the ID information
@@ -83,13 +83,13 @@ def _scan_active_ports() -> tuple[dict[str, Any], tuple[str, ...]]:
             # Otherwise, merges each returned dictionary into the overall dictionary.
             connected_dict[port] = result
 
-    # Casts the error message list into tuple before returning it to caller.
+    # Casts the error message list into tuple before returning it to the caller.
     return connected_dict, tuple(error_messages)
 
 
 def _format_device_info(device_info: dict[str, Any]) -> str:
     """Formats the device and axis ID information discovered during port scanning as a table before displaying it to
-    user.
+     the user.
 
     Args:
         device_info: The dictionary containing the device and axis ID information for each scanned port.
@@ -113,7 +113,7 @@ def _format_device_info(device_info: dict[str, Any]) -> str:
                     device_row = [""] * 5
         table_data.append([""] * 7)  # Adds an empty row to separate port sections
 
-    # Formats the table and returns it to caller
+    # Formats the table and returns it to the caller
     return tabulate(
         table_data,
         headers=["Port", "Device Num", "ID", "Label", "Name", "Axis ID", "Axis Label"],
@@ -133,7 +133,7 @@ def discover_zaber_devices(silence_errors: bool = True) -> None:
     dictionary, errors = _scan_active_ports()  # Scans all active ports
     formatted_info = _format_device_info(dictionary)  # Formats the information so that it displays nicely
 
-    # Prints the formatted table. Since we use external formatting (tabulate), we do not need console here.
+    # Prints the formatted table. Since we use external formatting (tabulate), we do not need a console here.
     print("Device and Axis Information:")
     print(formatted_info)
 
@@ -147,7 +147,7 @@ def discover_zaber_devices(silence_errors: bool = True) -> None:
 class _CRCCalculator:
     """A CRC32-XFER checksum calculator that works with raw bytes or pythonic strings.
 
-    This utility class exposes methods that generate CRC checksum labels and bytes objects, which is primarily used by
+    This utility class exposes methods that generate CRC checksum labels and bytes objects, which are primarily used by
     Ataraxis-Zaber binding classes to verify that Zaber devices have been configured to work with this binding
     library.
 
@@ -352,7 +352,7 @@ class ZaberAxis:
 
     Raises:
         TypeError: If motor is not an Axis class instance.
-        ValueError: If any motor parameter read from the non-volatile device memory is outside the expected range of
+        ValueError: If any motor parameter is read from the non-volatile memory is outside the expected range of
             values.
     """
 
@@ -458,7 +458,7 @@ class ZaberAxis:
         from other calls to prevent overwhelming the serial connection.
 
         This method is statically configured to prevent further commands from being issued for the following 10
-        milliseconds, which is appropriate for the default Zaber communication baudrate of 115200.
+        milliseconds, which is appropriate for the default Zaber communication baudrate of 115,200.
         """
         while self._timer.elapsed < 10:
             # This design is chosen over delay() to allow instantaneous escapes if this method is called when the delay
@@ -468,7 +468,7 @@ class ZaberAxis:
     def _reset_pad_timer(self) -> None:
         """Resets the PrecisionTimer instance used to enforce a static delay between motor hardware calls.
 
-        This method should be used after each motor hardware call command to reset the timer in-preparation for the
+        This method should be used after each motor hardware call command to reset the timer in preparation for the
         next call (to exclude the time spent on the request-response sequence of the call from the padding
         calculation). It is designed to work together with the _ensure_call_padding method.
         """
@@ -566,7 +566,7 @@ class ZaberAxis:
     def park_position(self) -> int:
         """Returns the absolute position, in native motor units, where the motor needs to be moved before it is parked.
 
-        This position is applied to the motor before parking to promote safe homing procedure once the motor is
+        This position is applied to the motor before parking to promote a safe homing procedure once the motor is
         unparked. Parking the motor in a predetermined position avoids colliding with other objects in the environment
         during homing and provides a starting point for calibrating the motor's position for new animals.
         """
@@ -593,13 +593,13 @@ class ZaberAxis:
             expected power shutdowns. That said, it is usually a good practice to home all devices after they had
             been idle for a prolonged period of time.
 
-            The method initializes the homing procedure, but does not block until it is over. As such, it is likely
+            The method initializes the homing procedure but does not block until it is over. As such, it is likely
             that the motor would still be moving when this method returns. This feature is designed to support homing
             multiple axes in parallel.
 
         Returns:
             True if the method successfully initiates the motor homing procedure. If this method returns False, the
-            axis is either parked or busy executing other commands, and cannot be homed at this time.
+            axis is either parked or busy executing other commands and cannot be homed at this time.
         """
 
         # A parked motor cannot be homed until it is unparked. AS a safety measure, this command does NOT automatically
@@ -607,7 +607,7 @@ class ZaberAxis:
         if self.is_parked:
             return False
 
-        # In-line with the logic of handling conflicting motion commands, the motor is not allowed to execute a home
+        # In line with the logic of handling conflicting motion commands, the motor is not allowed to execute a home
         # command unless it is idle.
         if self.is_busy:
             return False
@@ -730,11 +730,11 @@ class ZaberAxis:
 
         This method is mostly used to avoid re-homing the device after power cycling, as parking ensures the reference
         point for the motor is maintained in non-volatile memory. Additionally, parking is used to lock the motor
-        in-place as an additional safety measure.
+        in place as an additional safety measure.
 
         Returns:
             True if the method successfully parks the motor. If this method returns False, the axis is busy executing
-            other commands, and cannot be parked at this time.
+            other commands and cannot be parked at this time.
         """
         # The motor has to be idle to be parked.
         if self.is_busy:
@@ -791,8 +791,9 @@ class ZaberDevice:
     """Manages a single Zaber device (controller) and all of its axes (motors).
 
     This class represents a single Zaber controller device, which contains independent CPU and volatile / non-volatile
-    addressable memory. Depending on the model, a single device can control between 1 and 4 axes (motor drivers). Each
-    device has a fairly high degree of closed-loop autonomy and, as such, is treated as a standalone external system.
+    addressable memory. Depending on the model, a single device can control between one and four axes (motor drivers).
+    Each device has a fairly high degree of closed-loop autonomy and, as such, is treated as a standalone external
+    system.
 
     Notes:
         This class is explicitly designed to work with devices that manage a single axis (motor). It will raise errors
@@ -816,7 +817,7 @@ class ZaberDevice:
         _shutdown_flag: A boolean flag that locally tracks the shutdown status of the device.
 
     Raises:
-        RuntimeError: If the device_code stored in device's non-volatile memory does not match the CRC32-XFER
+        RuntimeError: If the device_code stored in the device's non-volatile memory does not match the CRC32-XFER
             checksum of the device label. Also, if the device shutdown tracker is not set to 1 (if the device has not
             been properly shut down during the previous runtime).
         ValueError: If the device manages more than a single axis (motor).
@@ -824,7 +825,7 @@ class ZaberDevice:
     """
 
     def __init__(self, device: Device) -> None:
-        # Ensures arguments are of valid type
+        # Ensures arguments are of a valid type
         if not isinstance(device, Device):
             message = (
                 f"Invalid 'device' argument type encountered when instantiating ZaberDevice class instance. "
@@ -954,8 +955,8 @@ class ZaberConnection:
         can be used to access multiple Zaber devices (motor controllers), with each device managing a single axis
         (motor).
 
-        This class does not automatically initialize the connection with the port. Use connect() method to connect to
-        the port managed by this class.
+        This class does not automatically initialize the connection with the port. Use the connect() method to connect
+        to the port managed by this class.
 
     Args:
         port: The name of the USB port used by this connection instance (eg: COM1, USB0, etc.). Use
@@ -963,7 +964,7 @@ class ZaberConnection:
 
     Attributes:
         _port: Stores the name of the serial port used by the connection.
-        _connection: The Connection class instance used to physically manage the connection. Initializes to a None
+        _connection: The Connection class instance is used to physically manage the connection. Initializes to a None
             placeholder until the connection is established via the connect() method.
         _devices: The tuple of ZaberDevice class instances used to interface with Zaber devices available through the
             connected port. Initializes to an empty tuple placeholder.
@@ -1006,7 +1007,7 @@ class ZaberConnection:
     def connect(self) -> None:
         """Opens the serial port and automatically detects and connects to any available Zaber devices (controllers).
 
-        Depending on the input arguments, the method may also raise or print exception messages to inform the user on
+        Depending on the input arguments, the method may also raise or print exception messages to inform the user of
         the cause of the runtime failure.
 
         Raises:
@@ -1023,7 +1024,7 @@ class ZaberConnection:
         # Gets the list of connected Zaber devices.
         devices: list[Device] = self._connection.detect_devices()
 
-        # Packages each discovered Device into ZaberDevice class instance and builds the internal device list.
+        # Packages each discovered Device into a ZaberDevice class instance and builds the internal device list.
         self._devices = tuple([ZaberDevice(device=device) for device in devices])
 
         # Sets the connection status and returns True to indicate that the connection was successful
@@ -1079,7 +1080,7 @@ class ZaberConnection:
         """Returns the ZaberDevice class reference for the device under the requested index.
 
         Args:
-            index: The index of the device class to retrieve. Use device_information property to find the indices
+            index: The index of the device class to retrieve. Use the device_information property to find the indices
                 of the devices available through this connection. Valid indices start with 0 for the first device and
                 cannot exceed the value of the device_count property. Defaults to 0.
 

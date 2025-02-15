@@ -14,7 +14,7 @@ from packaging_tools import calculate_directory_checksum
 def _transfer_file(src_file: Path, source_directory: Path, dest_directory: Path) -> None:
     """Copies the input file from the source directory to the destination directory while preserving the file metadata.
 
-    This is a worker method used by the transfer_directory() method to move multiple files in-parallel.
+    This is a worker method used by the transfer_directory() method to move multiple files in parallel.
 
     Notes:
         If the file is found under a hierarchy of subdirectories inside the input source_directory, that hierarchy will
@@ -42,8 +42,8 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
         This method recreates the moved directory hierarchy on the destination if the hierarchy does not exist. This is
         done before copying the files.
 
-        The method executes a multithreading copy operation. It does not clean up the source files, that job is handed
-        to the ProjectData class which also executes the copy operation simultaneously for multiple destinations.
+        The method executes a multithreading copy operation. It does not clean up the source files. That job is handed
+        to the ProjectData class, which also executes the copy operation simultaneously for multiple destinations.
 
         The method verifies the integrity of the transferred files by rerunning the xxHash3-128 checksum calculation and
         comparing the returned checksum to the one stored in the source directory. The method assumes that all input
@@ -59,7 +59,7 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
             a single TCP / IP socket (such as non-multichannel SMB protocol), the number should be set to 1.
 
     Raises:
-        RuntimeError: If the transferred files do not pass xxHas3-128 checksum integrity verification.
+        RuntimeError: If the transferred files do not pass the xxHas3-128 checksum integrity verification.
     """
     if not source.exists():
         message = f"Unable to move the directory {source}, as it does not exist."
@@ -83,8 +83,9 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
         else:  # is_file()
             file_list.append(item)
 
-    # Copies the data to the destination. For parallel workflows, uses the ThreadPoolExecutor to move multiple files at
-    # the same time. since I/O operations do not hold GIL, we do not need to parallelize with Processes here.
+    # Copies the data to the destination. For parallel workflows, the method uses the ThreadPoolExecutor to move
+    # multiple files at the same time. Since I/O operations do not hold GIL, we do not need to parallelize with
+    # Processes here.
     if num_threads > 1:
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures = {executor.submit(_transfer_file, file, source, destination): file for file in file_list}

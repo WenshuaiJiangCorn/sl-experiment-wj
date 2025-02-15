@@ -57,6 +57,7 @@ dependencies = [
     "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
     "xxhash>=3,<4",
+    "google-api-python-client>=2,<3"
 ]
 
 [project.urls]
