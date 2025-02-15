@@ -44,22 +44,22 @@ class ImplantData:
 
     def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
         """
-        Initializes the attributes of the ImplantData class for any column headers containing the string "implant". 
+        Initializes the attributes of the InjectionData class for any column headers containing the string "implant".
         """
         for header, i in headers.items():
             if "implant" in header.lower():
-                setattr(self, f"_{header}", row[i])
+                setattr(self, f"_{header.lower()}", row[i])
 
     def __repr__(self):
         """
-        Returns the representation string of an instance of the ImplantData class. The implant fields are 
+        Returns the representation string of an instance of the InjectionData class. The implant fields are 
         initialized as a dictionary. 
         """
         implant_fields = {}
 
         for key, value in self.__dict__.items():
             if "implant" in key.lower():
-                implant_fields[key] = value
+                implant_fields[key.lstrip('_')] = value  
 
         return f"ImplantData({implant_fields})"
     
@@ -77,29 +77,52 @@ class InjectionData:
 
     def __repr__(self):
         """
-        Returns the representation string of an instance of the InjectionData class. The implant fields are 
+        Returns the representation string of an instance of the InjectionData class. The injection fields are 
         initialized as a dictionary. 
         """
         injection_fields = {}
 
         for key, value in self.__dict__.items():
             if "injection" in key.lower():
-                injection_fields[key] = value
+                injection_fields[key.lstrip('_')] = value  
 
         return f"InjectionData({injection_fields})"
     
 
-# @dataclass
-# class Drug:
-    
-#     LRS: Optional[float] = None
-#     ketoprofen: Optional[float] = None
-#     buprenorphin: Optional[float] = None
-#     dexomethazone: Optional[float] = None
+@dataclass
+class Drug:
+    LRS: Optional[float] = None
+    ketoprofen: Optional[float] = None
+    buprenorphin: Optional[float] = None
+    dexomethazone: Optional[float] = None
 
-#     def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        """
+        Initializes the attributes of the Drug dataclass for columns containing data for the LRS,
+        ketoprofen, buprenorphin and dexomethazone dosages. 
 
-#         drug_list = ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]
+        Units (mL) of the headers are removed. 
+        """
+        drug_list = ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]
+
+        for header, i in headers.items():
+            updated_header = header.strip().lower().replace(" (ml)", "")
+            if any(drug in updated_header for drug in drug_list):
+                setattr(self, f"_{updated_header}", row[i])
+
+
+    def __repr__(self):
+        """
+        Returns the representation string of an instance of the Drug class. The drug fields are 
+        initialized as a dictionary. 
+        """
+        drug_fields = {}
+
+        for key, value in self.__dict__.items():
+            if any(drug in key for drug in ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]):
+                drug_fields[key.lstrip('_')] = value
+
+        return f"Drug({drug_fields})"
 
 
 @dataclass
@@ -108,12 +131,15 @@ class IndividualMouseData:
     _protocol_data: ProtocolData
     _implant_data: ImplantData
     _injection_data: InjectionData
+    _drug_data: Drug
 
     def __getattr__(self, name: str) -> Optional[str]:
         """
         Checks if an attribute from ProtocolData, ImplantData and InjectionData classes
         and obtains the value if it exists. 
         """
+        updated_drug_name = name.lower().replace(" (ml)", "")
+
         if hasattr(self._protocol_data, name):
             return getattr(self._protocol_data, name)
         
@@ -122,6 +148,9 @@ class IndividualMouseData:
         
         if hasattr(self._injection_data, name):
             return getattr(self._injection_data, name)
+        
+        if hasattr(self._drug_data, name):
+            return getattr(self._drug_data, updated_drug_name)
         
         message = (
             f"{self.__class__.__name__}' object has no attribute '{name}'"
@@ -134,7 +163,7 @@ class IndividualMouseData:
         """
         Returns the combined representation string the ProtocolData and ImplatnData classes. 
         """
-        return f"({self._protocol_data}, {self._implant_data}, {self._injection_data})"
+        return f"({self._protocol_data}, {self._implant_data}, {self._injection_data}, {self._drug_data})"
     
 
 class MiceData:
@@ -249,19 +278,21 @@ class MiceData:
                 
                 implant_data = ImplantData(self._sheet_data.headers, row.values)
                 injection_data = InjectionData(self._sheet_data.headers, row.values)
+                drug_data = Drug(self._sheet_data.headers, row.values)
 
-                results.append(IndividualMouseData(protocol_data, implant_data, injection_data))
+                results.append(IndividualMouseData(protocol_data, implant_data, injection_data, drug_data))
 
         return results
     
 
-# main 
+# MAIN 
 # mice_data = MiceData()
 # results = mice_data._get_mice(ID='2', surgeon="Chelsea", date="1-24-25", protocol="2024-0019")
 # for result in results:
 #     print(result)
-#     print(f"ID: {result._ID}")
-#     print(f"Protocol: {result._protocol}")
-#     print(f"Injection 1 region: {result._injection1}")
+    # print(f"ID: {result._ID}")
+    # print(f"Protocol: {result._protocol}")
+    # print(f"Injection 1 region: {result._injection1}")
+    # print(f"LRS: {result._lrs}")
 
 
