@@ -45,57 +45,80 @@ from enum import IntEnum
 class _ZaberPositions(YamlConfig):
     """This class is used to save and restore Zaber motor positions between sessions by saving them as .yaml file.
 
-    This class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors.
-    It is used to both store Zaber motor positions for each session and to (optionally) restore the same Zaber motor
-    positions across all experimental sessions for the same animal and project.
+    This class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
+    (axes). It is used to both store Zaber motor positions for each session for future analysis and to (optionally)
+    restore the same Zaber motor positions across consecutive experimental sessions for the same project and animal
+    combination.
 
     Notes:
         This class is designed to be used by the MesoscopeExperiment class. Do not instantiate or load this class from
-        .yaml files manually.
+        .yaml files manually. Do not modify the data stored inside the .yaml file unless you know what you are doing.
 
         All positions are saved using native motor units. All class fields initialize to default placeholders that are
-        likely NOT safe to apply to Zaber motors. Do not apply the positions loaded from the file unless you are 100%
-        sure they are safe to use.
-    """
+        likely NOT safe to apply to the VR system. Do not apply the positions loaded from the file unless you are
+        certain they are safe to use.
 
+        Exercise caution when working with Zaber motors. The motors can crush the manipulated objects into the
+        environment.
+    """
     headbar_z: int = 0
+    """The absolute position, in native motor units, of the HeadBar z-axis motor."""
     headbar_pitch: int = 0
+    """The absolute position, in native motor units, of the HeadBar pitch-axis motor."""
     headbar_roll: int = 0
+    """The absolute position, in native motor units, of the HeadBar roll-axis motor."""
     lickport_z: int = 0
+    """The absolute position, in native motor units, of the LickPort z-axis motor."""
     lickport_x: int = 0
+    """The absolute position, in native motor units, of the LickPort x-axis motor."""
     lickport_y: int = 0
+    """The absolute position, in native motor units, of the LickPort y-axis motor."""
 
 
 class RuntimeModes(IntEnum):
     """Stores the integer codes for the runtime modes supported by the MesoscopeExperiment class.
 
-    The MesoscopeExperiment takes the intended runtime code as one of the initialization arguments. The runtime mode
-    determines the range of supported VR system states and the behavior of the start() and stop() class methods.
+    The MesoscopeExperiment takes the intended runtime mode code as one of its initialization arguments. The runtime
+    mode broadly determines what assets need to be created, configured, and activated during runtime. It also determines
+    the range of supported VR system states.
+
+    Notes:
+        Most users should never use code 5 (Calibration). This mode is intended for users with a good understanding of
+        Mesoscope-VR hardware and software operation principles.
     """
 
     EXPERIMENT = 1
-    """The main runtime mode intended to record experimental task performance. Experiment runtimes use all Python 
-    assets (cameras, microcontrollers), Unity game engine and the mesoscope. The start() method of the 
-    MesoscopeExperiment will verify Unity connection and start mesoscope frame acquisition as part of its runtime."""
+    """The main runtime mode intended to record experimental task performance. Experiment runtimes use all available 
+    Mesoscope-VR system assets: cameras, microcontroller, Unity game engine, and the mesoscope. The start() method of 
+    the MesoscopeExperiment, in addition to initializing all assets, verifies that Unity game engine is running and 
+    instructs the mesoscope to start acquiring frames."""
 
     LICK_TRAINING = 2
     """The training mode used to teach naive animals to operate the lick tube (sensor) and consume water rewards 
-    dispensed from the tube. The lick training runtime does not use Unity game engine or mesoscope."""
+    dispensed from the tube. The lick training runtime does not use Unity game engine or mesoscope. The runtime does 
+    use microcontroller and camera assets, however, and generates the raw_data folder for the training session."""
 
     RUN_TRAINING = 3
     """The training mode used to teach naive animals how to run on the unlocked treadmill wheel. The run training 
-    runtime does not use Unity game engine or mesoscope."""
+    runtime does not use Unity game engine or mesoscope. The runtime does use microcontroller and camera assets, 
+    however, and generates the raw_data folder for the training session."""
 
     VALVE_CALIBRATION = 4
-    """The service mode used to test and calibrate the water reward valve. This mode disables most hardware modules 
-    and does not use the mesoscope or Unity game engine. Note, this mode will automatically transition HeadBar and 
-    LickPort Zaber motors into the position that provides easy access to the lickport tube to assist with calibration.
+    """The service mode used to test, calibrate, fill and empty the water reward valve. Typically, this mode would be 
+    used twice a day: before the first experimental runtime of the day (to fill and test the valve), and after the 
+    last experimental runtime of the day (to empty the valve). This mode does not use camera, Unity game engine or 
+    mesoscope assets and it disables all hardware modules other than the reward valve interface. This mode does not
+    generate output data directories. Note, this mode will automatically transition HeadBar and LickPort Zaber motors 
+    into the position that provides easy access to the lickport tube to assist with calibration. Make sure the mesoscope
+    objective is removed and there is no animal in the HeadBar holder prior to running this mode.
     """
 
     CALIBRATION = 5
-    """The service mode used to test all currently supported ModuleInterface classes other than the Water Valve, which
-    is calibrated via the VALVE_CALIBRATION mode (4). This is used during Mesoscope-VR hardware assembly to test and 
-    calibrate all modules. Generally, this mode should not be used after the initial system assembly."""
+    """The service mode used to test all hardware modules used by the current Mesoscope-VR system setup, other than 
+    the Water Valve, which is calibrated via the VALVE_CALIBRATION mode (4). This is used during Mesoscope-VR hardware 
+    assembly to test and calibrate all modules. Generally, this mode should not be used after the initial system 
+    assembly and should only be used by users with a good grasp of the hardware and software employed in the 
+    Mesoscope-VR system."""
 
 
 class ProjectData:
@@ -181,7 +204,7 @@ class ProjectData:
             ensure_directory_exists(nas_project_directory)
             ensure_directory_exists(server_project_directory)
 
-            # Overwrites the destination directory paths with the project- and animal- adjusted paths. This is not done
+            # Overwrites the destination directory paths with the project- and animal-adjusted paths. This is not done
             # for the local path as that path may need to be modified in different ways, depending on the arguments
             # passed to create_session() method.
             self._nas = nas_project_directory
@@ -209,7 +232,7 @@ class ProjectData:
         self._sessions: list[Path] = sorted([p for p in self._local.glob("????-??-??-??-??-??-*") if p.is_dir()])
 
     def __del__(self) -> None:
-        """Ensures that the test directory is cleaned up before the class is garbage collected, if test directory
+        """Ensures that the test directory is cleaned up before the class is garbage collected, if the test directory
         exists."""
         session_path = self._local.joinpath("TestProject", "TestAnimal", "test")
         shutil.rmtree(session_path, ignore_errors=True)
@@ -280,7 +303,7 @@ class ProjectData:
         self._session_name = raw_session_path.stem
 
         # Retrieves the name of the previous session before appending the newly generated path to the sessions' list. If
-        # the sessions list is empty, keeps the previous name set to None.
+        # the session list is empty, keeps the previous name set to None.
         if len(self._sessions) != 0:
             self._previous_session_name = self._sessions[-1].stem
         self._sessions.append(raw_session_path)
@@ -601,7 +624,7 @@ class MesoscopeExperiment:
         if self._mode != RuntimeModes.CALIBRATION and self._mode != RuntimeModes.VALVE_CALIBRATION:
             self._project_data.create_session()  # Creates the directory structure for the new experimental session
         else:
-            # For calibration runtimes, also creates a session directory, but uses the test scheme instead to store
+            # For calibration runtimes, also creates a session directory but uses the test scheme instead to store
             # the data inside a dedicated TEST folder.
             self._project_data.create_session(is_test=True)
 
