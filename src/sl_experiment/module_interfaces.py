@@ -613,6 +613,11 @@ class TTLInterface(ModuleInterface):
 
         If the TTLModule receives the HIGH phase of the incoming TTL pulse, it returns True. Otherwise, returns False.
         """
+
+        # If pulse tracking is disabled, always returns False.
+        if self._pulse_tracker is None:
+            return False
+
         if self._pulse_tracker.read_data(index=0) == 1:
             return True
         else:

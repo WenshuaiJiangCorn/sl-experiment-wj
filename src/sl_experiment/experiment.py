@@ -2,6 +2,7 @@
 and ProjectData class that abstracts working with experimental data."""
 
 import os
+import threading
 import warnings
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from .module_interfaces import (
     EncoderInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
-from ataraxis_data_structures import DataLogger, LogPackage
+from ataraxis_data_structures import DataLogger, LogPackage, YamlConfig
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
 from ataraxis_video_system import (
@@ -40,17 +41,37 @@ import shutil
 from enum import IntEnum
 
 
+@dataclass()
+class _ZaberPositions(YamlConfig):
+    """This class is used to save and restore Zaber motor positions between sessions by saving them as .yaml file.
+
+    This class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors.
+    It is used to both store Zaber motor positions for each session and to (optionally) restore the same Zaber motor
+    positions across all experimental sessions for the same animal and project.
+
+    Notes:
+        This class is designed to be used by the MesoscopeExperiment class. Do not instantiate or load this class from
+        .yaml files manually.
+
+        All positions are saved using native motor units. All class fields initialize to default placeholders that are
+        likely NOT safe to apply to Zaber motors. Do not apply the positions loaded from the file unless you are 100%
+        sure they are safe to use.
+    """
+
+    headbar_z: int = 0
+    headbar_pitch: int = 0
+    headbar_roll: int = 0
+    lickport_z: int = 0
+    lickport_x: int = 0
+    lickport_y: int = 0
+
+
 class RuntimeModes(IntEnum):
     """Stores the integer codes for the runtime modes supported by the MesoscopeExperiment class.
 
-    The MesoscopeExperiment takes the intended runtime code as one of the initialization arguments. In turn, this is
-    used to determine the behavior of the start() and stop() class methods, as well as the range of MesoscopeExperiment
-    methods that can be called after initialization.
+    The MesoscopeExperiment takes the intended runtime code as one of the initialization arguments. The runtime mode
+    determines the range of supported VR system states and the behavior of the start() and stop() class methods.
     """
-
-    UNDEFINED = 0
-    """Not a valid runtime mode. This is reserved for testing and debugging purposes and should not be used by 
-    end-users."""
 
     EXPERIMENT = 1
     """The main runtime mode intended to record experimental task performance. Experiment runtimes use all Python 
@@ -59,17 +80,353 @@ class RuntimeModes(IntEnum):
 
     LICK_TRAINING = 2
     """The training mode used to teach naive animals to operate the lick tube (sensor) and consume water rewards 
-    dispensed from the tube. The lick training runtime does not use Unity game engine or mesoscope. Also, it does not 
-    use some of the hardware modules used by the main experiment runtime."""
+    dispensed from the tube. The lick training runtime does not use Unity game engine or mesoscope."""
 
     RUN_TRAINING = 3
     """The training mode used to teach naive animals how to run on the unlocked treadmill wheel. The run training 
-    runtime does not use Unity game engine or mesoscope. Also, it does not use some of the hardware modules used by 
-    the main experiment runtime."""
+    runtime does not use Unity game engine or mesoscope."""
+
+    VALVE_CALIBRATION = 4
+    """The service mode used to test and calibrate the water reward valve. This mode disables most hardware modules 
+    and does not use the mesoscope or Unity game engine. Note, this mode will automatically transition HeadBar and 
+    LickPort Zaber motors into the position that provides easy access to the lickport tube to assist with calibration.
+    """
+
+    CALIBRATION = 5
+    """The service mode used to test all currently supported ModuleInterface classes other than the Water Valve, which
+    is calibrated via the VALVE_CALIBRATION mode (4). This is used during Mesoscope-VR hardware assembly to test and 
+    calibrate all modules. Generally, this mode should not be used after the initial system assembly."""
+
+
+class ProjectData:
+    """Provides methods for managing the experimental data acquired by all Sun lab pipelines for a given project and
+    animal combination.
+
+    This class functions as the central hub for collecting the data from all local PCs involved in the acquisition
+    process and pushing it to the NAS and the data analysis server(s). Its primary purpose is to maintain the project
+    data structure across all supported destinations and to efficiently and safely move the data to these
+    destinations with minimal redundancy and footprint.
+
+    Note:
+        It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
+        SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
+        the OS has full access to these directories and filesystems.
+
+        This class is specifically designed for working with raw data for a single animal used in the managed project.
+        Processed data is managed by the processing pipeline library.
+
+        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each session
+        directory.
+
+        If this class is instantiated with the 'create' flag for an already existing project and / or animal, it will
+        NOT recreate the project and animal directories. Instead, the instance will use the path to the already existing
+        directories.
+
+    Args:
+        project_name: The name of the project whose data will be managed by the class.
+        animal_name: The name of the animal whose data will be managed by the class.
+        create: A boolean flag indicating whether to create the project directory if it does not exist.
+        local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
+            this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
+        server_root_directory: The path to the root directory where all projects are stored on the server-machine.
+            Usually, this is the 'storage' (RAID 6) volume of the BioHPC server.
+        nas_root_directory: The path to the root directory where all projects are stored on the Synology NAS. Usually,
+            this is a non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes.
+        mesoscope_data_directory: The path to the directory where the mesoscope saves acquired frame data. Usually, this
+            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime.
+
+    Attributes:
+        _local: The absolute path to the host-machine animal directory for the managed project.
+        _nas: The absolute path to the Synology NAS animal directory for the managed project.
+        _server: The absolute path to the BioHPC server-machine animal directory for the managed project.
+        _mesoscope: The absolute path to the mesoscope data directory.
+        _project_name: Stores the name of the project whose data is currently managed by the class.
+        _animal_name: Stores the name of the animal whose data is currently managed by the class.
+        _session_name: Stores the name of the last generated session directory.
+        _previous_session_name: Stores the name of the session directory that precedes the last generated session
+            directory.
+        _is_test: Determines whether the last created session directory is a real experimental session or a test
+            session.
+        _sessions: Stores the sorted list of Paths to all already existing sessions inside the animal directory of
+            the project.
+
+    Raises:
+        FileNotFoundError: If the project and animal directory path does not exist and the 'create' flag is not set.
+    """
+
+    def __init__(
+        self,
+        project_name: str,
+        animal_name: str,
+        create: bool = True,
+        local_root_directory: Path = Path("/media/Data/Experiments"),
+        server_root_directory: Path = Path("/media/cybermouse/Extra Data/server/storage"),
+        nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
+        mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata/mesoscope_frames"),
+    ) -> None:
+        # Ensures that each root path is absolute
+        self._local: Path = local_root_directory.absolute()
+        self._nas: Path = nas_root_directory.absolute()
+        self._server: Path = server_root_directory.absolute()
+        self._mesoscope: Path = mesoscope_data_directory.absolute()
+
+        # Computes the project + animal directory paths for all destinations
+        local_project_directory = self._local / project_name / animal_name
+        nas_project_directory = self._nas / project_name / animal_name
+        server_project_directory = self._server / project_name / animal_name
+
+        # If requested, creates the directories in all destinations and locally
+        if create:
+            ensure_directory_exists(local_project_directory)
+            ensure_directory_exists(nas_project_directory)
+            ensure_directory_exists(server_project_directory)
+
+            # Overwrites the destination directory paths with the project- and animal- adjusted paths. This is not done
+            # for the local path as that path may need to be modified in different ways, depending on the arguments
+            # passed to create_session() method.
+            self._nas = nas_project_directory
+            self._server = server_project_directory
+
+        # If the 'create' flag is off, raises an error if the target directory does not exist. Assumes that if the
+        # directory does not exist locally, it would not exist on the NAS and Server either.
+        elif not local_project_directory.exists():
+            message = (
+                f"Unable to initialize the ProjectData class, as the directory for the animal '{animal_name}' of the "
+                f"project '{project_name}' does not exist. Initialize the class with the 'create' flag if you need to "
+                f"create the project and animal directories."
+            )
+            console.error(message=message, error=FileNotFoundError)
+
+        # Records animal and project names to attributes
+        self._project_name: str = project_name
+        self._animal_name: str = animal_name
+        self._session_name: str | None = None  # Placeholder
+        self._previous_session_name: str | None = None  # Placeholder
+        self._is_test: bool = False
+
+        # Generates the sorted list of all already existing sessions. This is used to discover previous sessions,
+        # which may contain useful information, such as Zaber Motor positions used during the previous session
+        self._sessions: list[Path] = sorted([p for p in self._local.glob("????-??-??-??-??-??-*") if p.is_dir()])
+
+    def __del__(self) -> None:
+        """Ensures that the test directory is cleaned up before the class is garbage collected, if test directory
+        exists."""
+        session_path = self._local.joinpath("TestProject", "TestAnimal", "test")
+        shutil.rmtree(session_path, ignore_errors=True)
+
+    def create_session(self, is_test: bool = False) -> None:
+        """Creates a new session directory within the broader project-animal data structure.
+
+        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
+        name within the project-animal structure has a unique name that accurately preserves the order of the sessions.
+
+        Notes:
+            Most other class methods require this method to be called at least once before they can be used.
+
+            To retrieve the name of the generated session, use the 'session_name' property. To retrieve the full path
+            to the session raw_data directory, use the 'session_path' property.
+
+            If this is not the first session for this animal, use the 'previous_session_name' and
+            'previous_session_path' properties to get the path to the previous session data.
+
+        Args:
+            is_test: A boolean flag that determines whether the method is used to create the session directory for
+                a real animal or to generate a test directory used to calibrate Mesoscope-VR modules. Test directories
+                do not make use of project and animal fields and instead statically create TestProject-TestAnimal-test
+                structure under the local root directory.
+
+        Returns:
+            The Path to the root session directory.
+        """
+
+        # If the method is used to generate a test directory, create a new test hierarchy and returns early. This
+        # ignores most of the ProjectData configuration.
+        if is_test:
+            session_path = self._local.joinpath("TestProject", "TestAnimal", "test")
+            # If the session path exists (from a previous runtime), cleans it up
+            shutil.rmtree(session_path, ignore_errors=True)
+            ensure_directory_exists(session_path.joinpath("raw_data"))
+            self._session_name = session_path.stem
+            self._is_test = True
+            return
+
+        # Otherwise, ensures that the test flag is disabled
+        self._is_test = False
+
+        # Acquires the UTC timestamp to use as the session name
+        session_name = get_timestamp(time_separator="-")
+
+        # Constructs the session directory path and generates the directory
+        raw_session_path = self._local.joinpath(self._project_name, self._animal_name, session_name)
+
+        # Handles potential session name conflicts. While this is extremely unlikely, it is not impossible for
+        # such conflicts to occur.
+        counter = 0
+        while raw_session_path.exists():
+            counter += 1
+            new_session_name = f"{session_name}_{counter}"
+            raw_session_path = self._local.joinpath(self._project_name, self._animal_name, new_session_name)
+
+        if counter > 0:
+            message = (
+                f"Session name conflict occurred for animal '{self._animal_name}' of project '{self._project_name}' "
+                f"when adding the new session. The newly created session directory uses a '_{counter}' postfix to "
+                f"distinguish itself from the already existing session directory."
+            )
+            warnings.warn(message=message)
+
+        # Creates the session directory and the raw_data subdirectory
+        ensure_directory_exists(raw_session_path.joinpath("raw_data"))
+        self._session_name = raw_session_path.stem
+
+        # Retrieves the name of the previous session before appending the newly generated path to the sessions' list. If
+        # the sessions list is empty, keeps the previous name set to None.
+        if len(self._sessions) != 0:
+            self._previous_session_name = self._sessions[-1].stem
+        self._sessions.append(raw_session_path)
+
+    @property
+    def session_path(self) -> Path:
+        """Returns the full path to the last generated session raw_data directory.
+
+        This method is primarily intended to be called by the MesoscopeExperiment class to determine where to save
+        the data acquired during experiment runtime.
+        """
+        if self._session_name is None:
+            message = (
+                f"Unable to retrieve the 'raw_data' folder path for the last generated session of the animal "
+                f"'{self._animal_name}' and project '{self._project_name}'. Call create_session() method before using "
+                f"this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data")
+
+    @property
+    def previous_session_path(self) -> Path | None:
+        """Returns the full path to the raw_data directory of the session that precedes the last generated session.
+
+        This method is primarily intended to be called by the MesoscopeExperiment class to extract last session's data,
+        such as the positions of Zaber motors that control the HeadBar and the LickPort.
+
+        Returns:
+            The path to the preceding session raw_data directory. If there are no preceding sessions, returns None to
+            indicate there is no valid Path.
+        """
+        if self._session_name is None:
+            message = (
+                f"Unable to retrieve the 'raw_data' folder path for the session that precedes the last generated"
+                f"session of the animal '{self._animal_name}' and project '{self._project_name}'. Call "
+                f"create_session() method before using this property."
+            )
+            console.error(message=message, error=ValueError)
+
+        # If there are no previous sessions, returns None.
+        if self._previous_session_name is None:
+            return None
+
+        return self._local.joinpath(self._project_name, self._animal_name, self._previous_session_name, "raw_data")
+
+    def pull_mesoscope_data(self, num_threads: int = 28) -> None:
+        """Pulls the frames acquired by the mesoscope from the ScanImage PC to the raw_data directory of the last
+        created session.
+
+        This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
+        before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
+        contains only the frames acquired during the current session runtime, in addition to the MotionEstimator.me and
+        zstack.mat used for motion registration.
+
+        Notes:
+            This method is configured to parallelize data transfer and verification to optimize runtime speeds where
+            possible.
+
+        Args:
+            num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
+                the local machine. Depending on the connection speed between the PCs, it may be useful to set this
+                number to the number of available CPU cores - 4.
+
+        """
+        # The mesoscope path statically points to the mesoscope_frames folder. It is expected that the folder ONLY
+        # contains the frames acquired during this session's runtime. First, generates the checksum for the raw
+        # mesoscope frames
+        calculate_directory_checksum(directory=self._mesoscope, num_processes=None, save_checksum=True)
+
+        # Generates the path to the local session raw_data folder
+        destination = self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data")
+
+        # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
+        transfer_directory(source=self._mesoscope, destination=destination, num_threads=num_threads)
+
+        # Removes the checksum file after the transfer is complete. The checksum will be recalculated for the whole
+        # session directory during preprocessing, so there is no point in keeping the original mesoscope checksum file.
+        destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
+
+        # After the transfer completes successfully (including integrity verification), recreates the mesoscope_frames
+        # folder to clear the transferred images.
+        shutil.rmtree(self._mesoscope)
+        ensure_directory_exists(self._mesoscope)
+
+    def push_to_destinations(self, parallel: bool = True, num_threads: int = 10) -> None:
+        """Pushes the raw_data directory of the last created session to the NAS and the SunLab BioHPC server.
+
+        This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and
+        the server. This method generates the xxHash3-128 checksum for the source folder and uses it to verify the
+        integrity of transferred data at each destination before removing the source folder.
+
+        Notes:
+            This method is configured to run data transfer and checksum calculation in parallel where possible. It is
+            advised to minimize the use of the host-machine while it is running this method, as most CPU resources will
+            be consumed by the data transfer process.
+
+        Args:
+            parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
+                data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
+                of parallel threads used by each transfer process or the number of threads used to compute the
+                xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
+            num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
+                the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
+                advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
+                number of CPU cores - 4.
+        """
+        # Generates the path to session raw_data folder
+        source = self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data")
+
+        # Ensures that the source folder has been checksummed. If not, generates the checksum before executing the
+        # transfer operation
+        if not source.joinpath("ax_checksum.txt").exists():
+            calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
+
+        # Generates the paths to the destination folders. Bundles them with descriptive names to enhance progress
+        # reporting
+        destinations = (
+            (self._nas.joinpath(self._session_name, "raw_data"), "NAS"),
+            (self._server.joinpath(self._session_name, "raw_data"), "Server"),
+        )
+
+        # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
+        if parallel:
+            with ProcessPoolExecutor(max_workers=len(destinations)) as executor:
+                futures = {
+                    executor.submit(
+                        transfer_directory, source=source, destination=dest[0], num_threads=num_threads
+                    ): dest
+                    for dest in destinations
+                }
+                for future in as_completed(futures):
+                    # Propagates any exceptions from the transfers
+                    future.result()
+
+        # Otherwise, runs the transfers sequentially. Note, transferring individual files is still done in parallel, but
+        # the transfer is performed for each destination sequentially.
+        else:
+            for destination in destinations:
+                transfer_directory(source=source, destination=destination[0], num_threads=num_threads)
+
+        # After all transfers complete successfully (including integrity verification), removes the source directory
+        shutil.rmtree(source)
 
 
 class MesoscopeExperiment:
-    """The base class for all Sun lab Mesoscope experiment runtimes.
+    """The base class for all Sun lab mesoscope experiment runtimes.
 
     This class provides methods for conducting experiments in the Sun lab using the Mesoscope-VR system. This class
     abstracts most low-level interactions with the VR system and the mesoscope via a simple high-level API. In turn, the
@@ -97,12 +454,13 @@ class MesoscopeExperiment:
         as the MicroControllerInterface or the VideoSystem uses this id code.
 
         This class can be configured to perform an experiment runtime or one of the calibration / training runtimes. All
-        interactions with the VR-Mesoscope system should be performed through this class instance.
+        interactions with the Mesoscope-VR system should be performed through this class instance.
 
     Args:
         project_data: An instance of the ProjectData class initialized for the animal whose data will be recorded by
             this class. The ProjectData instance encapsulates all data management procedures used to acquire,
-            preprocess, and move the experimental session data to long-term storage.
+            preprocess, and move the experimental session data to long-term storage. Do NOT create a new session before
+            passing the ProjectData instance to this class, MesoscopeExperiment handles session creation.
         runtime_mode: Specifies the intended runtime mode. THe class can be used to run experiments, train the
             animal, and execute various maintenance tasks, such as water valve calibration.
         screens_on: Determines whether the VR screens are ON when this class is initialized. Since there is no way of
@@ -130,13 +488,13 @@ class MesoscopeExperiment:
         _started: Tracks whether the VR system and experiment runtime are currently running.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
-        _mesoscope_start: The interface that starts Mesoscope frame acquisition via TTL pulse.
-        _mesoscope_stop: The interface that stops Mesoscope frame acquisition via TTL pulse.
+        _mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
+        _mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
         _break: The interface that controls the electromagnetic break attached to the running wheel.
         _reward: The interface that controls the solenoid water valve that delivers water to the animal.
         _screens: The interface that controls the power state of the VR display screens.
         _actor: The main interface for the 'Actor' Ataraxis Micro Controller (AMC) device.
-        _mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the Mesoscope.
+        _mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the mesoscope.
         _lick: The interface that monitors animal's interactions with the lick sensor (detects licks).
         _torque: The interface that monitors the torque applied by the animal to the running wheel.
         _sensor: The main interface for the 'Sensor' Ataraxis Micro Controller (AMC) device.
@@ -215,7 +573,7 @@ class MesoscopeExperiment:
         self._vr_state: int = 0  # Stores the current state of the VR system
         self._experiment_state: int = experiment_state  # Stores user-defined experiment state
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp local log entries
-        self._source_id = np.uint8(1)  # Reserves source ID code 1 for this class
+        self._source_id: np.uint8 = np.uint8(1)  # Reserves source ID code 1 for this class
 
         # Input verification:
         if not isinstance(project_data, ProjectData):
@@ -234,10 +592,18 @@ class MesoscopeExperiment:
             console.error(message=message, error=ValueError)
 
         # Saves the ProjectData instance to class attribute so that it can be used from class methods.
-        self._project_data = project_data
+        self._project_data: ProjectData = project_data
 
         # Sets the runtime mode to the value of the passed RuntimeModes enumeration field.
         self._mode: int = runtime_mode.value
+
+        # For training and experiment runtimes, creates a new session directory to store the experimental data
+        if self._mode != RuntimeModes.CALIBRATION and self._mode != RuntimeModes.VALVE_CALIBRATION:
+            self._project_data.create_session()  # Creates the directory structure for the new experimental session
+        else:
+            # For calibration runtimes, also creates a session directory, but uses the test scheme instead to store
+            # the data inside a dedicated TEST folder.
+            self._project_data.create_session(is_test=True)
 
         if not isinstance(valve_calibration_data, tuple) or not all(
             isinstance(item, tuple)
@@ -270,8 +636,8 @@ class MesoscopeExperiment:
         # TTL trigger, etc.
 
         # Module interfaces:
-        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1))  # Mesoscope acquisition start
-        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2))  # Mesoscope acquisition stop
+        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1))  # mesoscope acquisition start
+        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2))  # mesoscope acquisition stop
         self._break = BreakInterface(
             minimum_break_strength=43.2047,  # 0.6 in oz
             maximum_break_strength=1152.1246,  # 16 in oz
@@ -448,27 +814,25 @@ class MesoscopeExperiment:
         # this is controllable exclusively through ThorLabs bindings.
 
     def start(self) -> None:
-        """Sets up all assets used to support the runtime of the mode selected at class initialization.
+        """Sets up all assets used in the runtime mode selected at class initialization.
 
         This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. It also starts mesoscope frame acquisition by sending the trigger TTl to the ScanImage DAQ and
-        verifying that mesoscope scanning TTL signals are being sent back to the PC. Overall, once this method is
-        called, most sources will start acquiring and saving data. It is expected that the experimental task will begin
-        as soon as this method completes its runtime.
+        system processes if these assets are required by the runtime mode. It also verifies the configuration of
+        Unity game engine and the mesoscope and activates mesoscope frame
 
         Notes:
             The particular assets activated during this method depend on the runtime mode of the class. For example,
             mesoscope and Unity are only initialized for 'experiment' modes.
 
-             This process will not execute unless the host PC has access to the necessary number of logical CPU cores
-             and other required hardware resources (GPU for video encoding, etc.). This prevents using the class on
-             machines that are unlikely to sustain the runtime requirements.
+            This process will not execute unless the host PC has access to the necessary number of logical CPU cores
+            and other required hardware resources (GPU for video encoding, etc.). This prevents using the class on
+            machines that are unlikely to sustain the runtime requirements.
 
-             Zaber devices are connected during the initialization process and not this method runtime to enable
-             manipulating Headbar and Lickport before starting the main experiment.
+            Zaber devices are connected during the initialization process and not this method runtime to enable
+            manipulating Headbar and Lickport before starting the main experiment.
 
-             Calling this method automatically enables Console class (via console variable) if it was not enabled.
-             It is expected that this method runs inside the central process managing the runtime at the highest level.
+            Calling this method automatically enables Console class (via console variable) if it was not enabled.
+            It is expected that this method runs inside the central process managing the runtime at the highest level.
 
         Raises:
             RuntimeError: If the host PC does not have enough logical CPU cores available.
@@ -493,7 +857,7 @@ class MesoscopeExperiment:
             )
             console.error(message=message, error=RuntimeError)
 
-        message = "Starting the Mesoscope experiment..."
+        message = "Initializing MesoscopeExperiment assets..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Starts the data logger
@@ -609,15 +973,21 @@ class MesoscopeExperiment:
         message = "Hardware module setup: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Sets up other VR systems according to REST state for experiment runtimes.
+        # If the class is initialized to run an experiment, sets the rest of the subsystems to use the REST state.
         if self._mode == RuntimeModes.EXPERIMENT.value:
             self.vr_rest()
 
-        # Water Valve receives triggers directly from unity, so we do not need to manipulate the valve state
-        # manually. Mesoscope is triggered via a dedicated instance method.
+        # For Lick and Run training, there is only one state that configures all used subsystems.
+        elif self._mode == RuntimeModes.LICK_TRAINING.value:
+            self._vr_lick_train()
+
+        elif self._mode == RuntimeModes.RUN_TRAINING.value:
+            self._vr_run_train()
+
+        # The setup procedure is complete.
         self._started = True
 
-        message = "MesoscopeExperiment assets: initialized."
+        message = "MesoscopeExperiment assets: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self):
@@ -669,26 +1039,25 @@ class MesoscopeExperiment:
         self.stop()
 
     def vr_rest(self) -> None:
-        """Switches the VR system to the REST state.
+        """Switches the VR system to the rest state.
 
         In the rest state, the break is engaged to prevent the mouse from moving the wheel. The encoder module is
         disabled, and instead the torque sensor is enabled. The VR screens are switched off, cutting off light emission.
         By default, the VR system starts all experimental runtimes using the REST state.
 
         Note:
-            This command is only executable if the class is running in the EXPERIMENT mode.
+            This command is only executable if the class is running in the experiment mode.
 
         Raises:
-            RuntimeError: If the Mesoscope-VR system is not running (start() method was not called) or the class
-            instance uses a runtime mode other than EXPERIMENT.
+            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the experiment runtime
+                mode.
         """
 
         if not self._started or not self._mode == RuntimeModes.EXPERIMENT.value:
             message = (
-                f"Unable to switch the Mesoscope-VR system to the REST state. Either the start() method of the "
+                f"Unable to switch the Mesoscope-VR system to the rest state. Either the start() method of the "
                 f"MesoscopeExperiment class has not been called to setup the necessary assets or the current runtime "
-                f"mode of the class is not set to the EXPERIMENT mode. The REST state is only supported for EXPERIMENT "
-                f"runtimes at this time."
+                f"mode of the class is not set to the 'experiment' mode."
             )
             console.error(message=message, error=RuntimeError)
 
@@ -712,28 +1081,31 @@ class MesoscopeExperiment:
         # Configures the state tracker to reflect the REST state
         self._change_vr_state(1)
 
-        message = "VR State: REST."
+        message = f"VR State: {self._state_map[1]}."
         console.echo(message=message, level=LogLevel.INFO)
 
-    def vr_idle(self) -> None:
-        """
-        """
-
-        # Enables breaks to block the wheel.
-        self._break.toggle(state=True)
-
-        # Disables torque and encoder monitoring. Since 'Idle' is primarily designed for putting the animal in the VR
-        # system, we do not need to record the noise-form associated with this activity in either format.
-        self._torque.reset_command_queue()
-        self._wheel_encoder.reset_command_queue()
-
     def vr_run(self) -> None:
-        """Switches the VR system to the RUN state.
+        """Switches the VR system to the run state.
 
         In the run state, the break is disengaged to allow the mouse to freely move the wheel. The encoder module is
         enabled to record and share live running data with Unity, and the torque sensor is disabled. The VR screens are
         switched on to render the VR environment.
+
+        Note:
+            This command is only executable if the class is running in the experiment mode.
+
+        Raises:
+            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the experiment runtime
+                mode.
         """
+
+        if not self._started or not self._mode == RuntimeModes.EXPERIMENT.value:
+            message = (
+                f"Unable to switch the Mesoscope-VR system to the run state. Either the start() method of the "
+                f"MesoscopeExperiment class has not been called to setup the necessary assets or the current runtime "
+                f"mode of the class is not set to the 'experiment' mode."
+            )
+            console.error(message=message, error=RuntimeError)
 
         # Initializes encoder monitoring at 2 kHz rate. The encoder aggregates wheel data at native speeds; this rate
         # only determines how often the aggregated data is sent to PC and Unity.
@@ -755,19 +1127,110 @@ class MesoscopeExperiment:
 
         # Configures the state tracker to reflect RUN state
         self._change_vr_state(2)
-
-        message = "VR State: RUN."
+        message = f"VR State: {self._state_map[self._vr_state]}."
         console.echo(message=message, level=LogLevel.INFO)
 
-    @property
-    def vr_state(self) -> str:
-        """Returns the current VR state as a string."""
-        return self._state_map[self._vr_state]
+    def _vr_lick_train(self) -> None:
+        """Switches the VR system into the lick training state.
+
+        In the lick training state, the break is enabled, preventing the mouse from moving the wheel. The screens
+        are turned off, Unity and mesoscope are disabled. Torque and Encoder monitoring are also disabled. The only
+        working hardware modules are lick sensor and water valve.
+
+        Note:
+            This command is only executable if the class is running in the lick training mode.
+
+            This state is set automatically during start() method runtime. It should not be called externally by the
+            user.
+
+        Raises:
+            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the lick training runtime
+                mode.
+        """
+
+        if not self._started or not self._mode == RuntimeModes.LICK_TRAINING.value:
+            message = (
+                f"Unable to switch the Mesoscope-VR system to the lick training state. Either the start() method of "
+                f"the MesoscopeExperiment class has not been called to setup the necessary assets or the current "
+                f"runtime mode of the class is not set to the 'lick_training' mode."
+            )
+            console.error(message=message, error=RuntimeError)
+
+        # Ensures the break is enabled. The mice do not need to move the wheel during the lick training runtime.
+        self._break.toggle(True)
+
+        # Disables both torque and encoder. During lick training we are not interested in mouse motion data.
+        self._torque.reset_command_queue()
+        self._wheel_encoder.reset_command_queue()
+
+        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
+        # keeps them OFF.
+        if self._screen_on:
+            self._screens.toggle()
+            self._screen_on = False
+
+        # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
+        # pipelines. Unity and mesoscope should not be enabled.
+
+        # Configures the state tracker to reflect the LICK TRAIN state
+        self._change_vr_state(3)
+        message = f"VR State: {self._state_map[self._vr_state]}."
+        console.echo(message=message, level=LogLevel.INFO)
+
+    def _vr_run_train(self) -> None:
+        """Switches the VR system into the run training state.
+
+        In the run training state, the break is disabled, allowing the animal to move the wheel. The encoder module is
+        enabled to monitor the running metrics (distance and / or speed). The lick sensor and water valve modules are
+        also enabled to conditionally reward the animal for desirable performance. The VR screens are turned off. Unity,
+        mesoscope, and the torque module are disabled.
+
+        Note:
+            This command is only executable if the class is running in the run training mode.
+
+            This state is set automatically during start() method runtime. It should not be called externally by the
+            user.
+
+        Raises:
+            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the run training runtime
+                mode.
+        """
+
+        if not self._started or not self._mode == RuntimeModes.RUN_TRAINING.value:
+            message = (
+                f"Unable to switch the Mesoscope-VR system to the run training state. Either the start() method of the "
+                f"MesoscopeExperiment class has not been called to setup the necessary assets or the current runtime "
+                f"mode of the class is not set to the 'run_training' mode."
+            )
+            console.error(message=message, error=RuntimeError)
+
+        # Disables both torque sensor.
+        self._torque.reset_command_queue()
+
+        # Enables the encoder module to monitor animal's running performance
+        self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
+
+        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
+        # keeps them OFF.
+        if self._screen_on:
+            self._screens.toggle()
+            self._screen_on = False
+
+        # Ensures the break is disabled. This allows the animal to run on the wheel freely.
+        self._break.toggle(False)
+
+        # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
+        # pipelines. Unity and mesoscope should not be enabled.
+
+        # Configures the state tracker to reflect the RUN TRAIN state
+        self._change_vr_state(4)
+        message = f"VR State: {self._state_map[self._vr_state]}."
+        console.echo(message=message, level=LogLevel.INFO)
 
     def _change_vr_state(self, new_state: int) -> None:
-        """Sets the vr_state attribute to the input value and logs the change to the VR state.
+        """Sets the vr_state attribute to the input state value and logs the change to the VR state.
 
-        This method is used internally to update and log new VR states.
+        This method is used internally to update and log stream when the VR state changes.
 
         Args:
             new_state: The byte-code for the newly activated VR state.
@@ -784,12 +1247,11 @@ class MesoscopeExperiment:
         self._logger.input_queue.put(log_package)
 
     def _get_cue_sequence(self) -> NDArray[np.uint8]:
-        """Requests Unity game engine to transmit the sequence of virtual reality track wall cues for the current task
-        and parses the received data.
+        """Requests Unity game engine to transmit the sequence of virtual reality track wall cues for the current task.
 
-        This method is used during the start() method runtime to both get the sequence of cues and verify that the
-        Unity game engine is running and configured correctly. The sequence of cues communicates the task order
-        of track segments, which is necessary for post-processing the data for some projects.
+        This method is used as part of the experimental runtime startup process to both get the sequence of cues and
+        verify that the Unity game engine is running and configured correctly. The sequence of cues communicates the
+        task order of track segments, which is necessary for post-processing the data for some projects.
 
         Returns:
             The Numpy array that stores the sequence of virtual reality segments as byte (uint8) values.
@@ -811,7 +1273,7 @@ class MesoscopeExperiment:
             # If Unity responds with the cue sequence message, attempts to parse the message
             if self._unity.has_data:
                 topic: str
-                payload: str
+                payload: bytes
                 topic, payload = self._unity.get_data()
                 if topic == "CueSequence/":
                     # Extracts the sequence of cues that will be used during task runtime.
@@ -844,12 +1306,8 @@ class MesoscopeExperiment:
         """Sends the frame acquisition start TTL pulse to the mesoscope and waits for the frame acquisition to begin.
 
         This method is used internally to start the mesoscope frame acquisition as part of the experiment startup
-        process. It is also used to verify that the mesoscope is available and properly configured to acquired frames
+        process. It is also used to verify that the mesoscope is available and properly configured to acquire frames
         based on the input triggers.
-
-        Notes:
-            The mesoscope acquisition is stopped during the stop_experiment() method runtime. It does not have a
-            separate method as we do not verify whether the stop trigger is accepted by the mesoscope.
 
         Raises:
             RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
@@ -873,19 +1331,17 @@ class MesoscopeExperiment:
         # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses. Raises an
         # error.
         message = (
-            f"The MesoscopeExperiment has requested the Mesoscope to start acquiring frames and received no frame "
-            f"acquisition trigger for 2 seconds. It is likely that the Mesoscope has not been armed for frame "
-            f"acquisition or that the Mesoscope trigger or frame timestamp connection is not functional."
+            f"The MesoscopeExperiment has requested the mesoscope to start acquiring frames and received no frame "
+            f"acquisition trigger for 2 seconds. It is likely that the mesoscope has not been armed for frame "
+            f"acquisition or that the mesoscope trigger or frame timestamp connection is not functional."
         )
         console.error(message=message, error=RuntimeError)
 
-    @property
-    def experiment_state(self) -> int:
-        """Returns the current experiment state as an integer."""
-        return self._experiment_state
+        # This code is here to appease mypy. It should not be reachable
+        raise RuntimeError(message)  # pragma: no cover
 
     def change_experiment_state(self, new_state: int) -> None:
-        """Updates the experiment state tracker and logs the change to the experiment state.
+        """Updates and logs the new experiment state.
 
         Use this method to timestamp and log experiment state (stage) changes, such as transitioning between different
         task versions.
@@ -905,263 +1361,19 @@ class MesoscopeExperiment:
         )
         self._logger.input_queue.put(log_package)
 
+    @property
+    def experiment_state(self) -> int:
+        """Returns the integer code for the current experiment state.
 
-class ProjectData:
-    """Provides methods for managing the experimental data acquired by all Sun lab pipelines for a given project and
-    animal combination.
-
-    This class functions as the central hub for collecting the data from all local PCs involved in the acquisition
-    process and pushing it to the NAS and the data analysis server(s). Its primary purpose is to maintain the project
-    data structure across all supported destinations and to efficiently and safely move the data to these
-    destinations with minimal redundancy and footprint.
-
-    Note:
-        It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
-        SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
-        the OS has full access to these directories and filesystems.
-
-        This class is specifically designed for working with raw data for a single animal used in the managed project.
-        Processed data is managed by the processing pipeline classes.
-
-        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each session
-        directory.
-
-        If this class is instantiated with the 'create' flag for an already existing project and / or animal, it will
-        NOT recreate the project and animal directories. Instead, the instance will use the path to the already existing
-        directories.
-
-    Args:
-        project_name: The name of the project whose data will be managed by the class.
-        animal_name: The name of the animal whose data will be managed by the class.
-        create: A boolean flag indicating whether to create the project directory if it does not exist.
-        local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
-            this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
-        server_root_directory: The path to the root directory where all projects are stored on the server-machine.
-            Usually, this is the 'storage' (RAID 6) volume of the BioHPC server.
-        nas_root_directory: The path to the root directory where all projects are stored on the Synology NAS. Usually,
-            this is a non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes.
-        mesoscope_data_directory: The path to the directory where the mesoscope saves acquired frame data. Usually, this
-            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime.
-
-    Attributes:
-        _local: The absolute path to the host-machine animal directory for the managed project.
-        _nas: The absolute path to the Synology NAS animal directory for the managed project.
-        _server: The absolute path to the BioHPC server-machine animal directory for the managed project.
-        _mesoscope: The absolute path to the mesoscope data directory.
-        _project_name: Stores the name of the project whose data is currently managed by the class.
-        _animal_name: Stores the name of the animal whose data is currently managed by the class.
-        _session_name: Stores the name of the last generated session directory.
-
-    Raises:
-        FileNotFoundError: If the project and animal directory path does not exist and the 'create' flag is not set.
-    """
-
-    def __init__(
-        self,
-        project_name: str,
-        animal_name: str,
-        create: bool = True,
-        local_root_directory: Path = Path("/media/Data/Experiments"),
-        server_root_directory: Path = Path("/media/cybermouse/Extra Data/server/storage"),
-        nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
-        mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata/mesoscope_frames"),
-    ) -> None:
-        # Ensures that each root path is absolute
-        self._local: Path = local_root_directory.absolute()
-        self._nas: Path = nas_root_directory.absolute()
-        self._server: Path = server_root_directory.absolute()
-        self._mesoscope: Path = mesoscope_data_directory.absolute()
-
-        # Computes the project + animal directory paths for all destinations
-        local_project_directory = self._local / project_name / animal_name
-        nas_project_directory = self._nas / project_name / animal_name
-        server_project_directory = self._server / project_name / animal_name
-
-        # If requested, creates the directories in all destinations and locally
-        if create:
-            ensure_directory_exists(local_project_directory)
-            ensure_directory_exists(nas_project_directory)
-            ensure_directory_exists(server_project_directory)
-
-            self._local = local_project_directory
-            self._nas = nas_project_directory
-            self._server = server_project_directory
-
-        # If the 'create' flag is off, raises an error if the target directory does not exist.
-        elif not local_project_directory.exists():
-            message = (
-                f"Unable to initialize the ProjectData class, as the directory for the animal '{animal_name}' of the "
-                f"project '{project_name}' does not exist. Initialize the class with the 'create' flag if you need to "
-                f"create the project and animal directories."
-            )
-            console.error(message=message, error=FileNotFoundError)
-
-        # Records animal and project names to attributes
-        self._project_name: str = project_name
-        self._animal_name: str = animal_name
-        self._session_name: str | None = None  # Placeholder
-
-    def create_session(self) -> None:
-        """Creates a new session directory within the broader project-animal data structure.
-
-        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
-        name within the project-animal structure has a unique name that accurately preserves the order of the sessions.
-
-        Notes:
-            Most other class methods require this method to be called at least once before they can be used.
-
-            To retrieve the name of the generated session, use the 'session_name' property. To retrieve the full path
-            to the session raw_data directory, use the 'session_path' property.
-
-        Returns:
-            The Path to the root session directory.
+        Experiment states are set via the change_experiment_state() method. If your specific experiment implementation
+        does not update experiment states, this method will always return the default state-code zero.
         """
-        # Acquires the UTC timestamp to use as the session name
-        session_name = get_timestamp(time_separator="-")
-
-        # Constructs the session directory path and generates the directory
-        raw_session_path = self._local.joinpath(session_name)
-
-        # Handles potential session name conflicts. While this is extremely unlikely, it is not impossible for
-        # such conflicts to occur.
-        counter = 0
-        while raw_session_path.exists():
-            counter += 1
-            new_session_name = f"{session_name}_{counter}"
-            raw_session_path = self._local.joinpath(new_session_name)
-
-        if counter > 0:
-            message = (
-                f"Session name conflict occurred for animal '{self._animal_name}' of project '{self._project_name}' "
-                f"when adding the new session. The newly created session directory uses a '_{counter}' postfix to "
-                f"distinguish itself from the already existing session directory."
-            )
-            warnings.warn(message=message)
-
-        # Creates the session directory and the raw_data subdirectory
-        ensure_directory_exists(raw_session_path.joinpath("raw_data"))
-        self._session_name = raw_session_path.stem
+        return self._experiment_state
 
     @property
-    def session_name(self) -> str:
-        """Returns the name of the last generated session directory."""
-        if self._session_name is None:
-            message = (
-                f"Unable to retrieve the last generates session name for the animal '{self._animal_name}' of project "
-                f"'{self._project_name}'. Call create_session() method before using this property."
-            )
-            console.error(message=message, error=ValueError)
-        return self._session_name
-
-    @property
-    def session_path(self) -> Path:
-        """Returns the full path to the last generated session raw_data directory."""
-        if self._session_name is None:
-            message = (
-                f"Unable to retrieve the 'raw_data' folder path for the last generated session of the animal "
-                f"'{self._animal_name}' of project '{self._project_name}'. Call create_session() method before using "
-                f"this property."
-            )
-            console.error(message=message, error=ValueError)
-        return self._local.joinpath(self._session_name, "raw_data")
-
-    def pull_mesoscope_data(self, num_threads: int = 28) -> None:
-        """Pulls the frames acquired by the Mesoscope from the ScanImage PC to the raw_data directory of the last
-        created session.
-
-        This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
-        before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
-        contains only the frames acquired during the current session runtime, in addition to the MotionEstimator.me and
-        zstack.mat used for motion registration.
-
-        Notes:
-            This method is configured to parallelize data transfer and verification to optimize runtime speeds where
-            possible.
-
-        Args:
-            num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
-                the local machine. Depending on the connection speed between the PCs, it may be useful to set this
-                number to the number of available CPU cores - 4.
-
-        """
-        # The mesoscope path statically points to the mesoscope_frames folder. It is expected that the folder ONLY
-        # contains the frames acquired during this session's runtime. First, generates the checksum for the raw
-        # mesoscope frames
-        calculate_directory_checksum(directory=self._mesoscope, num_processes=None, save_checksum=True)
-
-        # Generates the path to the local session raw_data folder
-        destination = self._local.joinpath(self._session_name, "raw_data")
-
-        # Transfers the mesoscope frames data from the Mesoscope PC to the local machine.
-        transfer_directory(source=self._mesoscope, destination=destination, num_threads=num_threads)
-
-        # Removes the checksum file after the transfer is complete. The checksum will be recalculated for the whole
-        # session directory during preprocessing, so there is no point in keeping the original mesoscope checksum file.
-        destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
-
-        # After the transfer completes successfully (including integrity verification), recreates the mesoscope_frames
-        # folder to clear the transferred images.
-        shutil.rmtree(self._mesoscope)
-        ensure_directory_exists(self._mesoscope)
-
-    def push_to_destinations(self, parallel: bool = True, num_threads: int = 10) -> None:
-        """Pushes the raw_data directory of the last created session to the NAS and the SunLab BioHPC server.
-
-        This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and
-        the server. This method generates the xxHash3-128 checksum for the source folder and uses it to verify the
-        integrity of transferred data at each destination before removing the source folder.
-
-        Notes:
-            This method is configured to run data transfer and checksum calculation in parallel where possible. It is
-            advised to minimize the use of the host-machine while it is running this method, as most CPU resources will
-            be consumed by the data transfer process.
-
-        Args:
-            parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
-                data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
-                of parallel threads used by each transfer process or the number of threads used to compute the
-                xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
-            num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
-                the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
-                advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
-                number of CPU cores - 4.
-        """
-        # Generates the path to session raw_data folder
-        source = self._local.joinpath(self._session_name, "raw_data")
-
-        # Ensures that the source folder has been checksummed. If not, generates the checksum before executing the
-        # transfer operation
-        if not source.joinpath("ax_checksum.txt").exists():
-            calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
-
-        # Generates the paths to the destination folders. Bundles them with descriptive names to enhance progress
-        # reporting
-        destinations = (
-            (self._nas.joinpath(self._session_name, "raw_data"), "NAS"),
-            (self._server.joinpath(self._session_name, "raw_data"), "Server"),
-        )
-
-        # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
-        if parallel:
-            with ProcessPoolExecutor(max_workers=len(destinations)) as executor:
-                futures = {
-                    executor.submit(
-                        transfer_directory, source=source, destination=dest[0], num_threads=num_threads
-                    ): dest
-                    for dest in destinations
-                }
-                for future in as_completed(futures):
-                    # Propagates any exceptions from the transfers
-                    future.result()
-
-        # Otherwise, runs the transfers sequentially. Note, transferring individual files is still done in parallel, but
-        # the transfer is performed for each destination sequentially.
-        else:
-            for destination in destinations:
-                transfer_directory(source=source, destination=destination[0], num_threads=num_threads)
-
-        # After all transfers complete successfully (including integrity verification), removes the source directory
-        shutil.rmtree(source)
+    def vr_state(self) -> str:
+        """Returns the current VR system state as a string."""
+        return self._state_map[self._vr_state]
 
 
 def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
