@@ -61,6 +61,7 @@ class _ZaberPositions(YamlConfig):
         Exercise caution when working with Zaber motors. The motors can crush the manipulated objects into the
         environment.
     """
+
     headbar_z: int = 0
     """The absolute position, in native motor units, of the HeadBar z-axis motor."""
     headbar_pitch: int = 0
@@ -122,56 +123,66 @@ class RuntimeModes(IntEnum):
 
 
 class ProjectData:
-    """Provides methods for managing the experimental data acquired by all Sun lab pipelines for a given project and
-    animal combination.
+    """Provides methods for managing the experimental data acquired for the input animal and project combination.
 
-    This class functions as the central hub for collecting the data from all local PCs involved in the acquisition
-    process and pushing it to the NAS and the data analysis server(s). Its primary purpose is to maintain the project
-    data structure across all supported destinations and to efficiently and safely move the data to these
-    destinations with minimal redundancy and footprint.
+    This class functions as the central hub for collecting the data from all local PCs involved in the data acquisition
+    process and pushing it to the NAS and the BioHPC server. Its primary purpose is to maintain the project data
+    structure across all supported destinations and to efficiently and safely move the data to these destinations with
+    minimal redundancy and footprint. Additionally, this supports transferring data such as Zaber motor positions
+    between experimental sessions, streamlining experiment setup.
 
     Note:
+        Do not call methods from this class directly. This class is intended to be used through the MesoscopeExperiment
+        class and using it directly may lead to unexpected behavior.
+
         It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
         SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
         the OS has full access to these directories and filesystems.
 
-        This class is specifically designed for working with raw data for a single animal used in the managed project.
-        Processed data is managed by the processing pipeline library.
+        This class is specifically designed for working with raw data of an experimental session for a single animal
+        participating in the managed project. Processed data is managed by the processing library methods and classes.
 
-        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each session
-        directory.
+        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each
+        experimental session 'raw_data' directory. The checksum verifies the data of each file and the paths to each
+        file relative to the 'raw_data' root directory.
 
         If this class is instantiated with the 'create' flag for an already existing project and / or animal, it will
-        NOT recreate the project and animal directories. Instead, the instance will use the path to the already existing
-        directories.
+        not recreate the project and animal directories. Instead, the instance will use the path to the already existing
+        directories. Therefore, it is completely safe and often preferred t have the 'create' flag set to True at all
+        times.
 
     Args:
         project_name: The name of the project whose data will be managed by the class.
         animal_name: The name of the animal whose data will be managed by the class.
-        create: A boolean flag indicating whether to create the project directory if it does not exist.
+        create: A boolean flag indicating whether to create the project and animal directories if they do not exist. If
+            the directories already exist, the class will use existing directories. This process will not modify any
+            already existing data.
         local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
             this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
-        server_root_directory: The path to the root directory where all projects are stored on the server-machine.
-            Usually, this is the 'storage' (RAID 6) volume of the BioHPC server.
+        server_root_directory: The path to the root directory where all projects are stored on the BioHPC server
+            machine. Usually, this is the 'storage/SunExperiments' (RAID 6) volume of the BioHPC server.
         nas_root_directory: The path to the root directory where all projects are stored on the Synology NAS. Usually,
-            this is a non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes.
+            this is the non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes, such as Volume 1.
         mesoscope_data_directory: The path to the directory where the mesoscope saves acquired frame data. Usually, this
-            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime.
+            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime, such as
+            the /mesodata/mesoscope_frames directory. Note, this class will delete and recreate the directory during its
+            runtime, so it is highly advised to make sure it does not contain any important non-session-related data.
 
     Attributes:
-        _local: The absolute path to the host-machine animal directory for the managed project.
+        _local: The absolute path to the host-machine directory where all projects are stored.
         _nas: The absolute path to the Synology NAS animal directory for the managed project.
-        _server: The absolute path to the BioHPC server-machine animal directory for the managed project.
+        _server: The absolute path to the BioHPC server animal directory for the managed project.
         _mesoscope: The absolute path to the mesoscope data directory.
         _project_name: Stores the name of the project whose data is currently managed by the class.
         _animal_name: Stores the name of the animal whose data is currently managed by the class.
-        _session_name: Stores the name of the last generated session directory.
+        _session_name: Stores the name of the session directory that was last generated by this class instance. If the
+        class instance has not generated a session directory, this will be None.
         _previous_session_name: Stores the name of the session directory that precedes the last generated session
-            directory.
+            directory. If there were no previous sessions, this will be None.
         _is_test: Determines whether the last created session directory is a real experimental session or a test
-            session.
-        _sessions: Stores the sorted list of Paths to all already existing sessions inside the animal directory of
-            the project.
+            session. Test sessions are used during 'calibration' runtimes.
+        _sessions: Stores the sorted list of Paths to all already existing sessions for the managed animal and project
+            combination.
 
     Raises:
         FileNotFoundError: If the project and animal directory path does not exist and the 'create' flag is not set.
@@ -206,7 +217,8 @@ class ProjectData:
 
             # Overwrites the destination directory paths with the project- and animal-adjusted paths. This is not done
             # for the local path as that path may need to be modified in different ways, depending on the arguments
-            # passed to create_session() method.
+            # passed to create_session() method. However, anything we push to nas and server HAS to be a valid project-
+            # and animal-specific directory tree structure.
             self._nas = nas_project_directory
             self._server = server_project_directory
 
@@ -231,19 +243,16 @@ class ProjectData:
         # which may contain useful information, such as Zaber Motor positions used during the previous session
         self._sessions: list[Path] = sorted([p for p in self._local.glob("????-??-??-??-??-??-*") if p.is_dir()])
 
-    def __del__(self) -> None:
-        """Ensures that the test directory is cleaned up before the class is garbage collected, if the test directory
-        exists."""
-        session_path = self._local.joinpath("TestProject", "TestAnimal", "test")
-        shutil.rmtree(session_path, ignore_errors=True)
-
     def create_session(self, is_test: bool = False) -> None:
         """Creates a new session directory within the broader project-animal data structure.
 
-        Uses the current timestamp down to microseconds as the session folder name, which ensures that each session
-        name within the project-animal structure has a unique name that accurately preserves the order of the sessions.
+        Uses the current UTC timestamp down to microseconds as the session folder name, which ensures that each session
+        name within the project-animal structure is unique and accurately preserves the order of the sessions. For test
+        sessions, the method will use an independent directory hierarchy that clears (removes) any previous test data.
 
         Notes:
+            Do not call this method manually. This method is designed to be called by the MesoscopeExperiment class.
+
             Most other class methods require this method to be called at least once before they can be used.
 
             To retrieve the name of the generated session, use the 'session_name' property. To retrieve the full path
@@ -255,22 +264,20 @@ class ProjectData:
         Args:
             is_test: A boolean flag that determines whether the method is used to create the session directory for
                 a real animal or to generate a test directory used to calibrate Mesoscope-VR modules. Test directories
-                do not make use of project and animal fields and instead statically create TestProject-TestAnimal-test
-                structure under the local root directory.
-
-        Returns:
-            The Path to the root session directory.
+                do not make use of project and animal class attributes and instead statically create
+                TestProject-TestAnimal-test structure under the local root directory.
         """
 
         # If the method is used to generate a test directory, create a new test hierarchy and returns early. This
-        # ignores most of the ProjectData configuration.
+        # ignores most of the ProjectData configuration. If a previous test directory already exists, the method will
+        # remove that directory and all previous test files.
         if is_test:
             session_path = self._local.joinpath("TestProject", "TestAnimal", "test")
             # If the session path exists (from a previous runtime), cleans it up
             shutil.rmtree(session_path, ignore_errors=True)
-            ensure_directory_exists(session_path.joinpath("raw_data"))
+            ensure_directory_exists(session_path)
             self._session_name = session_path.stem
-            self._is_test = True
+            self._is_test = True  # Enables the test flag
             return
 
         # Otherwise, ensures that the test flag is disabled
@@ -290,11 +297,13 @@ class ProjectData:
             new_session_name = f"{session_name}_{counter}"
             raw_session_path = self._local.joinpath(self._project_name, self._animal_name, new_session_name)
 
+        # If a conflict is detected and resolved, warns the user about the resolved conflict.
         if counter > 0:
             message = (
                 f"Session name conflict occurred for animal '{self._animal_name}' of project '{self._project_name}' "
-                f"when adding the new session. The newly created session directory uses a '_{counter}' postfix to "
-                f"distinguish itself from the already existing session directory."
+                f"when adding the new session with timestamp {self._session_name}. The session with identical name "
+                f"already exists. The newly created session directory uses a '_{counter}' postfix to distinguish "
+                f"itself from the already existing session directory."
             )
             warnings.warn(message=message)
 
@@ -310,10 +319,13 @@ class ProjectData:
 
     @property
     def session_path(self) -> Path:
-        """Returns the full path to the last generated session raw_data directory.
+        """Returns the full path to the last generated session's raw_data directory.
 
-        This method is primarily intended to be called by the MesoscopeExperiment class to determine where to save
-        the data acquired during experiment runtime.
+        This path is used by the MesoscopeExperiment to set up the output directories for the mesoscope and
+        behavioral data acquired during experimental runtime.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
         """
         if self._session_name is None:
             message = (
@@ -325,20 +337,134 @@ class ProjectData:
         return self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data")
 
     @property
-    def previous_session_path(self) -> Path | None:
-        """Returns the full path to the raw_data directory of the session that precedes the last generated session.
+    def ops_path(self) -> Path:
+        """Returns the full path to the ops.json file of the last generated session.
 
-        This method is primarily intended to be called by the MesoscopeExperiment class to extract last session's data,
-        such as the positions of Zaber motors that control the HeadBar and the LickPort.
+        This path is used to save the ops.json generated from the mesoscope TIFF metadata. Ops.json is a configuration
+        file used by the suite2p and other processing pipelines to process acquired mesoscope data.
 
-        Returns:
-            The path to the preceding session raw_data directory. If there are no preceding sessions, returns None to
-            indicate there is no valid Path.
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
         """
-        if self._session_name is None:
+        if self._session_name is None or self._is_test:
             message = (
-                f"Unable to retrieve the 'raw_data' folder path for the session that precedes the last generated"
-                f"session of the animal '{self._animal_name}' and project '{self._project_name}'. Call "
+                f"Unable to retrieve the ops.json file path for the last generated session of the animal "
+                f"'{self._animal_name}' and project '{self._project_name}'. Call create_session() method before using "
+                f"this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data", "ops.json")
+
+    @property
+    def frame_invariant_metadata_path(self) -> Path:
+        """Returns the full path to the frame_invariant_metadata.json file of the last generated session.
+
+        This path is used to save the metadata that is shared by all frames in all stacks acquired by the mesoscope
+        during the same session. While we do not use this data during processing, it is stored for future reference and
+        reproducibility.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the frame_invariant_metadata.json file path for the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
+                f"using this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "frame_invariant_metadata.json"
+        )
+
+    @property
+    def frame_variant_metadata_path(self) -> Path:
+        """Returns the full path to the frame_variant_metadata.npz file of the last generated session.
+
+        This path is used to save the metadata unique for each frames in all stacks acquired by the mesoscope
+        during the same session. While we do not use this data during processing, it is stored for future reference and
+        reproducibility.
+
+        Notes:
+            Unlike frame-invariant metadata, this file is stored as a compressed NumPy archive (NPZ) file to optimize
+            storage space usage.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the frame_variant_metadata.npz file path for the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
+                f"using this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "frame_variant_metadata.npz"
+        )
+
+    @property
+    def mesoscope_frames_path(self) -> Path:
+        """Returns the full path to the mesoscope_frames directory of the last generated session.
+
+        This path is used during mesoscope data preprocessing to store compressed mesoscope frames. Aggregating all
+        frames inside a dedicated directory optimized further processing steps and visual inspection of the acquired
+        data.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the 'mesoscope_frames' folder path for the last generated session of the animal "
+                f"'{self._animal_name}' and project '{self._project_name}'. Call create_session() method before using "
+                f"this property."
+            )
+            console.error(message=message, error=ValueError)
+        directory_path =  self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "mesoscope_frames"
+        )
+        # Since this is a directory, we need to ensure it exists before this path is returned to caller
+        ensure_directory_exists(directory_path)
+        return directory_path
+
+    @property
+    def zaber_positions_path(self) -> Path:
+        """Returns the full path to the zaber_positions.yaml file of the last generated session.
+
+        This path is used to save the positions for all Zaber motors used in the HeadBar and LickPort assemblies at the
+        end of the current experimental session. This allows restoring the motors to those positions during the
+        following experimental session(s).
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the zaber_positions.yaml file path for the last generated session of the animal "
+                f"'{self._animal_name}' and project '{self._project_name}'. Call create_session() method before using "
+                f"this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data", "zaber_positions.yaml")
+
+    @property
+    def previous_zaber_positions_path(self) -> Path | None:
+        """Returns the full path to the zaber_positions.yaml file of the session that precedes the last generated
+        session.
+
+        This method is primarily intended to be called by the MesoscopeExperiment class to extract the positions of
+        Zaber motors that control the HeadBar and the LickPort used during the previous session. This allows restoring
+        the motors to the same positions during the current session runtime.
+
+        Note:
+            If there are no previous sessions available for this project and animal combination, this method will
+            return None.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the zaber_positions.yaml file path for the session that precedes the last "
+                f"generated session of the animal '{self._animal_name}' and project '{self._project_name}'. Call "
                 f"create_session() method before using this property."
             )
             console.error(message=message, error=ValueError)
@@ -347,7 +473,52 @@ class ProjectData:
         if self._previous_session_name is None:
             return None
 
-        return self._local.joinpath(self._project_name, self._animal_name, self._previous_session_name, "raw_data")
+        return self._local.joinpath(self._project_name, self._animal_name, self._previous_session_name, "raw_data", "zaber_positions.yaml")
+
+    @property
+    def camera_timestamps_path(self) -> Path:
+        """Returns the full path to the camera_timestamps.npz file of the last generated session.
+
+        This path is used to save the timestamps associated with each saved frame acquired by each camera used to record
+        the behavior during experimental session runtime. This data is later used during DeepLabCut tracking to generate
+        the tracking dataset. In turn, that dataset is eventually merged with the main behavioral Parquet dataset.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the camera_timestamps.npz file path for the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
+                f"using this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "camera_timestamps.npz"
+        )
+
+    @property
+    def behavioral_data_path(self) -> Path:
+        """Returns the full path to the behavioral_data.parquet file of the last generated session.
+
+        This path is used to save the behavioral dataset assembled from the data logged during runtime by the central
+        process and the AtaraxisMicroController modules. This dataset is assembled via Polars and stored as a
+        Parquet file. It contains all behavioral data other than video-tracking, aligned to the acquired mesoscope
+        frames. This data is used for further processing and analysis.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
+        """
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the behavioral_data.parquet file path for the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
+                f"using this property."
+            )
+            console.error(message=message, error=ValueError)
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "behavioral_data.parquet"
+        )
 
     def pull_mesoscope_data(self, num_threads: int = 28) -> None:
         """Pulls the frames acquired by the mesoscope from the ScanImage PC to the raw_data directory of the last
@@ -368,6 +539,15 @@ class ProjectData:
                 number to the number of available CPU cores - 4.
 
         """
+        # Prevents calling this method for test sessions and before a valid destination session has been created
+        if self._session_name is None or self._is_test:
+            message = (
+                f"Unable to retrieve the behavioral_data.parquet file path for the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
+                f"using this property."
+            )
+            console.error(message=message, error=ValueError)
+
         # The mesoscope path statically points to the mesoscope_frames folder. It is expected that the folder ONLY
         # contains the frames acquired during this session's runtime. First, generates the checksum for the raw
         # mesoscope frames
