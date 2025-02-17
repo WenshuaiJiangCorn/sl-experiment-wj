@@ -15,7 +15,7 @@ from tqdm import tqdm
 import numpy as np
 import tifffile
 from numpy.typing import NDArray
-from ataraxis_base_utilities import console, ensure_directory_exists
+from ataraxis_base_utilities import console
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
@@ -355,9 +355,9 @@ def process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) 
         file: The path to the mesoscope TIFF stack file. This can be any file in the directory as the
             frame-invariant metadata is the same for all stacks.
         ops_path: The path to the ops.json file that should be created by this function. This is resolved by the
-            ProjectData class to match the processed project, animal and session combination.
+            ProjectData class to match the processed project, animal, and session combination.
         metadata_path: The path to the metadata.json file that should be created by this function. This is resolved
-            by the ProjectData class to match the processed project, animal and session combination.
+            by the ProjectData class to match the processed project, animal, and session combination.
     """
 
     # Reads the frame-invariant metadata from the first page (frame) of the stack. This metadata is the same across
@@ -408,7 +408,7 @@ def process_mesoscope_directory(
 
         To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
         same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
-        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes or
+        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
         combine both methods.
 
     Args:
@@ -419,7 +419,7 @@ def process_mesoscope_directory(
             suite2p registration (processing) of the mesoscope data.
         frame_invariant_metadata_path: The path to the metadata.json file that stores frame-invariant metadata. This
             metadata is the same across the stacks and frames of the same session. Currently, this data is not used for
-            further processing, but it is preserved in case it is ever needed in the future.
+            further processing, but it is preserved in case it is ever necessary in the future.
         frame_variant_metadata_path: The path to the metadata.npz file that stores frame-variant metadata for each frame
             acquired during the same session. Similar to frame-invariant metadata, this file is not use for further
             processing at this time.

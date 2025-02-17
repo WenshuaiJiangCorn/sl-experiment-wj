@@ -2,7 +2,6 @@
 and ProjectData class that abstracts working with experimental data."""
 
 import os
-import threading
 import warnings
 from pathlib import Path
 
@@ -39,6 +38,7 @@ from .packaging_tools import calculate_directory_checksum
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import shutil
 from enum import IntEnum
+from dataclasses import dataclass
 
 
 @dataclass()
@@ -359,7 +359,7 @@ class ProjectData:
     def frame_invariant_metadata_path(self) -> Path:
         """Returns the full path to the frame_invariant_metadata.json file of the last generated session.
 
-        This path is used to save the metadata that is shared by all frames in all stacks acquired by the mesoscope
+        This path is used to save the metadata shared by all frames in all stacks acquired by the mesoscope
         during the same session. While we do not use this data during processing, it is stored for future reference and
         reproducibility.
 
@@ -381,7 +381,7 @@ class ProjectData:
     def frame_variant_metadata_path(self) -> Path:
         """Returns the full path to the frame_variant_metadata.npz file of the last generated session.
 
-        This path is used to save the metadata unique for each frames in all stacks acquired by the mesoscope
+        This path is used to save the metadata unique for each frame in all stacks acquired by the mesoscope
         during the same session. While we do not use this data during processing, it is stored for future reference and
         reproducibility.
 
@@ -421,7 +421,7 @@ class ProjectData:
                 f"this property."
             )
             console.error(message=message, error=ValueError)
-        directory_path =  self._local.joinpath(
+        directory_path = self._local.joinpath(
             self._project_name, self._animal_name, self._session_name, "raw_data", "mesoscope_frames"
         )
         # Since this is a directory, we need to ensure it exists before this path is returned to caller
@@ -446,7 +446,9 @@ class ProjectData:
                 f"this property."
             )
             console.error(message=message, error=ValueError)
-        return self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data", "zaber_positions.yaml")
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._session_name, "raw_data", "zaber_positions.yaml"
+        )
 
     @property
     def previous_zaber_positions_path(self) -> Path | None:
@@ -460,6 +462,9 @@ class ProjectData:
         Note:
             If there are no previous sessions available for this project and animal combination, this method will
             return None.
+
+        Raises:
+            ValueError: If create_session() has not been called to generate the experimental session directory.
         """
         if self._session_name is None or self._is_test:
             message = (
@@ -473,15 +478,18 @@ class ProjectData:
         if self._previous_session_name is None:
             return None
 
-        return self._local.joinpath(self._project_name, self._animal_name, self._previous_session_name, "raw_data", "zaber_positions.yaml")
+        return self._local.joinpath(
+            self._project_name, self._animal_name, self._previous_session_name, "raw_data", "zaber_positions.yaml"
+        )
 
     @property
     def camera_timestamps_path(self) -> Path:
         """Returns the full path to the camera_timestamps.npz file of the last generated session.
 
         This path is used to save the timestamps associated with each saved frame acquired by each camera used to record
-        the behavior during experimental session runtime. This data is later used during DeepLabCut tracking to generate
-        the tracking dataset. In turn, that dataset is eventually merged with the main behavioral Parquet dataset.
+        experimental session runtime. This data is later used during DeepLabCut tracking to generate the tracking
+        dataset. In turn, that dataset is eventually used to build the unified session dataset that contains behavioral
+        and brain activity data.
 
         Raises:
             ValueError: If create_session() has not been called to generate the experimental session directory.
@@ -542,11 +550,44 @@ class ProjectData:
         # Prevents calling this method for test sessions and before a valid destination session has been created
         if self._session_name is None or self._is_test:
             message = (
-                f"Unable to retrieve the behavioral_data.parquet file path for the last generated session of the "
+                f"Unable to pull the mesoscope frames into the raw_data directory of the last generated session of the "
                 f"animal '{self._animal_name}' and project '{self._project_name}'. Call create_session() method before "
                 f"using this property."
             )
             console.error(message=message, error=ValueError)
+
+        # Resolves source and destination paths
+        source_directory = self._mesoscope
+        destination = self.session_path  # The path to the raw_data subdirectory of the current session
+
+        # Extracts the names of files stored in the source folder
+        files = tuple([path for path in source_directory.glob("*")])
+
+        # Prevents 'pulling' an empty folder
+        if len(files) == 0:
+            message = (
+                f"Unable to pull the mesoscope frames into the raw_data directory of the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. The 'transient' ScanImage PC "
+                f"directory does not contain any files, indicating that either no frames were acquired during runtime "
+                f"or the frames were saved at a different location."
+            )
+            console.error(message=message, error=RuntimeError)
+        if "MotionEstimator.me" not in files:
+            message = (
+                f"Unable to pull the mesoscope frames into the raw_data directory of the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. The 'transient' ScanImage PC "
+                f"directory does not contain the MotionEstimator.me file, which has to be stored with the mesoscope "
+                f"frames."
+            )
+            console.error(message=message, error=RuntimeError)
+        if "zstack.mat" not in files:
+            message = (
+                f"Unable to pull the mesoscope frames into the raw_data directory of the last generated session of the "
+                f"animal '{self._animal_name}' and project '{self._project_name}'. The 'transient' ScanImage PC "
+                f"directory does not contain the zstack.mat file, which has to be stored with the mesoscope "
+                f"frames."
+            )
+            console.error(message=message, error=RuntimeError)
 
         # The mesoscope path statically points to the mesoscope_frames folder. It is expected that the folder ONLY
         # contains the frames acquired during this session's runtime. First, generates the checksum for the raw
@@ -554,7 +595,6 @@ class ProjectData:
         calculate_directory_checksum(directory=self._mesoscope, num_processes=None, save_checksum=True)
 
         # Generates the path to the local session raw_data folder
-        destination = self._local.joinpath(self._project_name, self._animal_name, self._session_name, "raw_data")
 
         # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
         transfer_directory(source=self._mesoscope, destination=destination, num_threads=num_threads)
@@ -1525,7 +1565,7 @@ class MesoscopeExperiment:
 
         # Waits at most 2 seconds for the mesoscope to begin sending frame acquisition timestamps to the PC
         timeout_timer.reset()
-        while check_timer.elapsed < 2:
+        while timeout_timer.elapsed < 2:
             # Frame acquisition is confirmed by the frame timestamp recorder class flipping the pulse_status
             # property to True
             if self._mesoscope_frame.pulse_status:

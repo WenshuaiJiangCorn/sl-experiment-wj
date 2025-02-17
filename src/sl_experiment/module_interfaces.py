@@ -1360,7 +1360,7 @@ class LickInterface(ModuleInterface):
         self._lick_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class, connects to the MQTT broker and connects to the SharedMemoryArray
+        """Initializes the MQTTCommunication class, connects to the MQTT broker, and connects to the SharedMemoryArray
         used to communicate lick status to other processes.
         """
         # MQTT Client is used to send lick data to Unity over MQTT
