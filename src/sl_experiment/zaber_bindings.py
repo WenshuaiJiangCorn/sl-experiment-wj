@@ -247,9 +247,15 @@ class _ZaberSettings:
     down. This is used to ensure the motor will not collide with any physical boundaries when it is homed after 
     re-connection. Uses USER_DATA 11 variable."""
     axis_calibration_position: str = SettingConstants.USER_DATA_12
-    """ The absolute position, in native motor units, where the motor should be moved for the water valve calibration 
-    procedure. THis position is optimized for collecting a large volume of water that will be dispensed through the 
+    """The absolute position, in native motor units, where the motor should be moved for the water valve calibration 
+    procedure. This position is optimized for collecting a large volume of water that will be dispensed through the 
     valve during calibration. Uses USER_DATA 12 variable.
+    """
+    axis_mount_position: str = SettingConstants.USER_DATA_13
+    """The absolute position, in native motor units, where the motor should be moved before mounting the animal onto 
+    the VR rig. This is a fallback position used for animals that do not have a calibrated HeadBar and LickPort 
+    position to restore between sessions. For most animals, this set of positions will only be used once, during the 
+    first training session.
     """
 
 
@@ -337,10 +343,16 @@ class ZaberAxis:
             guaranteed to successfully home without colliding with surrounding objects after powering-up. This is
             especially relevant for rotary than linear axes.
         _valve_position: The absolute position relative to the home sensor position, in native motor units, the motor
-            should be moved to support water reward valve calibration. Since the space inside the Mesoscope-VR rig
+            should be moved to before water reward valve calibration. Since the space inside the Mesoscope-VR rig
             is constrained, it is helpful to orient the headbar and lickport motors in a way that provides easy access
             to the lickport tube. These positions are stored in the non-volatile memory and are used similar to how the
             park position is used.
+        _mount_position: The absolute position relative to the home sensor position, in native motor units, the motor
+            should be moved to before mounting a naive animal onto the VR rig. This position is used to provide
+            experimenters with more working room around the rig and ensure animal's comfort as it is mounted onto the
+            rig. This position is a fallback used when the animal does nto have a better, custom-calibrated position
+            available. Usually, this would only be the case when the animal is mounted onto the rig for the very first
+            time.
         _max_limit: The maximum absolute position relative to the home sensor position, in native motor units,
             the motor hardware can reach.
         _min_limit: Same as the _hardware_max_limit, but specifies the minimum absolute position relative to
@@ -385,6 +397,9 @@ class ZaberAxis:
         self._valve_position: int = int(
             self._motor.device.settings.get(setting=_ZaberSettings.axis_calibration_position)
         )
+        self._mount_position: int = int(
+            self._motor.device.settings.get(setting=_ZaberSettings.axis_mount_position)
+        )
         self._max_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_maximum_limit)
         self._min_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_minimum_limit)
 
@@ -408,6 +423,14 @@ class ZaberAxis:
         if self._valve_position < self._min_limit or self._valve_position > self._max_limit:
             message = (
                 f"Invalid valve calibration position hardware parameter value encountered when initializing ZaberAxis "
+                f"class for {self._name} axis of the Device {self._motor.device.label}. Expected a value between "
+                f"{self._min_limit} and {self._max_limit}, but read {self._park_position}."
+            )
+            console.error(message=message, error=ValueError)
+        # Same as above, but for the mount position
+        if self._mount_position < self._min_limit or self._mount_position > self._max_limit:
+            message = (
+                f"Invalid mount position hardware parameter value encountered when initializing ZaberAxis "
                 f"class for {self._name} axis of the Device {self._motor.device.label}. Expected a value between "
                 f"{self._min_limit} and {self._max_limit}, but read {self._park_position}."
             )
@@ -582,6 +605,16 @@ class ZaberAxis:
         system with water.
         """
         return self._valve_position
+
+    @property
+    def mount_position(self) -> int:
+        """Returns the absolute position, in native motor units, where the motor needs to be moved before mounting
+        the animal onto the VR rig.
+
+        Applying this position to the motor orients the headbar and lickport system in a way that makes it easier to
+        mount the animal, while also providing animal with comfortable position inside the VR rig.
+        """
+        return self._mount_position
 
     def home(self) -> bool:
         """Homes the motor by moving it towards the home sensor position until it triggers the sensor.
