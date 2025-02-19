@@ -546,7 +546,7 @@ def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
 
 def interpolate_data(
     timestamps: NDArray[np.uint64],
-    data: NDArray[np.signedinteger[Any], np.unsignedinteger[Any], np.floating[Any]],
+    data: NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]],
     seed_timestamps: NDArray[np.uint64],
     is_discrete: bool,
 ) -> NDArray[np.signedinteger[Any], np.unsignedinteger[Any], np.floating[Any]]:
