@@ -292,7 +292,8 @@ class SessionData:
 
         The file is stored inside the 'persistent' directory of the project and animal combination. The file is saved to
         the persistent directory when the original session is moved to long-term storage. Loading the file allows
-        reusing LickPort and HeadBar motor positions across sessions.
+        reusing LickPort and HeadBar motor positions across sessions. The contents of this file are updated after each
+        experimental or training session.
 
         Notes:
             If the file does not exist, returns None. This would be the case, for example, for the very first session
@@ -303,6 +304,17 @@ class SessionData:
             return None
         else:
             return file_path
+
+    @property
+    def persistent_motion_estimator_path(self) -> Path:
+        """Returns the path to the MotionEstimator.me file for the managed animal and project combination stored on the
+        ScanImagePC.
+
+        This path is used during the first training session to save the 'reference' MotionEstimator.me file established
+        during the initial mesoscope ROI selection to the ScanImagePC. The same reference file is used for all following
+        sessions to correct for the natural motion of the brain relative to the cranial window.
+        """
+        return self._mesoscope.joinpath("persistent_data", self._project_name, self._animal_name, "MotionEstimator.me")
 
     def pull_mesoscope_data(self, num_threads: int = 28) -> None:
         """Pulls the frames acquired by the mesoscope from the ScanImage PC to the VRPC.
@@ -315,6 +327,10 @@ class SessionData:
         Notes:
             This method is configured to parallelize data transfer and verification to optimize runtime speeds where
             possible.
+
+            When the method is called for the first time for a particular project and animal combination, it also
+            'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
+            reference for all further motion estimation procedures carried out during future sessions.
 
         Args:
             num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
@@ -355,6 +371,13 @@ class SessionData:
             )
             console.error(message=message, error=RuntimeError)
 
+        # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
+        # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
+        # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
+        if not self.persistent_motion_estimator_path.exists():
+            ensure_directory_exists(self.persistent_motion_estimator_path)
+            shutil.copy2(src=source.joinpath("MotionEstimator.me"), dst=self.persistent_motion_estimator_path)
+
         # Generates the checksum for the source folder
         calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
 
@@ -370,72 +393,6 @@ class SessionData:
         shutil.rmtree(source)
         ensure_directory_exists(source)
 
-    def stage_motion_data(self, num_threads: int = 28) -> None:
-        """Pushes the mesoscope motion estimator files saved from the previous session from the VRPC to the ScanImage
-        PC.
-
-        This process extracts the motion estimation files saved in the persistent directory of the managed project and
-        animal combination and moves them to the staging directory of the ScanImagePC. This data is then loaded into
-        the ScanImage motion estimation software and used to optimize mesoscope data acquisition.
-
-        This method should be called before 'arming' the mesoscope for data acquisition.
-
-        Notes:
-            This method is configured to parallelize data transfer and verification to optimize runtime speeds where
-            possible.
-
-            If motion estimation data is not available, the method does nothing and returns with a warning. This would
-            be the case for the very first session of each new animal, for example.
-
-        Args:
-            num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
-                the local machine. Depending on the connection speed between the PCs, it may be useful to set this
-                number to the number of available CPU cores - 4.
-        """
-
-        # Resolves source and destination paths
-        source = self._persistent
-        destination = self._mesoscope.joinpath("staging")
-
-        # Clears the staging directory before transferring the data
-        if destination.exists():
-            shutil.rmtree(destination)
-            ensure_directory_exists(destination)
-
-        # Extracts the names of files stored in the source folder
-        files = tuple([path for path in source.glob("*")])
-
-        # Creates a temporary staging directory inside the 'persistent directory'. This is necessary due to how the
-        # transfer pipeline operates. It is explicitly designed to move all data within the input directory and
-        # persistent directory contains other data that does not need to be moved with motion estimators.
-        local_staging = source.joinpath("staging")
-        if "MotionEstimator.me" in files:
-            shutil.copy2(source.joinpath("MotionEstimator.me"), local_staging.joinpath("MotionEstimator.me"))
-        if "zstack.mat" in files:
-            shutil.copy2(source.joinpath("zstack.mat"), local_staging.joinpath("zstack.mat"))
-
-        # If no motion estimators were discovered and moved to the local staging directory, aborts with a user warning.
-        if len([file for file in local_staging.glob("*")]) == 0:
-            message = (
-                f"Unable to extract and move the MotionEstimator.me and zstack.mat files persisted from the previous "
-                f"session. No files were found in the 'persistent' directory."
-            )
-            warnings.warn(message=message)
-            return
-
-        # Generates the checksum for the source folder
-        calculate_directory_checksum(directory=local_staging, num_processes=None, save_checksum=True)
-
-        # Transfers the local staging directory to the ScanImage PC.
-        transfer_directory(source=local_staging, destination=destination, num_threads=num_threads)
-
-        # Removes the checksum file after the transfer is complete.
-        destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
-
-        # After the transfer completes successfully (including integrity verification), removes the temporary staging
-        # folder
-        shutil.rmtree(local_staging)
-
     def push_data(self, parallel: bool = True, num_threads: int = 10) -> None:
         """Pushes the raw_data directory from the VRPC to the NAS and the SunLab BioHPC server.
 
@@ -448,9 +405,9 @@ class SessionData:
             advised to minimize the use of the host-machine while it is running this method, as most CPU resources will
             be consumed by the data transfer process.
 
-            The method copies the motion estimator files and zaber position snapshot file into the 'persistent'
-            directory of the managed project and animal combination before transferring the session data to the NAS and
-            server.
+            The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
+            session runtime. This ensures that the persisted file is always up-to-date with the current zaber motor
+            positions.
 
         Args:
             parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
@@ -471,25 +428,12 @@ class SessionData:
             (self._server.joinpath(self._session_name, "raw_data"), "Server"),
         )
 
-        # Copies files that need to be preserved between experimental sessions into the 'persistent' directory of the
-        # managed project and animal combination. This ensures that the files stay on the host-machine after the
-        # session folder is transferred to the NAS and server.
-        zaber_path = self.zaber_positions_path
-        motion_estimator_path = self.raw_data_path.joinpath("MotionEstimator.me")
-        zstack_path = self.raw_data_path.joinpath("zstack.mat")
-
-        # Clears the persistent directory before copying the files
-        if self._persistent.exists():
-            shutil.rmtree(self._persistent)
-            ensure_directory_exists(self._persistent)
-
-        # Copies the necessary files to the persistent directory
-        if zaber_path.exists():
-            shutil.copy2(zaber_path, self._persistent.joinpath(zaber_path.stem, zaber_path.suffix))
-        if motion_estimator_path.exists():
-            shutil.copy2(motion_estimator_path, self._persistent.joinpath("MotionEstimator.me"))
-        if zstack_path.exists():
-            shutil.copy2(zstack_path, self._persistent.joinpath("zstack.mat"))
+        # Updates the zaber_positions.yaml file stored inside the persistent directory for the project+animal
+        # combination with the zaber_positions.yaml file from the current session. This ensures that the zaber_positions
+        # file is always set to the latest snapshot of zaber motor positions.
+        if self.zaber_positions_path.exists():
+            self.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+            shutil.copy2(self.zaber_positions_path, self.previous_zaber_positions_path)  # Persists the current file
 
         # Resolves the destination paths based on the provided short destination names
         destinations = [(dest[0], dest[1]) for dest in destinations]
@@ -555,10 +499,6 @@ class MesoscopeExperiment:
 
         This class is specifically designed to acquire experimental data. To run a training session, use
         BehavioralTraining class. To calibrate hardware modules, including the water valve, use Calibration class.
-
-        The initialization method for this class will home and attempt to restore the Zaber motor positions for the
-        LickPort and HeadBar. Make sure there are no animals on the VR rig and the mesoscope objective is removed before
-        instantiating this class.
 
     Args:
         session_data: An initialized SessionData instance. This instance is used to transfer the data between VRPC,
@@ -635,6 +575,8 @@ class MesoscopeExperiment:
         _source_id: Stores the unique identifier code for this class instance. The identifier is used to mark log
             entries sent by this class instance and has to be unique for all sources that log data at the same time,
             such as MicroControllerInterfaces and VideoSystems.
+        _cue_map: Stores the dictionary that maps each integer-code associated with each Virtual Reality wall cue to
+            its distance in Unity units.
         _session_data: Stores the SessionData instance used to manage the acquired data.
 
     Raises:
@@ -911,62 +853,6 @@ class MesoscopeExperiment:
         self._lickport_x: ZaberAxis = self._headbar.get_device(1).axis
         self._lickport_y: ZaberAxis = self._headbar.get_device(2).axis
 
-        # Before running the startup procedure, the user has to make sure that the Unity and mesoscope are armed. For
-        # the mesoscope, we need to make sure that the motion data from the previous session, if any exist, is staged
-        # on the ScanImagePC. This call moves the data into the appropriate staging location on the ScanImagePC.
-        self._session_data.stage_motion_data()
-
-        # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures.
-        while input(
-                "Preparing to position the HeadBar motors. Remove the mesoscope objective, swivel out the VR screens, "
-                "and remove all animals from the rig. Then enter 'y' to continue: "
-        ) != "y":
-            continue
-
-        # Unparks all motors. It is safe to do this concurrently, as the motors are not moving during this operation.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._lickport_z.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
-
-        # First, homes lickport motors. Due to where the home positions are for all motors, it is safer to home and
-        # re-park the lickport motors first. This assumes HeadBar and LickPort are already in their park positions at
-        # this point.
-        self._lickport_z.home()
-        self._lickport_x.home()
-        self._lickport_y.home()
-
-        # Waits for the lickport motors to finish homing
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
-
-        # Homes the HeadBar motors. Assuming lickport motors are at the home position, they are safely out of the
-        # HeadBar parking path.
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-
-        # Waits for the HeadBar motors to finish homing.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)
-
-        # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default mounting position.
-        self._headbar_restore()
-
-        # Forces the user to mount the animal and confirm before positioning the lickport motors.
-        while input(
-                "Preparing to position the LickPort motors. Mount the mesoscope objective and the animal. "
-                "Then enter 'y' to continue: "
-        ) != "y":
-            continue
-
-        # Attempts to restore the LickPort to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default mounting position.
-        self._lickport_restore()
-
     def start(self) -> None:
         """Sets up all assets used during the experiment.
 
@@ -1032,16 +918,101 @@ class MesoscopeExperiment:
         message = "DataLogger: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Starts all video systems. Note, this initializes both frame acquisition and saving
+        # Starts all video systems. Note, this does NOT start frame saving. This is intentional, as it may take the
+        # user some time to orient the mouse and the mesoscope.
         self._face_camera.start()
         self._left_camera.start()
         self._right_camera.start()
-        self._face_camera.start_frame_saving()
-        self._left_camera.start_frame_saving()
-        self._right_camera.start_frame_saving()
 
         message = "VideoSystems: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # This is a fairly long section that involves user feedback. It guides the user through mounting the mouse and
+        # adjusting the HeadBar, LickPort and the mesoscope objective.
+
+        # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures. This code
+        # will get stuck in the 'input' mode until the user confirms.
+        message = (
+            "Preparing to position the HeadBar motors. Remove the mesoscope objective, swivel out the VR screens, "
+            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
+            "mesoscope and / or HARM the animal."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
+        # Unparks all motors. It is safe to do this for all motors at the same time, as the motors are not moving during
+        # this operation. After this step all motors are 'armed' and can be interfaced with using the Zaber UI.
+        self._headbar_z.unpark()
+        self._headbar_pitch.unpark()
+        self._headbar_roll.unpark()
+        self._lickport_z.unpark()
+        self._lickport_x.unpark()
+        self._lickport_y.unpark()
+
+        # First, homes lickport motors. The homing procedure aligns the lickport tube to the top right corner of the
+        # running wheel (looking at the wheel from the front of the mesoscope cage). Assuming both HeadBar and LickPort
+        # start from the parked position, the LickPort should be able to home without obstruction.
+        self._lickport_z.home()
+        self._lickport_x.home()
+        self._lickport_y.home()
+
+        # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
+        # LickPort homing trajectory.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+
+        # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
+        # running wheel (looking at the wheel from the front of the mesoscope cage).
+        self._headbar_z.home()
+        self._headbar_pitch.home()
+        self._headbar_roll.home()
+
+        # Waits for the HeadBar motors to finish homing.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+
+        # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
+        # If restore positions are not available, uses the default mounting position. This HAS to be done before
+        # moving the lickport motors to the mounting position
+        self._headbar_restore()
+
+        # Moves the LickPort to the mounting position. The mounting position is aligned to the top left corner
+        # of the running wheel. This moves the LickPort out of the way the experimenter will use to mount the animal,
+        # making it easier to mount the mouse. The trajectory to go from homing position to the mounting position
+        # goes underneath the properly restored or mounter HeadBar, so there should be no risk of collision.
+        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
+        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
+        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
+
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+
+        # Gives user time to mount the animal and requires confirmation before proceeding further.
+        message = (
+            "Preparing to position the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
+            "objetive. Do NOT swivel the VR screens back into position until instructed."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
+        # Attempts to restore the LickPort to the position used during the previous experiment or training session.
+        # If restore positions are not available, uses the default PARKING position roughly aligned to the animal's
+        # mouse.
+        self._lickport_restore()
+
+        message = "Zaber motor positioning: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+        message = (
+            "If necessary, adjust the HeadBar and LickPort positions to optimize imaging quality and animal running "
+            "performance. Align the mesoscope objective with the cranial window and carry out the imaging preparation "
+            "steps. Once everything is ready, swivel the VR screens back into position and arm the Mesoscope and "
+            "Unity. This is the last manual checkpoint before the experiment starts."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
 
         # Starts all microcontroller interfaces
         self._actor.start()
@@ -1121,6 +1092,11 @@ class MesoscopeExperiment:
 
         # Sets the rest of the subsystems to use the REST state.
         self.vr_rest()
+
+        # Finally, begins saving camera frames to disk
+        self._face_camera.start_frame_saving()
+        self._left_camera.start_frame_saving()
+        self._right_camera.start_frame_saving()
 
         # The setup procedure is complete.
         self._started = True
@@ -1239,10 +1215,11 @@ class MesoscopeExperiment:
         """Restores the motor positions for the HeadBar to the states recorded at the end of the previous experiment
         or training session.
 
-        This method is called as part of class initialization method to prepare the VR system for mounting the
-        animal. This automatically adjusts the motors to match the position used during the previous session, which
-        should be optimal for that particular animal. Additionally, this helps with aligning the window and the
-        mesoscope, as the window coordinates would be very similar from session to session.
+        This method is called as part of the start() method runtime method to prepare the VR system for mounting the
+        animal. it tries to adjust the HeadBar motors to match the position used during the previous session, which
+        should be optimal for the animal whose data will be recorded by the MesoscopeExperiment class. Additionally,
+        this helps with aligning the cranial window and the mesoscope objective, by ensuring the animal head is oriented
+        consistently across sessions.
 
         Notes:
             If this is the first ever session for the animal, this method will move the HeadBar to the predefined
@@ -1258,9 +1235,10 @@ class MesoscopeExperiment:
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
         if previous_positions is None:
             message = (
-                "No previous zaber positions found when attempting to restore previous positions for the HeadBar. "
-                "Setting the HeadBar motors to use the default mount positions. Adjust positions manually before "
-                "calling the MesoscopeExperiment start() method."
+                "No previous Zaber positions found when attempting to restore HeadBar to the previous session "
+                "position. Setting the HeadBar motors to use the default animal mounting positions. Adjust the "
+                "positions manually when prompted by the startup runtime to optimize imaging quality and animal's"
+                "running performance."
             )
             warnings.warn(message)
             self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
@@ -1280,13 +1258,16 @@ class MesoscopeExperiment:
         """Restores the motor positions for the LickPort to the states recorded at the end of the previous experiment
         or training session.
 
-        This method is called as part of class initialization method after the animal is mounted into the VR system.
-        it positions the lickport to be comfortably accessible for the mounted animal.
+        This method is called as part of class start() method after the animal is mounted into the VR system.
+        It positions the lickport to be comfortably accessible for the mounted animal.
 
         Notes:
-            If this is the first ever session for the animal, this method will restore the LickPort to the predefined
-            mounting position. Although it is not perfect for the given animal, the generic mounting position should
-            still be fairly comfortable for the animal.
+            Unlike the _headbar_restore() method, this method falls back to the parking, rather than mounting position
+            if it is not able to restore the animal to the previous session's position. This is intentional. The
+            mounting position for the LickPort aligns it to the bottom left corner of the running wheel, rather than the
+            animals' mouth. This provides the experimenter with more space for mounting the animal and will NOT be
+            adequate for running experiment or training sessions. The parking position for the LickPort, on the other
+            hand, aligns it to be easily accessible by the animal locked in the default 'mounting' HeadBar position.
 
             This method should be called after the _headbar_restore() method.
         """
@@ -1302,9 +1283,9 @@ class MesoscopeExperiment:
                 "calling the MesoscopeExperiment start() method."
             )
             warnings.warn(message)
-            self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-            self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-            self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
+            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
+            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
+            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
         else:
             # Otherwise, restores Zaber positions.
             self._lickport_z.move(amount=previous_positions.lickport_z, absolute=True, native=True)

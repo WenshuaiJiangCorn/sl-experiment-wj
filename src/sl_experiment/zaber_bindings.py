@@ -397,9 +397,7 @@ class ZaberAxis:
         self._valve_position: int = int(
             self._motor.device.settings.get(setting=_ZaberSettings.axis_calibration_position)
         )
-        self._mount_position: int = int(
-            self._motor.device.settings.get(setting=_ZaberSettings.axis_mount_position)
-        )
+        self._mount_position: int = int(self._motor.device.settings.get(setting=_ZaberSettings.axis_mount_position))
         self._max_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_maximum_limit)
         self._min_limit: float = self._motor.settings.get(setting=_ZaberSettings.axis_minimum_limit)
 
