@@ -1931,13 +1931,13 @@ class SystemCalibration:
     """The base class for all Sun lab calibration runtimes.
 
     This class is used to test and calibrate various elements of the Mesoscope-VR system before conducting experiment
-    and training runtimes. This class is heavily used during initial system construction and configuration. Once the
-    system is built, this class is primarily used for water valve calibration and setup, which has to be carried out
-    frequently between experimental days.
+    and training runtimes. It is heavily used during initial system construction and configuration. Once the system is
+    built, this class is primarily used for water valve setup (filling / emptying) and calibration, which has to be
+    carried out frequently between experimental days.
 
-    This class uses most bindings used by the 'real' MesoscopeExperiment and BehavioralTraining classes. It uses the
-    same logic for interfacing with the cameras, Zaber motors, and the Microcontrollers. This allows testing module
-    behavior without the risk of damaging expensive equipment (sucha s the mesoscope objective) or harming the animals.
+    This class exposes many methods that address individual components in the system. These methods should be used
+    to issue commands to the calibrated systems. This is similar to the 'state' setter methods of MesoscopeExperiment
+    and BehavioralTraining classes, but provides a considerably finer control over modules.
 
     Notes:
         Calling the initializer does not start the underlying processes. Use the start() method before issuing other
@@ -2326,41 +2326,10 @@ class SystemCalibration:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Unparks all motors. It is safe to do this for all motors at the same time, as the motors are not moving during
-        # this operation. After this step all motors are 'armed' and can be interfaced with using the Zaber UI.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._lickport_z.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
-
-        # First, homes lickport motors. The homing procedure aligns the lickport tube to the top right corner of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage). Assuming both HeadBar and LickPort
-        # start from the parked position, the LickPort should be able to home without obstruction.
-        self._lickport_z.home()
-        self._lickport_x.home()
-        self._lickport_y.home()
-
-        # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
-        # LickPort homing trajectory.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
-
-        # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage).
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-
-        # Waits for the HeadBar motors to finish homing.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
-
         # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
         # If restore positions are not available, uses the default mounting position. This HAS to be done before
         # moving the lickport motors to the mounting position
-        self._headbar_restore()
+        self.headbar_restore()
 
         # Moves the LickPort to the mounting position. The mounting position is aligned to the top left corner
         # of the running wheel. This moves the LickPort out of the way the experimenter will use to mount the animal,
@@ -2385,7 +2354,7 @@ class SystemCalibration:
         # Attempts to restore the LickPort to the position used during the previous experiment or training session.
         # If restore positions are not available, uses the default PARKING position roughly aligned to the animal's
         # mouse.
-        self._lickport_restore()
+        self.lickport_restore()
 
         message = "Zaber motor positioning: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2641,6 +2610,44 @@ class SystemCalibration:
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
             self._delay_timer.delay_noblock(delay=1)
 
+    def home_zaber_motors(self) -> None:
+        """Unparks and homes all Zaber motors controlling the HeadBar and LickPort.
+
+        This method is used as part of the start() method runtime to ensure Zaber motors are unparked and homed before
+        they are used to position the HeadBar and Lickport for the task (calibration, mounting, etc.).
+        """
+
+        # Unparks all motors. It is safe to do this for all motors at the same time, as the motors are not moving during
+        # this operation. After this step all motors are 'armed' and can be interfaced with using the Zaber UI.
+        self._headbar_z.unpark()
+        self._headbar_pitch.unpark()
+        self._headbar_roll.unpark()
+        self._lickport_z.unpark()
+        self._lickport_x.unpark()
+        self._lickport_y.unpark()
+
+        # First, homes lickport motors. The homing procedure aligns the lickport tube to the top right corner of the
+        # running wheel (looking at the wheel from the front of the mesoscope cage). Assuming both HeadBar and LickPort
+        # start from the parked position, the LickPort should be able to home without obstruction.
+        self._lickport_z.home()
+        self._lickport_x.home()
+        self._lickport_y.home()
+
+        # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
+        # LickPort homing trajectory.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
+
+        # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
+        # running wheel (looking at the wheel from the front of the mesoscope cage).
+        self._headbar_z.home()
+        self._headbar_pitch.home()
+        self._headbar_roll.home()
+
+        # Waits for the HeadBar motors to finish homing.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
+
     def enable_encoder_monitoring(self, polling_delay: int = 500) -> None:
         """Enables wheel encoder monitoring with the provided polling delay in microseconds."""
         self._wheel_encoder.reset_pulse_count()
@@ -2752,287 +2759,6 @@ class SystemCalibration:
             pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
         )  # 60 milliseconds
         self._reward.calibrate()
-
-# def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
-#     """Exposes a console-based CLI that interfaces with the encoder connected to the running wheel."""
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "f":  # CW only
-#             encoder.reset_pulse_count()
-#             encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=delta_threshold)
-#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
-#         elif code == "r":  # CCW only
-#             encoder.reset_pulse_count()
-#             encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=delta_threshold)
-#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
-#         elif code == "a":  # Both CW and CCW
-#             encoder.reset_pulse_count()
-#             encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=delta_threshold)
-#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
-
-
-# def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, pulse_duration: int) -> None:
-#     """Exposes a console-based CLI that interfaces with the TTL modules used to start and stop mesoscope frame
-#     acquisition.
-#     """
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "b":  # Start / Begin
-#             start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
-#             start_trigger.send_pulse()
-#         elif code == "e":  # Stop / End
-#             stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
-#             stop_trigger.send_pulse()
-
-
-# def _break_cli(wheel_break: BreakInterface) -> None:
-#     """Exposes a console-based CLI that interfaces with the break connected to the running wheel."""
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "e":  # Engage
-#             wheel_break.toggle(state=True)
-#         elif code == "d":  # Disengage
-#             wheel_break.toggle(state=False)
-
-
-# def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
-#     """Exposes a console-based CLI that interfaces with the water reward delivery valve."""
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "r":  # Deliver reward
-#             valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
-#             valve.send_pulse()
-#         elif code == "c1":
-#             valve.set_parameters(
-#                 pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-#             )  # 15 milliseconds
-#             valve.calibrate()
-#         elif code == "c2":
-#             valve.set_parameters(
-#                 pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-#             )  # 30 milliseconds
-#             valve.calibrate()
-#         elif code == "c3":
-#             valve.set_parameters(
-#                 pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-#             )  # 45 milliseconds
-#             valve.calibrate()
-#         elif code == "c4":
-#             valve.set_parameters(
-#                 pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-#             )  # 60 milliseconds
-#             valve.calibrate()
-#         elif code == "o":
-#             valve.toggle(state=True)
-#         elif code == "c":
-#             valve.toggle(state=False)
-#         elif code == "t":  # Test
-#             valve.set_parameters(
-#                 pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
-#             )  # 5 ul x 200 times
-#             valve.calibrate()
-#         else:
-#             # noinspection PyBroadException
-#             try:
-#                 pulse_duration = valve.get_duration_from_volume(float(code))
-#                 valve.set_parameters(pulse_duration=pulse_duration)
-#                 valve.send_pulse()
-#             except:
-#                 print(f"Unknown command: {code}")
-
-
-# def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
-#     """Exposes a console-based CLI that interfaces with the HDMI translator boards connected to all three VR screens."""
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "t":  # Toggle
-#             screen.set_parameters(pulse_duration=np.uint32(pulse_duration))
-#             screen.toggle()
-
-
-# def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> None:
-#     """Exposes a console-based CLI that interfaces with the TTL module used to receive mesoscope frame acquisition
-#     timestamps sent by the ScanImage PC.
-#     """
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "b":  # Start / Begin
-#             frame_watcher.check_state(repetition_delay=np.uint32(polling_delay))
-#         elif code == "e":  # Stop / End
-#             frame_watcher.reset_command_queue()
-
-
-# def _lick_cli(
-#     lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
-# ) -> None:
-#     """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "b":  # Start / Begin
-#             lick.set_parameters(
-#                 signal_threshold=np.uint16(signal_threshold),
-#                 delta_threshold=np.uint16(delta_threshold),
-#                 averaging_pool_size=np.uint8(averaging),
-#             )
-#             lick.check_state(repetition_delay=np.uint32(polling_delay))
-
-
-# def _torque_cli(
-#     torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
-# ) -> None:
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "f":  # Forward Torque only
-#             torque.set_parameters(
-#                 report_cw=False,
-#                 report_ccw=True,
-#                 signal_threshold=np.uint16(signal_threshold),
-#                 delta_threshold=np.uint16(delta_threshold),
-#                 averaging_pool_size=np.uint8(averaging),
-#             )
-#             torque.check_state(repetition_delay=np.uint32(polling_delay))
-#         elif code == "r":  # Forward Torque only
-#             torque.set_parameters(
-#                 report_cw=True,
-#                 report_ccw=False,
-#                 signal_threshold=np.uint16(signal_threshold),
-#                 delta_threshold=np.uint16(delta_threshold),
-#                 averaging_pool_size=np.uint8(averaging),
-#             )
-#             torque.check_state(repetition_delay=np.uint32(polling_delay))
-#         elif code == "a":  # Both directions
-#             torque.set_parameters(
-#                 report_cw=True,
-#                 report_ccw=True,
-#                 signal_threshold=np.uint16(signal_threshold),
-#                 delta_threshold=np.uint16(delta_threshold),
-#                 averaging_pool_size=np.uint8(averaging),
-#             )
-#             torque.check_state(repetition_delay=np.uint32(polling_delay))
-
-
-# def _camera_cli(camera: VideoSystem):
-#     while True:
-#         code = input()  # Sneaky UI
-#         if code == "q":
-#             break
-#         elif code == "a":  # Start saving
-#             camera.start_frame_saving()
-#             print(camera.started)
-#         elif code == "s":  # Stop saving
-#             camera.stop_frame_saving()
-#             print(f"Not Saving")
-
-
-# def calibration() -> None:
-#     # Output dir
-#     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
-#     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
-#
-#     camera: VideoSystem = VideoSystem(
-#         system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir, harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
-#     )
-#     camera.add_camera(
-#         save_frames=True,
-#         camera_index=0,
-#         camera_backend=CameraBackends.HARVESTERS,
-#         output_frames=False,
-#         display_frames=True,
-#         color=False,
-#     )
-#     camera.add_video_saver(
-#         hardware_encoding=True,
-#         video_format=VideoFormats.MP4,
-#         video_codec=VideoCodecs.H265,
-#         preset=GPUEncoderPresets.FASTEST,
-#         input_pixel_format=InputPixelFormats.MONOCHROME,
-#         output_pixel_format=OutputPixelFormats.YUV420,
-#         quantization_parameter=15
-#     )
-#
-#     camera.start()
-#     camera.start_frame_saving()
-#
-#     # Defines static assets needed for testing
-#     valve_calibration_data = (
-#         (15000, 1.8556),
-#         (30000, 3.4844),
-#         (45000, 7.1846),
-#         (60000, 10.0854),
-#     )
-#     actor_id = np.uint8(101)
-#     sensor_id = np.uint8(152)
-#     encoder_id = np.uint8(203)
-#     sensor_usb = "/dev/ttyACM1"
-#     actor_usb = "/dev/ttyACM0"
-#     encoder_usb = "/dev/ttyACM2"
-#
-#     # Add console support for print debugging
-#     console.enable()
-#
-#     # Tested module interface
-#     module = EncoderInterface(debug=True)
-#
-#     module_1 = TTLInterface(module_id=np.uint8(1), debug=True)
-#     module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
-#     module_3 = BreakInterface(debug=True)
-#     module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
-#     module_5 = ScreenInterface(initially_on=False, debug=True)
-#
-#     module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
-#     module_11 = LickInterface(debug=True, lick_threshold=1000)
-#     module_12 = TorqueInterface(debug=True)
-#
-#     # Tested AMC interface
-#     interface = MicroControllerInterface(
-#         controller_id=sensor_id,
-#         data_logger=data_logger,
-#         module_interfaces=(module_11,),
-#         microcontroller_serial_buffer_size=8192,
-#         microcontroller_usb_port=sensor_usb,
-#         baudrate=115200,
-#     )
-#
-#     # Starts interfaces
-#     data_logger.start()
-#     interface.start()
-#
-#     # For ACTOR modules, enables writing to output pins
-#     interface.unlock_controller()
-#
-#     # Calls the appropriate CLI to test the target module
-#     # _encoder_cli(module, 500, 15)
-#     # _mesoscope_ttl_cli(module_1, module_2, 10000)
-#     # _break_cli(module_3)
-#     # _valve_cli(module_4, 35590)
-#     # _screen_cli(module_5, 500000)
-#     # _mesoscope_frames_cli(module_10, 500)
-#     _lick_cli(module_11, 1000, 300, 300, 30)
-#     # _torque_cli(module_12, 1000, 100, 70, 5)
-#
-#     # Shutdown
-#     interface.stop()
-#     data_logger.stop()
-#     camera.stop_frame_saving()
-#     camera.stop()
-#
-#     data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
 
 
 if __name__ == "__main__":
