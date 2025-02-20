@@ -1157,7 +1157,7 @@ class MesoscopeExperiment:
         message = "MesoscopeExperiment assets: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stops and terminates the MesoscopeExperiment runtime.
 
         First, stops acquiring mesoscope and visual camera frames. Then, disables all hardware modules and disconnects
@@ -2461,7 +2461,7 @@ class SystemCalibration:
         message = "SystemCalibration assets: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stops and terminates the SystemCalibration runtime.
 
         This method shuts down all data collectors and disconnects from all cameras, microcontrollers, and the data
@@ -2566,7 +2566,7 @@ class SystemCalibration:
         message = "SystemCalibration runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def _headbar_restore(self) -> None:
+    def headbar_restore(self) -> None:
         """Restores the motor positions for the HeadBar to the states recorded at the end of the previous calibration
         runtime.
 
@@ -2604,7 +2604,7 @@ class SystemCalibration:
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
             self._delay_timer.delay_noblock(delay=1)
 
-    def _lickport_restore(self) -> None:
+    def lickport_restore(self) -> None:
         """Restores the motor positions for the LickPort to the states recorded at the end of the previous calibration
         runtime.
 
@@ -2641,297 +2641,408 @@ class SystemCalibration:
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
             self._delay_timer.delay_noblock(delay=1)
 
+    def enable_encoder_monitoring(self, polling_delay: int = 500) -> None:
+        """Enables wheel encoder monitoring with the provided polling delay in microseconds."""
+        self._wheel_encoder.reset_pulse_count()
+        self._wheel_encoder.check_state(repetition_delay=np.uint32(polling_delay))
 
-def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
-    """Exposes a console-based CLI that interfaces with the encoder connected to the running wheel."""
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "f":  # CW only
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=delta_threshold)
-            encoder.check_state(repetition_delay=np.uint32(polling_delay))
-        elif code == "r":  # CCW only
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=delta_threshold)
-            encoder.check_state(repetition_delay=np.uint32(polling_delay))
-        elif code == "a":  # Both CW and CCW
-            encoder.reset_pulse_count()
-            encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=delta_threshold)
-            encoder.check_state(repetition_delay=np.uint32(polling_delay))
+    def disable_encoder_monitoring(self) -> None:
+        """Stops monitoring the wheel encoder."""
+        self._wheel_encoder.reset_command_queue()
 
+    def start_mesoscope(self) -> None:
+        """Sends the acquisition start TTL pulse to the mesoscope."""
+        self._mesoscope_start.send_pulse()
 
-def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, pulse_duration: int) -> None:
-    """Exposes a console-based CLI that interfaces with the TTL modules used to start and stop mesoscope frame
-    acquisition.
-    """
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "b":  # Start / Begin
-            start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
-            start_trigger.send_pulse()
-        elif code == "e":  # Stop / End
-            stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
-            stop_trigger.send_pulse()
+    def stop_mesoscope(self) -> None:
+        """Sends the acquisition stop TTL pulse to the mesoscope."""
+        self._mesoscope_stop.send_pulse()
 
+    def enable_break(self) -> None:
+        """Engages wheel break, preventing the animal from running on the wheel."""
+        self._break.toggle(state=True)
 
-def _break_cli(wheel_break: BreakInterface) -> None:
-    """Exposes a console-based CLI that interfaces with the break connected to the running wheel."""
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "e":  # Engage
-            wheel_break.toggle(state=True)
-        elif code == "d":  # Disengage
-            wheel_break.toggle(state=False)
+    def disable_break(self) -> None:
+        """Disengages wheel break, enabling the animal to run on the wheel."""
+        self._break.toggle(state=False)
 
+    def toggle_screens(self) -> None:
+        """Changes (flips) the current state of the VR screens (On / Off)."""
+        self._screens.toggle()
 
-def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
-    """Exposes a console-based CLI that interfaces with the water reward delivery valve."""
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "r":  # Deliver reward
-            valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
-            valve.send_pulse()
-        elif code == "c1":
-            valve.set_parameters(
-                pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-            )  # 15 milliseconds
-            valve.calibrate()
-        elif code == "c2":
-            valve.set_parameters(
-                pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-            )  # 30 milliseconds
-            valve.calibrate()
-        elif code == "c3":
-            valve.set_parameters(
-                pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-            )  # 45 milliseconds
-            valve.calibrate()
-        elif code == "c4":
-            valve.set_parameters(
-                pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-            )  # 60 milliseconds
-            valve.calibrate()
-        elif code == "o":
-            valve.toggle(state=True)
-        elif code == "c":
-            valve.toggle(state=False)
-        elif code == "t":  # Test
-            valve.set_parameters(
-                pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
-            )  # 5 ul x 200 times
-            valve.calibrate()
-        else:
-            # noinspection PyBroadException
-            try:
-                pulse_duration = valve.get_duration_from_volume(float(code))
-                valve.set_parameters(pulse_duration=pulse_duration)
-                valve.send_pulse()
-            except:
-                print(f"Unknown command: {code}")
+    def enable_mesoscope_frame_monitoring(self, polling_delay: int) -> None:
+        """Enables monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame with the
+        provided polling delay in microseconds."""
+        self._mesoscope_frame.check_state(repetition_delay=np.uint32(polling_delay))
 
+    def disable_mesoscope_frame_monitoring(self) -> None:
+        """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
+        self._mesoscope_frame.reset_command_queue()
 
-def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
-    """Exposes a console-based CLI that interfaces with the HDMI translator boards connected to all three VR screens."""
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "t":  # Toggle
-            screen.set_parameters(pulse_duration=np.uint32(pulse_duration))
-            screen.toggle()
+    def enable_lick_monitoring(self, polling_delay: int) -> None:
+        """Enables lick sensor monitoring with the provided polling delay in microseconds."""
+        self._lick.check_state(repetition_delay=np.uint32(polling_delay))
 
+    def disable_lick_monitoring(self) -> None:
+        """Disables lick sensor monitoring."""
+        self._lick.reset_command_queue()
 
-def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> None:
-    """Exposes a console-based CLI that interfaces with the TTL module used to receive mesoscope frame acquisition
-    timestamps sent by the ScanImage PC.
-    """
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "b":  # Start / Begin
-            frame_watcher.check_state(repetition_delay=np.uint32(polling_delay))
-        elif code == "e":  # Stop / End
-            frame_watcher.reset_command_queue()
+    def enable_torque_monitoring(self, polling_delay: int) -> None:
+        """Enables torque sensor monitoring with the provided polling delay in microseconds."""
+        self._torque.check_state(repetition_delay=np.uint32(polling_delay))
 
+    def disable_torque_monitoring(self) -> None:
+        """Disables torque sensor monitoring."""
+        self._torque.reset_command_queue()
 
-def _lick_cli(
-    lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
-) -> None:
-    """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "b":  # Start / Begin
-            lick.set_parameters(
-                signal_threshold=np.uint16(signal_threshold),
-                delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging),
-            )
-            lick.check_state(repetition_delay=np.uint32(polling_delay))
+    def open_valve(self) -> None:
+        """Opens the solenoid valve to enable water flow."""
+        self._reward.toggle(state=True)
+
+    def close_valve(self) -> None:
+        """Closes the solenoid valve to restrict water flow."""
+        self._reward.toggle(state=False)
+
+    def deliver_reward(self, volume: float = 5.0) -> None:
+        """Pulses the valve for the duration of time necessary to deliver the provided volume of water.
+
+        Note, the way the requested volume is translated into valve open time depends on the calibration data
+        provided to the class at initialization.
+        """
+        self._reward.set_parameters(pulse_duration=self._reward.get_duration_from_volume(volume))
+        self._reward.send_pulse()
+
+    def reference_valve(self) -> None:
+        """Runs the 'reference' valve calibration procedure.
+
+        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding syringe
+        filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which should
+        overall deliver ~ 1 ml of water.
+
+        Notes:
+            This method repositions HeadBar and LickPort motors to optimize collecting dispensed water before the
+            procedure and move them back to the parking positions when the referencing is over.
+
+            Use one of the conical tubes stored next to the mesoscope to collect the dispensed water. We advise using
+            both the visual confirmation (looking at the syringe water level drop) and the weight confirmation
+            (weighing the water dispensed into the collection tube). This provides the most accurate referencing result.
+        """
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
+        )  # 5 ul x 200 times
+        self._reward.calibrate()
+
+    def calibrate_valve(self) -> None:
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )  # 15 milliseconds
+        self._reward.calibrate()
+
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )  # 30 milliseconds
+        self._reward.calibrate()
+
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )  # 45 milliseconds
+        self._reward.calibrate()
+
+        self._reward.set_parameters(
+            pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )  # 60 milliseconds
+        self._reward.calibrate()
+
+# def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
+#     """Exposes a console-based CLI that interfaces with the encoder connected to the running wheel."""
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "f":  # CW only
+#             encoder.reset_pulse_count()
+#             encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=delta_threshold)
+#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
+#         elif code == "r":  # CCW only
+#             encoder.reset_pulse_count()
+#             encoder.set_parameters(report_cw=True, report_ccw=False, delta_threshold=delta_threshold)
+#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
+#         elif code == "a":  # Both CW and CCW
+#             encoder.reset_pulse_count()
+#             encoder.set_parameters(report_cw=True, report_ccw=True, delta_threshold=delta_threshold)
+#             encoder.check_state(repetition_delay=np.uint32(polling_delay))
 
 
-def _torque_cli(
-    torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
-) -> None:
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "f":  # Forward Torque only
-            torque.set_parameters(
-                report_cw=False,
-                report_ccw=True,
-                signal_threshold=np.uint16(signal_threshold),
-                delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging),
-            )
-            torque.check_state(repetition_delay=np.uint32(polling_delay))
-        elif code == "r":  # Forward Torque only
-            torque.set_parameters(
-                report_cw=True,
-                report_ccw=False,
-                signal_threshold=np.uint16(signal_threshold),
-                delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging),
-            )
-            torque.check_state(repetition_delay=np.uint32(polling_delay))
-        elif code == "a":  # Both directions
-            torque.set_parameters(
-                report_cw=True,
-                report_ccw=True,
-                signal_threshold=np.uint16(signal_threshold),
-                delta_threshold=np.uint16(delta_threshold),
-                averaging_pool_size=np.uint8(averaging),
-            )
-            torque.check_state(repetition_delay=np.uint32(polling_delay))
+# def _mesoscope_ttl_cli(start_trigger: TTLInterface, stop_trigger: TTLInterface, pulse_duration: int) -> None:
+#     """Exposes a console-based CLI that interfaces with the TTL modules used to start and stop mesoscope frame
+#     acquisition.
+#     """
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "b":  # Start / Begin
+#             start_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+#             start_trigger.send_pulse()
+#         elif code == "e":  # Stop / End
+#             stop_trigger.set_parameters(pulse_duration=np.uint32(pulse_duration))
+#             stop_trigger.send_pulse()
 
 
-def _camera_cli(camera: VideoSystem):
-    while True:
-        code = input()  # Sneaky UI
-        if code == "q":
-            break
-        elif code == "a":  # Start saving
-            camera.start_frame_saving()
-            print(camera.started)
-        elif code == "s":  # Stop saving
-            camera.stop_frame_saving()
-            print(f"Not Saving")
+# def _break_cli(wheel_break: BreakInterface) -> None:
+#     """Exposes a console-based CLI that interfaces with the break connected to the running wheel."""
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "e":  # Engage
+#             wheel_break.toggle(state=True)
+#         elif code == "d":  # Disengage
+#             wheel_break.toggle(state=False)
 
 
-def calibration() -> None:
-    # Output dir
-    temp_dir = Path("/home/cybermouse/Desktop/TestOut")
-    data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
+# def _valve_cli(valve: ValveInterface, pulse_duration: int) -> None:
+#     """Exposes a console-based CLI that interfaces with the water reward delivery valve."""
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "r":  # Deliver reward
+#             valve.set_parameters(pulse_duration=np.uint32(pulse_duration))
+#             valve.send_pulse()
+#         elif code == "c1":
+#             valve.set_parameters(
+#                 pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+#             )  # 15 milliseconds
+#             valve.calibrate()
+#         elif code == "c2":
+#             valve.set_parameters(
+#                 pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+#             )  # 30 milliseconds
+#             valve.calibrate()
+#         elif code == "c3":
+#             valve.set_parameters(
+#                 pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+#             )  # 45 milliseconds
+#             valve.calibrate()
+#         elif code == "c4":
+#             valve.set_parameters(
+#                 pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+#             )  # 60 milliseconds
+#             valve.calibrate()
+#         elif code == "o":
+#             valve.toggle(state=True)
+#         elif code == "c":
+#             valve.toggle(state=False)
+#         elif code == "t":  # Test
+#             valve.set_parameters(
+#                 pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
+#             )  # 5 ul x 200 times
+#             valve.calibrate()
+#         else:
+#             # noinspection PyBroadException
+#             try:
+#                 pulse_duration = valve.get_duration_from_volume(float(code))
+#                 valve.set_parameters(pulse_duration=pulse_duration)
+#                 valve.send_pulse()
+#             except:
+#                 print(f"Unknown command: {code}")
 
-    camera: VideoSystem = VideoSystem(
-        system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir, harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
-    )
-    camera.add_camera(
-        save_frames=True,
-        camera_index=0,
-        camera_backend=CameraBackends.HARVESTERS,
-        output_frames=False,
-        display_frames=True,
-        color=False,
-    )
-    camera.add_video_saver(
-        hardware_encoding=True,
-        video_format=VideoFormats.MP4,
-        video_codec=VideoCodecs.H265,
-        preset=GPUEncoderPresets.FASTEST,
-        input_pixel_format=InputPixelFormats.MONOCHROME,
-        output_pixel_format=OutputPixelFormats.YUV420,
-        quantization_parameter=15
-    )
 
-    camera.start()
-    camera.start_frame_saving()
+# def _screen_cli(screen: ScreenInterface, pulse_duration: int) -> None:
+#     """Exposes a console-based CLI that interfaces with the HDMI translator boards connected to all three VR screens."""
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "t":  # Toggle
+#             screen.set_parameters(pulse_duration=np.uint32(pulse_duration))
+#             screen.toggle()
 
-    # Defines static assets needed for testing
-    valve_calibration_data = (
-        (15000, 1.8556),
-        (30000, 3.4844),
-        (45000, 7.1846),
-        (60000, 10.0854),
-    )
-    actor_id = np.uint8(101)
-    sensor_id = np.uint8(152)
-    encoder_id = np.uint8(203)
-    sensor_usb = "/dev/ttyACM1"
-    actor_usb = "/dev/ttyACM0"
-    encoder_usb = "/dev/ttyACM2"
 
-    # Add console support for print debugging
-    console.enable()
+# def _mesoscope_frames_cli(frame_watcher: TTLInterface, polling_delay: int) -> None:
+#     """Exposes a console-based CLI that interfaces with the TTL module used to receive mesoscope frame acquisition
+#     timestamps sent by the ScanImage PC.
+#     """
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "b":  # Start / Begin
+#             frame_watcher.check_state(repetition_delay=np.uint32(polling_delay))
+#         elif code == "e":  # Stop / End
+#             frame_watcher.reset_command_queue()
 
-    # Tested module interface
-    module = EncoderInterface(debug=True)
 
-    module_1 = TTLInterface(module_id=np.uint8(1), debug=True)
-    module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
-    module_3 = BreakInterface(debug=True)
-    module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
-    module_5 = ScreenInterface(initially_on=False, debug=True)
+# def _lick_cli(
+#     lick: LickInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
+# ) -> None:
+#     """Exposes a console-based CLI that interfaces with the Voltage-based Lick detection sensor."""
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "b":  # Start / Begin
+#             lick.set_parameters(
+#                 signal_threshold=np.uint16(signal_threshold),
+#                 delta_threshold=np.uint16(delta_threshold),
+#                 averaging_pool_size=np.uint8(averaging),
+#             )
+#             lick.check_state(repetition_delay=np.uint32(polling_delay))
 
-    module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
-    module_11 = LickInterface(debug=True, lick_threshold=1000)
-    module_12 = TorqueInterface(debug=True)
 
-    # Tested AMC interface
-    interface = MicroControllerInterface(
-        controller_id=sensor_id,
-        data_logger=data_logger,
-        module_interfaces=(module_11,),
-        microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port=sensor_usb,
-        baudrate=115200,
-    )
+# def _torque_cli(
+#     torque: TorqueInterface, polling_delay: int, signal_threshold: int, delta_threshold: int, averaging: int
+# ) -> None:
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "f":  # Forward Torque only
+#             torque.set_parameters(
+#                 report_cw=False,
+#                 report_ccw=True,
+#                 signal_threshold=np.uint16(signal_threshold),
+#                 delta_threshold=np.uint16(delta_threshold),
+#                 averaging_pool_size=np.uint8(averaging),
+#             )
+#             torque.check_state(repetition_delay=np.uint32(polling_delay))
+#         elif code == "r":  # Forward Torque only
+#             torque.set_parameters(
+#                 report_cw=True,
+#                 report_ccw=False,
+#                 signal_threshold=np.uint16(signal_threshold),
+#                 delta_threshold=np.uint16(delta_threshold),
+#                 averaging_pool_size=np.uint8(averaging),
+#             )
+#             torque.check_state(repetition_delay=np.uint32(polling_delay))
+#         elif code == "a":  # Both directions
+#             torque.set_parameters(
+#                 report_cw=True,
+#                 report_ccw=True,
+#                 signal_threshold=np.uint16(signal_threshold),
+#                 delta_threshold=np.uint16(delta_threshold),
+#                 averaging_pool_size=np.uint8(averaging),
+#             )
+#             torque.check_state(repetition_delay=np.uint32(polling_delay))
 
-    # Starts interfaces
-    data_logger.start()
-    interface.start()
 
-    # For ACTOR modules, enables writing to output pins
-    interface.unlock_controller()
+# def _camera_cli(camera: VideoSystem):
+#     while True:
+#         code = input()  # Sneaky UI
+#         if code == "q":
+#             break
+#         elif code == "a":  # Start saving
+#             camera.start_frame_saving()
+#             print(camera.started)
+#         elif code == "s":  # Stop saving
+#             camera.stop_frame_saving()
+#             print(f"Not Saving")
 
-    # Calls the appropriate CLI to test the target module
-    # _encoder_cli(module, 500, 15)
-    # _mesoscope_ttl_cli(module_1, module_2, 10000)
-    # _break_cli(module_3)
-    # _valve_cli(module_4, 35590)
-    # _screen_cli(module_5, 500000)
-    # _mesoscope_frames_cli(module_10, 500)
-    _lick_cli(module_11, 1000, 300, 300, 30)
-    # _torque_cli(module_12, 1000, 100, 70, 5)
 
-    # Shutdown
-    interface.stop()
-    data_logger.stop()
-    camera.stop_frame_saving()
-    camera.stop()
-
-    data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
+# def calibration() -> None:
+#     # Output dir
+#     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
+#     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
+#
+#     camera: VideoSystem = VideoSystem(
+#         system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir, harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
+#     )
+#     camera.add_camera(
+#         save_frames=True,
+#         camera_index=0,
+#         camera_backend=CameraBackends.HARVESTERS,
+#         output_frames=False,
+#         display_frames=True,
+#         color=False,
+#     )
+#     camera.add_video_saver(
+#         hardware_encoding=True,
+#         video_format=VideoFormats.MP4,
+#         video_codec=VideoCodecs.H265,
+#         preset=GPUEncoderPresets.FASTEST,
+#         input_pixel_format=InputPixelFormats.MONOCHROME,
+#         output_pixel_format=OutputPixelFormats.YUV420,
+#         quantization_parameter=15
+#     )
+#
+#     camera.start()
+#     camera.start_frame_saving()
+#
+#     # Defines static assets needed for testing
+#     valve_calibration_data = (
+#         (15000, 1.8556),
+#         (30000, 3.4844),
+#         (45000, 7.1846),
+#         (60000, 10.0854),
+#     )
+#     actor_id = np.uint8(101)
+#     sensor_id = np.uint8(152)
+#     encoder_id = np.uint8(203)
+#     sensor_usb = "/dev/ttyACM1"
+#     actor_usb = "/dev/ttyACM0"
+#     encoder_usb = "/dev/ttyACM2"
+#
+#     # Add console support for print debugging
+#     console.enable()
+#
+#     # Tested module interface
+#     module = EncoderInterface(debug=True)
+#
+#     module_1 = TTLInterface(module_id=np.uint8(1), debug=True)
+#     module_2 = TTLInterface(module_id=np.uint8(2), debug=True)
+#     module_3 = BreakInterface(debug=True)
+#     module_4 = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+#     module_5 = ScreenInterface(initially_on=False, debug=True)
+#
+#     module_10 = TTLInterface(module_id=np.uint8(1), debug=True)  # Frame TTL
+#     module_11 = LickInterface(debug=True, lick_threshold=1000)
+#     module_12 = TorqueInterface(debug=True)
+#
+#     # Tested AMC interface
+#     interface = MicroControllerInterface(
+#         controller_id=sensor_id,
+#         data_logger=data_logger,
+#         module_interfaces=(module_11,),
+#         microcontroller_serial_buffer_size=8192,
+#         microcontroller_usb_port=sensor_usb,
+#         baudrate=115200,
+#     )
+#
+#     # Starts interfaces
+#     data_logger.start()
+#     interface.start()
+#
+#     # For ACTOR modules, enables writing to output pins
+#     interface.unlock_controller()
+#
+#     # Calls the appropriate CLI to test the target module
+#     # _encoder_cli(module, 500, 15)
+#     # _mesoscope_ttl_cli(module_1, module_2, 10000)
+#     # _break_cli(module_3)
+#     # _valve_cli(module_4, 35590)
+#     # _screen_cli(module_5, 500000)
+#     # _mesoscope_frames_cli(module_10, 500)
+#     _lick_cli(module_11, 1000, 300, 300, 30)
+#     # _torque_cli(module_12, 1000, 100, 70, 5)
+#
+#     # Shutdown
+#     interface.stop()
+#     data_logger.stop()
+#     camera.stop_frame_saving()
+#     camera.stop()
+#
+#     data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
 
 
 if __name__ == "__main__":
-    # test_class = SystemCalibration()
-    # test_class.start()
-    # while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
-    #     continue
-    # test_class.stop()
+    test_class = SystemCalibration()
+    test_class.start()
+    while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
+        continue
+    test_class.stop()
 
-    calibration()
+    # calibration()
 
     # session_dir = SessionData(
     #     project_name="TestProject",
