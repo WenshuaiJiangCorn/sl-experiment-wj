@@ -549,7 +549,7 @@ def interpolate_data(
     data: NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]],
     seed_timestamps: NDArray[np.uint64],
     is_discrete: bool,
-) -> NDArray[np.signedinteger[Any], np.unsignedinteger[Any], np.floating[Any]]:
+) -> NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]]:
     """Interpolates data values for the provided seed timestamps.
 
     This function is primarily used during behavioral data preprocessing to align all behavioral data to the mesoscope

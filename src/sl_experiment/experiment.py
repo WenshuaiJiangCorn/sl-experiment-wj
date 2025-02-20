@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 from ataraxis_time import PrecisionTimer
 
-from .module_interfaces import (
+from module_interfaces import (
     TTLInterface,
     LickInterface,
     BreakInterface,
@@ -33,10 +33,10 @@ from ataraxis_video_system import (
     OutputPixelFormats,
 )
 
-from .zaber_bindings import ZaberConnection, ZaberAxis
-from .transfer_tools import transfer_directory
-from .packaging_tools import calculate_directory_checksum
-from .data_preprocessing import interpolate_data, process_mesoscope_directory
+from zaber_bindings import ZaberConnection, ZaberAxis
+from transfer_tools import transfer_directory
+from packaging_tools import calculate_directory_checksum
+from data_preprocessing import interpolate_data, process_mesoscope_directory
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import shutil
 from dataclasses import dataclass
@@ -1826,105 +1826,105 @@ class MesoscopeExperiment:
         )
 
 
-class BehavioralTraining:
-    pass
-
-    def _vr_lick_train(self) -> None:
-        """Switches the VR system into the lick training state.
-
-        In the lick training state, the break is enabled, preventing the mouse from moving the wheel. The screens
-        are turned off, Unity and mesoscope are disabled. Torque and Encoder monitoring are also disabled. The only
-        working hardware modules are lick sensor and water valve.
-
-        Notes:
-            This command is only executable if the class is running in the lick training mode.
-
-            This state is set automatically during start() method runtime. It should not be called externally by the
-            user.
-
-        Raises:
-            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the lick training runtime
-                mode.
-        """
-
-        if not self._started or not self._mode == RuntimeModes.LICK_TRAINING.value:
-            message = (
-                f"Unable to switch the Mesoscope-VR system to the lick training state. Either the start() method of "
-                f"the MesoscopeExperiment class has not been called to setup the necessary assets or the current "
-                f"runtime mode of the class is not set to the 'lick_training' mode."
-            )
-            console.error(message=message, error=RuntimeError)
-
-        # Ensures the break is enabled. The mice do not need to move the wheel during the lick training runtime.
-        self._break.toggle(True)
-
-        # Disables both torque and encoder. During lick training we are not interested in mouse motion data.
-        self._torque.reset_command_queue()
-        self._wheel_encoder.reset_command_queue()
-
-        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
-        # keeps them OFF.
-        if self._screen_on:
-            self._screens.toggle()
-            self._screen_on = False
-
-        # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
-        # pipelines. Unity and mesoscope should not be enabled.
-
-        # Configures the state tracker to reflect the LICK TRAIN state
-        self._change_vr_state(3)
-        message = f"VR State: {self._state_map[self._vr_state]}."
-        console.echo(message=message, level=LogLevel.INFO)
-
-    def _vr_run_train(self) -> None:
-        """Switches the VR system into the run training state.
-
-        In the run training state, the break is disabled, allowing the animal to move the wheel. The encoder module is
-        enabled to monitor the running metrics (distance and / or speed). The lick sensor and water valve modules are
-        also enabled to conditionally reward the animal for desirable performance. The VR screens are turned off. Unity,
-        mesoscope, and the torque module are disabled.
-
-        Notes:
-            This command is only executable if the class is running in the run training mode.
-
-            This state is set automatically during start() method runtime. It should not be called externally by the
-            user.
-
-        Raises:
-            RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the run training runtime
-                mode.
-        """
-
-        if not self._started or not self._mode == RuntimeModes.RUN_TRAINING.value:
-            message = (
-                f"Unable to switch the Mesoscope-VR system to the run training state. Either the start() method of the "
-                f"MesoscopeExperiment class has not been called to setup the necessary assets or the current runtime "
-                f"mode of the class is not set to the 'run_training' mode."
-            )
-            console.error(message=message, error=RuntimeError)
-
-        # Disables both torque sensor.
-        self._torque.reset_command_queue()
-
-        # Enables the encoder module to monitor animal's running performance
-        self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
-
-        # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
-        # keeps them OFF.
-        if self._screen_on:
-            self._screens.toggle()
-            self._screen_on = False
-
-        # Ensures the break is disabled. This allows the animal to run on the wheel freely.
-        self._break.toggle(False)
-
-        # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
-        # pipelines. Unity and mesoscope should not be enabled.
-
-        # Configures the state tracker to reflect the RUN TRAIN state
-        self._change_vr_state(4)
-        message = f"VR State: {self._state_map[self._vr_state]}."
-        console.echo(message=message, level=LogLevel.INFO)
+# class BehavioralTraining:
+#     pass
+#
+#     def _vr_lick_train(self) -> None:
+#         """Switches the VR system into the lick training state.
+#
+#         In the lick training state, the break is enabled, preventing the mouse from moving the wheel. The screens
+#         are turned off, Unity and mesoscope are disabled. Torque and Encoder monitoring are also disabled. The only
+#         working hardware modules are lick sensor and water valve.
+#
+#         Notes:
+#             This command is only executable if the class is running in the lick training mode.
+#
+#             This state is set automatically during start() method runtime. It should not be called externally by the
+#             user.
+#
+#         Raises:
+#             RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the lick training runtime
+#                 mode.
+#         """
+#
+#         if not self._started or not self._mode == RuntimeModes.LICK_TRAINING.value:
+#             message = (
+#                 f"Unable to switch the Mesoscope-VR system to the lick training state. Either the start() method of "
+#                 f"the MesoscopeExperiment class has not been called to setup the necessary assets or the current "
+#                 f"runtime mode of the class is not set to the 'lick_training' mode."
+#             )
+#             console.error(message=message, error=RuntimeError)
+#
+#         # Ensures the break is enabled. The mice do not need to move the wheel during the lick training runtime.
+#         self._break.toggle(True)
+#
+#         # Disables both torque and encoder. During lick training we are not interested in mouse motion data.
+#         self._torque.reset_command_queue()
+#         self._wheel_encoder.reset_command_queue()
+#
+#         # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
+#         # keeps them OFF.
+#         if self._screen_on:
+#             self._screens.toggle()
+#             self._screen_on = False
+#
+#         # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
+#         # pipelines. Unity and mesoscope should not be enabled.
+#
+#         # Configures the state tracker to reflect the LICK TRAIN state
+#         self._change_vr_state(3)
+#         message = f"VR State: {self._state_map[self._vr_state]}."
+#         console.echo(message=message, level=LogLevel.INFO)
+#
+#     def _vr_run_train(self) -> None:
+#         """Switches the VR system into the run training state.
+#
+#         In the run training state, the break is disabled, allowing the animal to move the wheel. The encoder module is
+#         enabled to monitor the running metrics (distance and / or speed). The lick sensor and water valve modules are
+#         also enabled to conditionally reward the animal for desirable performance. The VR screens are turned off. Unity,
+#         mesoscope, and the torque module are disabled.
+#
+#         Notes:
+#             This command is only executable if the class is running in the run training mode.
+#
+#             This state is set automatically during start() method runtime. It should not be called externally by the
+#             user.
+#
+#         Raises:
+#             RuntimeError: If the Mesoscope-VR system is not started, or the class is not in the run training runtime
+#                 mode.
+#         """
+#
+#         if not self._started or not self._mode == RuntimeModes.RUN_TRAINING.value:
+#             message = (
+#                 f"Unable to switch the Mesoscope-VR system to the run training state. Either the start() method of the "
+#                 f"MesoscopeExperiment class has not been called to setup the necessary assets or the current runtime "
+#                 f"mode of the class is not set to the 'run_training' mode."
+#             )
+#             console.error(message=message, error=RuntimeError)
+#
+#         # Disables both torque sensor.
+#         self._torque.reset_command_queue()
+#
+#         # Enables the encoder module to monitor animal's running performance
+#         self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
+#
+#         # Toggles the state of the VR screens to be OFF if the VR screens are currently ON. If the screens are OFF,
+#         # keeps them OFF.
+#         if self._screen_on:
+#             self._screens.toggle()
+#             self._screen_on = False
+#
+#         # Ensures the break is disabled. This allows the animal to run on the wheel freely.
+#         self._break.toggle(False)
+#
+#         # The lick sensor should already be running at 1000 Hz resolution, as we generally keep it on for all our
+#         # pipelines. Unity and mesoscope should not be enabled.
+#
+#         # Configures the state tracker to reflect the RUN TRAIN state
+#         self._change_vr_state(4)
+#         message = f"VR State: {self._state_map[self._vr_state]}."
+#         console.echo(message=message, level=LogLevel.INFO)
 
 
 class SystemCalibration:
@@ -2834,32 +2834,29 @@ def calibration() -> None:
     temp_dir = Path("/home/cybermouse/Desktop/TestOut")
     data_logger = DataLogger(output_directory=temp_dir, instance_name="amc", exist_ok=True)
 
-    # camera: VideoSystem = VideoSystem(
-    #     system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir
-    # )
-    # camera.add_camera(
-    #     save_frames=True,
-    #     camera_index=0,
-    #     camera_backend=CameraBackends.OPENCV,
-    #     output_frames=False,
-    #     display_frames=True,
-    #     display_frame_rate=25,
-    #     color=False,
-    # )
-    # camera.add_video_saver(
-    #     hardware_encoding=True,
-    #     video_format=VideoFormats.MP4,
-    #     video_codec=VideoCodecs.H265,
-    #     preset=GPUEncoderPresets.FASTEST,
-    #     input_pixel_format=InputPixelFormats.MONOCHROME,
-    #     output_pixel_format=OutputPixelFormats.YUV420,
-    #     quantization_parameter=30
-    # )
-    #
-    # camera.start()
-    # _camera_cli(camera)
-    # camera.stop()
-    # data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
+    camera: VideoSystem = VideoSystem(
+        system_id=np.uint8(62), data_logger=data_logger, output_directory=temp_dir, harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
+    )
+    camera.add_camera(
+        save_frames=True,
+        camera_index=0,
+        camera_backend=CameraBackends.HARVESTERS,
+        output_frames=False,
+        display_frames=True,
+        color=False,
+    )
+    camera.add_video_saver(
+        hardware_encoding=True,
+        video_format=VideoFormats.MP4,
+        video_codec=VideoCodecs.H265,
+        preset=GPUEncoderPresets.FASTEST,
+        input_pixel_format=InputPixelFormats.MONOCHROME,
+        output_pixel_format=OutputPixelFormats.YUV420,
+        quantization_parameter=15
+    )
+
+    camera.start()
+    camera.start_frame_saving()
 
     # Defines static assets needed for testing
     valve_calibration_data = (
@@ -2893,11 +2890,11 @@ def calibration() -> None:
 
     # Tested AMC interface
     interface = MicroControllerInterface(
-        controller_id=actor_id,
+        controller_id=sensor_id,
         data_logger=data_logger,
-        module_interfaces=(module_4,),
+        module_interfaces=(module_11,),
         microcontroller_serial_buffer_size=8192,
-        microcontroller_usb_port=actor_usb,
+        microcontroller_usb_port=sensor_usb,
         baudrate=115200,
     )
 
@@ -2912,27 +2909,29 @@ def calibration() -> None:
     # _encoder_cli(module, 500, 15)
     # _mesoscope_ttl_cli(module_1, module_2, 10000)
     # _break_cli(module_3)
-    _valve_cli(module_4, 35590)
+    # _valve_cli(module_4, 35590)
     # _screen_cli(module_5, 500000)
     # _mesoscope_frames_cli(module_10, 500)
-    # _lick_cli(module_11, 1000, 300, 300, 30)
+    _lick_cli(module_11, 1000, 300, 300, 30)
     # _torque_cli(module_12, 1000, 100, 70, 5)
 
     # Shutdown
     interface.stop()
     data_logger.stop()
+    camera.stop_frame_saving()
+    camera.stop()
 
     data_logger.compress_logs(remove_sources=True, memory_mapping=False, verbose=True)
 
 
 if __name__ == "__main__":
-    test_class = SystemCalibration()
-    test_class.start()
-    while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
-        continue
-    test_class.stop()
+    # test_class = SystemCalibration()
+    # test_class.start()
+    # while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
+    #     continue
+    # test_class.stop()
 
-    # calibration()
+    calibration()
 
     # session_dir = SessionData(
     #     project_name="TestProject",
