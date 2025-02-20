@@ -550,7 +550,8 @@ class MesoscopeExperiment:
         as the MicroControllerInterface or the VideoSystem uses this id code.
 
         This class is specifically designed to acquire experimental data. To run a training session, use
-        BehavioralTraining class. To calibrate hardware modules, including the water valve, use Calibration class.
+        BehavioralTraining class. To calibrate hardware modules, including the water valve, use CalibSystemCalibration
+        class.
 
     Args:
         session_data: An initialized SessionData instance. This instance is used to transfer the data between VRPC,
@@ -1248,9 +1249,7 @@ class MesoscopeExperiment:
 
         # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
         # further.
-        message = (
-            "Preparing to move the LickPort into the mounting position. Swivel the VR screens out."
-        )
+        message = "Preparing to move the LickPort into the mounting position. Swivel the VR screens out."
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
@@ -1388,8 +1387,8 @@ class MesoscopeExperiment:
         """Restores the motor positions for the HeadBar to the states recorded at the end of the previous experiment
         or training session.
 
-        This method is called as part of the start() method runtime method to prepare the VR system for mounting the
-        animal. it tries to adjust the HeadBar motors to match the position used during the previous session, which
+        This method is called as part of the start() method runtime to prepare the VR system for mounting the
+        animal. It tries to adjust the HeadBar motors to match the position used during the previous session, which
         should be optimal for the animal whose data will be recorded by the MesoscopeExperiment class. Additionally,
         this helps with aligning the cranial window and the mesoscope objective, by ensuring the animal head is oriented
         consistently across sessions.
@@ -1430,7 +1429,7 @@ class MesoscopeExperiment:
         """Restores the motor positions for the LickPort to the states recorded at the end of the previous experiment
         or training session.
 
-        This method is called as part of class start() method after the animal is mounted into the VR system.
+        This method is called as part of the start() method runtime after the animal is mounted into the VR system.
         It positions the lickport to be comfortably accessible for the mounted animal.
 
         Notes:
@@ -1446,9 +1445,9 @@ class MesoscopeExperiment:
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
         if self._session_data.previous_zaber_positions_path is None:
             message = (
-                "No previous zaber positions found when attempting to restore previous positions for the LickPort. "
-                "Setting the LickPort motors to use the default mount positions. Adjust positions manually before "
-                "calling the MesoscopeExperiment start() method."
+                "No previous Zaber positions found when attempting to restore LickPort to the previous session "
+                "position. Setting the LickPort motors to use the default parking positions. Adjust the "
+                "positions manually when prompted by the startup runtime to optimize animal's running performance."
             )
             warnings.warn(message)
             self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
@@ -1929,20 +1928,20 @@ class BehavioralTraining:
 
 
 class SystemCalibration:
-    """The base class for all Sun lab mesoscope experiment runtimes.
+    """The base class for all Sun lab calibration runtimes.
 
-    This class provides methods for conducting experiments in the Sun lab using the Mesoscope-VR system. This class
-    abstracts most low-level interactions with the VR system and the mesoscope via a simple high-level API. In turn, the
-    API can be used by all lab members to write custom Experiment class specializations for their projects.
+    This class is used to test and calibrate various elements of the Mesoscope-VR system before conducting experiment
+    and training runtimes. This class is heavily used during initial system construction and configuration. Once the
+    system is built, this class is primarily used for water valve calibration and setup, which has to be carried out
+    frequently between experimental days.
 
-    This class also provides methods for initial preprocessing of the raw data. These preprocessing steps all use
-    multiprocessing to optimize runtime speeds and are designed to be executed after each experimental session to
-    prepare the data for long-term storage and further processing and analysis.
+    This class uses most bindings used by the 'real' MesoscopeExperiment and BehavioralTraining classes. It uses the
+    same logic for interfacing with the cameras, Zaber motors, and the Microcontrollers. This allows testing module
+    behavior without the risk of damaging expensive equipment (sucha s the mesoscope objective) or harming the animals.
 
     Notes:
         Calling the initializer does not start the underlying processes. Use the start() method before issuing other
-        commands to properly initialize all remote processes. Depending on the runtime mode, this class reserves up to
-        11 CPU cores during runtime.
+        commands to properly initialize all remote processes.
 
         See the 'axtl-ports' cli command from the ataraxis-transport-layer-pc library if you need help discovering the
         USB ports used by Ataraxis Micro Controller (AMC) devices.
@@ -1953,11 +1952,8 @@ class SystemCalibration:
         See the 'sl-devices' cli command from this library if you need help discovering the serial ports used by the
         Zaber motion controllers.
 
-        This class statically reserves the id code '1' to label its log entries. Make sure no other Ataraxis class, such
-        as the MicroControllerInterface or the VideoSystem uses this id code.
-
-        This class is specifically designed to acquire experimental data. To run a training session, use
-        BehavioralTraining class. To calibrate hardware modules, including the water valve, use Calibration class.
+        This class is specifically designed to test Mesoscope-VR system components. To run a training session, use
+        BehavioralTraining class. To run experiments, use MesoscopeExperiment class.
 
     Args:
         screens_on: Determines whether the VR screens are ON when this class is initialized. Since there is no way of
@@ -2009,46 +2005,65 @@ class SystemCalibration:
         _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
         _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
         _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
-        _screen_on: Tracks whether the VR displays are currently ON.
+        _delay_timer: Stores the PrecisionTimer used to delay execution where necessary.
+        _test_folder: Stores the path to the root test directory used to store the data generated during calibration
+            runtime.
+        _zaber_positions_path: Stores the path to the YAML file that contains the Zaber motor positions used during
+            previous calibration runtimes. This is used to simulate the behavior of experiment and training classes with
+            respect to restoring Zaber positions across experimental sessions. If the file does not exist, this will
+            be set to None.
 
     Raises:
         TypeError: If any of the arguments are not of the expected type.
         ValueError: If any of the arguments are not of the expected value.
-        """
+    """
 
     def __init__(
-            self,
-            test_root: Path = Path("/media/Data/Experiments/Test"),
-            screens_on: bool = False,
-            actor_port: str = "/dev/ttyACM0",
-            sensor_port: str = "/dev/ttyACM1",
-            encoder_port: str = "/dev/ttyACM2",
-            headbar_port: str = "/dev/ttyUSB0",
-            lickport_port: str = "/dev/ttyUSB1",
-            valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
-                    (15000, 1.8556),
-                    (30000, 3.4844),
-                    (45000, 7.1846),
-                    (60000, 10.0854),
-            ),
-            face_camera_index: int = 0,
-            left_camera_index: int = 0,
-            right_camera_index: int = 2,
-            harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        self,
+        test_root: Path = Path("/media/Data/Experiments/Test/test_data"),
+        screens_on: bool = False,
+        actor_port: str = "/dev/ttyACM0",
+        sensor_port: str = "/dev/ttyACM1",
+        encoder_port: str = "/dev/ttyACM2",
+        headbar_port: str = "/dev/ttyUSB0",
+        lickport_port: str = "/dev/ttyUSB1",
+        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
+            (15000, 1.8556),
+            (30000, 3.4844),
+            (45000, 7.1846),
+            (60000, 10.0854),
+        ),
+        face_camera_index: int = 0,
+        left_camera_index: int = 0,
+        right_camera_index: int = 2,
+        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
     ) -> None:
+
+        # Initializes the start state tracker first
         self._started: bool = False
-        self._test_folder = test_root
-        self._screen_on: bool = screens_on
+
+        # Initializes a timer to delay code execution. Primarily, this is used during Zaber motor manipulation.
+        self._delay_timer = PrecisionTimer('s')
+
+        # Resets the test folder and saves its path to class attribute
+        shutil.rmtree(test_root, ignore_errors=True)
+        ensure_directory_exists(test_root)
+        self._test_folder: Path = test_root
+
+        # Generates the path to the zaber yaml file. If the file does not exist, this will be set to None.
+        self._zaber_positions_path: Path | None = Path(self._test_folder.parent.joinpath("zaber_positions.yaml"))
+        if not self._zaber_positions_path.exists():
+            self._zaber_positions_path = None
 
         if not isinstance(valve_calibration_data, tuple) or not all(
-                isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[0], (int, float))
-                and isinstance(item[1], (int, float))
-                for item in valve_calibration_data
+            isinstance(item, tuple)
+            and len(item) == 2
+            and isinstance(item[0], (int, float))
+            and isinstance(item[1], (int, float))
+            for item in valve_calibration_data
         ):
             message = (
-                f"Unable to initialize the MesoscopeExperiment class. Expected a tuple of 2-element tuples with "
+                f"Unable to initialize the SystemCalibration class. Expected a tuple of 2-element tuples with "
                 f"integer or float values for 'valve_calibration_data' argument, but instead encountered "
                 f"{valve_calibration_data} of type {type(valve_calibration_data).__name__} with at least one "
                 f"incompatible element."
@@ -2059,7 +2074,7 @@ class SystemCalibration:
         # class instance.
         self._logger: DataLogger = DataLogger(
             output_directory=self._test_folder,
-            instance_name="behavior",
+            instance_name="system",
             sleep_timer=0,
             exist_ok=True,
             process_count=1,
@@ -2077,10 +2092,10 @@ class SystemCalibration:
             minimum_break_strength=43.2047,  # 0.6 in oz
             maximum_break_strength=1152.1246,  # 16 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
-            debug = True
+            debug=True,
         )
-        self._reward = ValveInterface(valve_calibration_data=valve_calibration_data, debug = True)
-        self._screens = ScreenInterface(initially_on=screens_on, debug = True)
+        self._reward = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+        self._screens = ScreenInterface(initially_on=screens_on, debug=True)
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
@@ -2088,7 +2103,7 @@ class SystemCalibration:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=actor_port,
             data_logger=self._logger,
-            module_interfaces=(self._mesoscope_start, self._mesoscope_stop, self._break, self._reward, self._screens)
+            module_interfaces=(self._mesoscope_start, self._mesoscope_stop, self._break, self._reward, self._screens),
         )
 
         # SENSOR. Sensor AMC controls the hardware that collects data at regular intervals. This includes lick sensors,
@@ -2105,7 +2120,7 @@ class SystemCalibration:
             maximum_voltage=2750,  # This was determined experimentally and matches the torque that overcomes break
             sensor_capacity=720.0779,  # 10 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
-            debug=True
+            debug=True,
         )
 
         # Main interface:
@@ -2114,7 +2129,7 @@ class SystemCalibration:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=sensor_port,
             data_logger=self._logger,
-            module_interfaces=(self._mesoscope_frame, self._lick, self._torque)
+            module_interfaces=(self._mesoscope_frame, self._lick, self._torque),
         )
 
         # ENCODER. Encoder AMC is specifically designed to interface with a rotary encoder connected to the running
@@ -2132,7 +2147,7 @@ class SystemCalibration:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=encoder_port,
             data_logger=self._logger,
-            module_interfaces=(self._wheel_encoder,)
+            module_interfaces=(self._wheel_encoder,),
         )
 
         # FACE CAMERA. This is the high-grade scientific camera aimed at the animal's face using the hot-mirror. It is
@@ -2169,7 +2184,9 @@ class SystemCalibration:
         # (viewing the left side of the mouse and the right screen). This camera is interfaced with through the OpenCV
         # backend.
         self._left_camera: VideoSystem = VideoSystem(
-            system_id=np.uint8(62), data_logger=self._logger, output_directory=self._test_folder,
+            system_id=np.uint8(62),
+            data_logger=self._logger,
+            output_directory=self._test_folder,
         )
 
         # DO NOT try to force the acquisition rate. If it is not 30 (default), the video will not save.
@@ -2194,7 +2211,9 @@ class SystemCalibration:
 
         # RIGHT CAMERA. Same as the left camera, but mounted on the right side from the mouse's perspective.
         self._right_camera: VideoSystem = VideoSystem(
-            system_id=np.uint8(73), data_logger=self._logger, output_directory=self._test_folder,
+            system_id=np.uint8(73),
+            data_logger=self._logger,
+            output_directory=self._test_folder,
         )
         # Same as above, DO NOT force acquisition rate
         self._right_camera.add_camera(
@@ -2235,11 +2254,11 @@ class SystemCalibration:
         self._lickport_y: ZaberAxis = self._lickport.get_device(2).axis
 
     def start(self) -> None:
-        """Sets up all assets used during the experiment.
+        """Sets up all assets used during calibration.
 
         This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. It also verifies the configuration of Unity game engine and the mesoscope and activates
-        mesoscope frame acquisition.
+        system processes. After this method's runtime, it is possible to use most other class methods to issue commands
+        to all Mesoscope-VR systems addressable through this class.
 
         Notes:
             This method will not run unless the host PC has access to the necessary number of logical CPU cores
@@ -2275,26 +2294,11 @@ class SystemCalibration:
             )
             console.error(message=message, error=RuntimeError)
 
-        message = "Initializing MesoscopeExperiment assets..."
+        message = "Initializing SystemCalibration assets..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Starts the data logger
         self._logger.start()
-
-        # Generates and logs the onset timestamp for the VR system as a whole. The MesoscopeExperiment class logs
-        # changes to VR and Experiment state during runtime.
-
-        # Constructs the timezone-aware stamp using UTC time. This creates a reference point for all later delta time
-        # readouts. The time is returned as an array of bytes.
-        onset: NDArray[np.uint8] = get_timestamp(as_bytes=True)  # type: ignore
-        self._timestamp_timer.reset()  # Immediately resets the timer to make it as close as possible to the onset time
-
-        # Logs the onset timestamp. All further timestamps will be treated as integer time deltas (in microseconds)
-        # relative to the onset timestamp. Note, ID of 1 is used to mark the main experiment system.
-        package = LogPackage(
-            source_id=self._source_id, time_stamp=np.uint8(0), serialized_data=onset
-        )  # Packages the id, timestamp, and data.
-        self._logger.input_queue.put(package)
 
         message = "DataLogger: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2341,7 +2345,7 @@ class SystemCalibration:
         # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
         # LickPort homing trajectory.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
 
         # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
         # running wheel (looking at the wheel from the front of the mesoscope cage).
@@ -2351,7 +2355,7 @@ class SystemCalibration:
 
         # Waits for the HeadBar motors to finish homing.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
 
         # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
         # If restore positions are not available, uses the default mounting position. This HAS to be done before
@@ -2367,7 +2371,7 @@ class SystemCalibration:
         self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
 
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
@@ -2389,7 +2393,7 @@ class SystemCalibration:
             "If necessary, adjust the HeadBar and LickPort positions to optimize imaging quality and animal running "
             "performance. Align the mesoscope objective with the cranial window and carry out the imaging preparation "
             "steps. Once everything is ready, swivel the VR screens back into position and arm the Mesoscope and "
-            "Unity. This is the last manual checkpoint before the experiment starts."
+            "Unity. This is the last manual checkpoint before the runtime starts."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -2401,25 +2405,7 @@ class SystemCalibration:
         self._sensor.start()
         self._encoder.start()
 
-        message = "MicroControllerInterfaces: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Establishes a direct communication with Unity over MQTT. This is in addition to some ModuleInterfaces using
-        # their own communication channels.
-        self._unity.connect()
-
-        # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
-        # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
-        # values.
-        cue_sequence = self._get_cue_sequence()
-        package = LogPackage(
-            source_id=self._source_id,
-            time_stamp=np.uint64(self._timestamp_timer.elapsed),
-            serialized_data=cue_sequence,
-        )
-        self._logger.input_queue.put(package)
-
-        message = "Unity Game Engine: Started."
+        message = "SystemCalibration: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Configures the encoder to only report forward motion (CW) if the motion exceeds ~ 1 mm of distance.
@@ -2457,22 +2443,12 @@ class SystemCalibration:
         # a polling frequency of ~1000 Hz here to ensure frame acquisition times are accurately detected.
         self._mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
 
-        # Starts mesoscope frame acquisition. This also verifies that the mesoscope responds to triggers and
-        # actually starts acquiring frames using the _mesoscope_frame interface above.
-        self._start_mesoscope()
-
-        message = "Mesoscope frame acquisition: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
         # Starts monitoring licks. Uses 1000 Hz polling frequency, which should be enough to resolve individual
         # licks of variable duration.
         self._lick.check_state(repetition_delay=np.uint32(1000))
 
         message = "Hardware module setup: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Sets the rest of the subsystems to use the REST state.
-        self.vr_rest()
 
         # Finally, begins saving camera frames to disk
         self._face_camera.start_frame_saving()
@@ -2482,49 +2458,33 @@ class SystemCalibration:
         # The setup procedure is complete.
         self._started = True
 
-        message = "MesoscopeExperiment assets: Initialized."
+        message = "SystemCalibration assets: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self):
-        """Stops and terminates the MesoscopeExperiment runtime.
+        """Stops and terminates the SystemCalibration runtime.
 
-        First, stops acquiring mesoscope and visual camera frames. Then, disables all hardware modules and disconnects
-        from cameras, microcontrollers, and data logger cores. Next, prompts the user to remove the animal from the
-        VR rig and reset all Zaber motors to parking positions.
-
-        Once all assets are terminated, pulls the data acquired from the mesoscope to the local session directory and
-        preprocesses the mesoscope frame data and the behavioral data acquired during runtime. Finally, pushes the
-        preprocessed session data directory to the NAS and Server.
+        This method shuts down all data collectors and disconnects from all cameras, microcontrollers, and the data
+        logger. It then runs the behavioral data log processing algorithm on the data collected during calibration and
+        displays the results to the user. Overall, this method simulates the stop() method behavior of the
+        MesoscopeExperiment and BehavioralTraining classes.
 
         Notes:
             This method aggregates asset termination and data processing. After this method finishes its runtime, the
-            experiment is complete, and it is safe to run another animal.
+            calibration is complete, and it is safe to start another runtime.
         """
 
         # Prevents stopping an already stopped VR process.
         if not self._started:
             return
 
-        message = "Terminating MesoscopeExperiment runtime..."
+        message = "Terminating SystemCalibration runtime..."
         console.echo(message=message, level=LogLevel.INFO)
-
-        # Initializes the timer to enforce the necessary delays
-        timer = PrecisionTimer("s")
 
         # Resets the _started tracker
         self._started = False
 
-        # Switches the system into the rest state. Since REST state has most modules set to stop-friendly states,
-        # this is used as a shortcut to prepare the VR system for shutdown.
-        self.vr_rest()
-
-        # Instructs the mesoscope to stop acquiring frames
-        self._mesoscope_stop.send_pulse()
-
-        message = "Mesoscope stop pulse: sent."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Also instructs all cameras to stop saving frames
+        # Instructs all cameras to stop saving frames
         self._face_camera.stop_frame_saving()
         self._left_camera.stop_frame_saving()
         self._right_camera.stop_frame_saving()
@@ -2532,16 +2492,10 @@ class SystemCalibration:
         message = "Camera frame saving: stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Delays for 10 seconds. This ensures that the mesoscope and cameras have time to stop producing data.
-        timer.delay_noblock(10)
+        # Delays for 10 seconds. This ensures that the cameras have time to stop producing data.
+        self._delay_timer.delay_noblock(10)
 
-        # Shuts down the modules that are still acquiring data. Note, this works in-addition to the VR REST state
-        # disabling the encoder monitoring.
-        self._lick.reset_command_queue()
-        self._torque.reset_command_queue()
-        self._mesoscope_frame.reset_command_queue()
-
-        # Stops all microcontroller interfaces
+        # Stops all microcontroller interfaces. This directly shuts down all individual modules.
         self._actor.stop()
         self._sensor.stop()
         self._encoder.stop()
@@ -2573,13 +2527,11 @@ class SystemCalibration:
             lickport_x=int(self._lickport_x.get_position(native=True)),
             lickport_y=int(self._lickport_y.get_position(native=True)),
         )
-        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        zaber_positions.to_yaml(file_path=self._zaber_positions_path)
 
         # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
         # further.
-        message = (
-            "Preparing to move the LickPort into the mounting position. Swivel the VR screens out."
-        )
+        message = "Preparing to move the LickPort into the mounting position. Swivel the VR screens out."
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
@@ -2591,7 +2543,7 @@ class SystemCalibration:
 
         # Waits for the lickport motors to finish moving.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
 
         # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
         # further.
@@ -2611,64 +2563,24 @@ class SystemCalibration:
         message = "HeadBar and LickPort: reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = "Initializing data preprocessing..."
-        console.echo(message=message, level=LogLevel.INFO)
-
-        # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
-        # allow parsing the data.
-        self._logger.compress_logs(remove_sources=True, verbose=True)
-
-        # Parses behavioral data from the compressed logs and uses it to generate the behavioral_dataset.parquet file.
-        # Also, extracts camera frame timestamps for each camera and saves them as a separate .npz file to optimize
-        # further camera frame processing.
-        self._process_log_data()
-
-        # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
-        self._session_data.pull_mesoscope_data()
-
-        # Preprocesses the pulled mesoscope data.
-        self._session_data.process_mesoscope_data()
-
-        # Moves all video files from the raw data directory to the camera_frames directory. Also renames the video files
-        # to use more descriptive names
-        shutil.move(
-            self._session_data.raw_data_path.joinpath("51.mp4"),
-            self._session_data.camera_frames_path.joinpath("face_camera.mp4"),
-        )
-        shutil.move(
-            self._session_data.raw_data_path.joinpath("62.mp4"),
-            self._session_data.camera_frames_path.joinpath("left_camera.mp4"),
-        )
-        shutil.move(
-            self._session_data.raw_data_path.joinpath("73.mp4"),
-            self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
-        )
-
-        # Pushes the processed data to the NAS and BioHPC server.
-        self._session_data.push_data()
-
-        message = "Data preprocessing: complete. MesoscopeExperiment runtime: terminated."
+        message = "SystemCalibration runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def _headbar_restore(self) -> None:
-        """Restores the motor positions for the HeadBar to the states recorded at the end of the previous experiment
-        or training session.
+        """Restores the motor positions for the HeadBar to the states recorded at the end of the previous calibration
+        runtime.
 
-        This method is called as part of the start() method runtime method to prepare the VR system for mounting the
-        animal. it tries to adjust the HeadBar motors to match the position used during the previous session, which
-        should be optimal for the animal whose data will be recorded by the MesoscopeExperiment class. Additionally,
-        this helps with aligning the cranial window and the mesoscope objective, by ensuring the animal head is oriented
-        consistently across sessions.
+        This method is called as part of the start() method runtime to simulate the animal mounting procedure performed
+        during MesoscopeExperiment and BehavioralTraining runtimes.
 
         Notes:
-            If this is the first ever session for the animal, this method will move the HeadBar to the predefined
-            mounting position. Although it is not perfect for the given animal, the generic mounting position should
-            still be fairly comfortable for the animal to be initially mounted into the VR system.
+            If the position log file is not available, this method will move the HeadBar to the predefined mounting
+            position.
 
             This method should be called before calling the _lickport_restore() method.
         """
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._session_data.previous_zaber_positions_path is None:
+        if self._zaber_positions_path is None:
             message = (
                 "No previous Zaber positions found when attempting to restore HeadBar to the previous session "
                 "position. Setting the HeadBar motors to use the default animal mounting positions. Adjust the "
@@ -2681,7 +2593,7 @@ class SystemCalibration:
             self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
         else:
             # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._session_data.previous_zaber_positions_path)
+            previous_positions = _ZaberPositions.from_yaml(file_path=self._zaber_positions_path)
 
             # Otherwise, restores Zaber positions.
             self._headbar_z.move(amount=previous_positions.headbar_z, absolute=True, native=True)
@@ -2690,31 +2602,27 @@ class SystemCalibration:
 
         # Waits for the motors to finish moving before returning to caller.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)
+            self._delay_timer.delay_noblock(delay=1)
 
     def _lickport_restore(self) -> None:
-        """Restores the motor positions for the LickPort to the states recorded at the end of the previous experiment
-        or training session.
+        """Restores the motor positions for the LickPort to the states recorded at the end of the previous calibration
+        runtime.
 
-        This method is called as part of class start() method after the animal is mounted into the VR system.
-        It positions the lickport to be comfortably accessible for the mounted animal.
+        This method is called as part of start() method runtime to simulate the animal mounting procedure performed
+        during MesoscopeExperiment and BehavioralTraining runtimes.
 
         Notes:
-            Unlike the _headbar_restore() method, this method falls back to the parking, rather than mounting position
-            if it is not able to restore the animal to the previous session's position. This is intentional. The
-            mounting position for the LickPort aligns it to the bottom left corner of the running wheel, rather than the
-            animals' mouth. This provides the experimenter with more space for mounting the animal and will NOT be
-            adequate for running experiment or training sessions. The parking position for the LickPort, on the other
-            hand, aligns it to be easily accessible by the animal locked in the default 'mounting' HeadBar position.
+            If the position log file is not available, this method will move the LickPort to the predefined parking
+            position.
 
             This method should be called after the _headbar_restore() method.
         """
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._session_data.previous_zaber_positions_path is None:
+        if self._zaber_positions_path is None:
             message = (
-                "No previous zaber positions found when attempting to restore previous positions for the LickPort. "
-                "Setting the LickPort motors to use the default mount positions. Adjust positions manually before "
-                "calling the MesoscopeExperiment start() method."
+                "No previous Zaber positions found when attempting to restore LickPort to the previous session "
+                "position. Setting the LickPort motors to use the default parking positions. Adjust the "
+                "positions manually when prompted by the startup runtime to optimize animal's running performance."
             )
             warnings.warn(message)
             self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
@@ -2722,7 +2630,7 @@ class SystemCalibration:
             self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
         else:
             # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._session_data.previous_zaber_positions_path)
+            previous_positions = _ZaberPositions.from_yaml(file_path=self._zaber_positions_path)
 
             # Otherwise, restores Zaber positions.
             self._lickport_z.move(amount=previous_positions.lickport_z, absolute=True, native=True)
@@ -2731,104 +2639,7 @@ class SystemCalibration:
 
         # Waits for the motors to finish moving before returning to caller.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)
-
-    def _process_log_data(self) -> None:
-        """Extracts the data logged during runtime from compressed .npz archives and uses it to generate the initial
-        behavioral_dataset.parquet file and the temporary camera_timestamps.npz file.
-
-        This method is called during the stop() method runtime to extract, align, and output the initial behavioral
-        dataset. All data processed as part of our cell registration and video registration pipelines will later be
-        aligned to and appended to this dataset to form the final dataset used for data analysis. Both the
-        .parquet dataset and the .npz archive that stores the timestamps for the frames saved by each camera during
-        runtime are saved to the session folder.
-        """
-        # First extracts the timestamps for the mesoscope frames. These timestamps are used as seeds to which all other
-        # data sources are aligned during preprocessing and post-processing of the data.
-        seeds = self._mesoscope_frame.parse_logged_data()
-
-        # Iteratively goes over all hardware modules and extracts the data recorded by each module during runtime.
-        # Uses discrete or continuous interpolation to align the data to the seed timestamps:
-        # ENCODER
-        timestamps, data = self._wheel_encoder.parse_logged_data()
-        encoder_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=False)
-
-        # TORQUE
-        timestamps, data = self._torque.parse_logged_data()
-        torque_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=False)
-
-        # LICKS
-        timestamps, data = self._lick.parse_logged_data()
-        lick_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=True)
-
-        # WATER REWARD
-        timestamps, data = self._reward.parse_logged_data()
-        reward_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=True)
-
-        # SCREENS
-        timestamps, data = self._screens.parse_logged_data()
-        screen_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=True)
-
-        # BREAK
-        timestamps, data = self._break.parse_logged_data()
-        break_data = interpolate_data(timestamps=timestamps, data=data, seed_timestamps=seeds, is_discrete=True)
-
-        # Assembles the aligned behavioral dataset from the data processed above:
-        # Define the schema with proper types and units. The schema determines the datatypes and column names used by
-        # the dataset
-        schema = {
-            "time_us": pl.UInt64,
-            "distance_cm": pl.Float64,
-            "torque_N_cm": pl.Float64,
-            "lick_on": pl.UInt8,
-            "dispensed_water_μL": pl.Float64,
-            "screens_on": pl.UInt8,
-            "break_on": pl.UInt8,
-            "vr_state": pl.UInt8,
-            "experiment_state": pl.UInt8,
-            "cue": pl.UInt8,
-        }
-
-        # Creates a mapping of our data arrays to schema columns
-        data_mapping = {
-            "time_us": seeds,
-            "distance_cm": encoder_data,
-            "torque_N_cm": torque_data,
-            "lick_on": lick_data,
-            "dispensed_water_μL": reward_data,
-            "screens_on": screen_data,
-            "break_on": break_data,
-            "vr_state": vr_states,
-            "experiment_state": experiment_states,
-            "cue": cue_data,
-        }
-
-        # Creates Polars dataframe with schema
-        dataframe = pl.DataFrame(data_mapping, schema=schema)
-
-        # Saves the dataset as a zstd compressed parquet file
-        dataframe.write_parquet(
-            file=self._session_data.behavioral_data_path,
-            compression="zstd",
-            compression_level=22,
-            use_pyarrow=True,
-            statistics=True,
-        )
-
-        # Also extracts the timestamps for the frames saved by each camera. This data will be used during DeepLabCut
-        # processing to align extracted data to the mesoscope frame timestamps (seeds). For now this data is kept as
-        # an .npz archive.
-        face_stamps = self._face_camera.extract_logged_data()
-        left_stamps = self._left_camera.extract_logged_data()
-        right_stamps = self._right_camera.extract_logged_data()
-
-        # Saves extracted data as an .npz archive
-        np.savez_compressed(
-            file=self._session_data.camera_timestamps_path,
-            face_timestamps=face_stamps,
-            left_timestamps=left_stamps,
-            right_timestamps=right_stamps,
-        )
+            self._delay_timer.delay_noblock(delay=1)
 
 
 def _encoder_cli(encoder: EncoderInterface, polling_delay: int, delta_threshold: int) -> None:
@@ -3115,7 +2926,13 @@ def calibration() -> None:
 
 
 if __name__ == "__main__":
-    calibration()
+    test_class = SystemCalibration()
+    test_class.start()
+    while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
+        continue
+    test_class.stop()
+
+    # calibration()
 
     # session_dir = SessionData(
     #     project_name="TestProject",
