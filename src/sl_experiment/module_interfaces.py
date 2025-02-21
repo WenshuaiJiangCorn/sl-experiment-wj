@@ -287,20 +287,32 @@ class EncoderInterface(ModuleInterface):
 
         # Here, we only look for event-codes 51 (CCW displacement) and event-codes 52 (CW displacement).
 
+        # Gets the data, defaulting to an empty list if the data is missing
+        ccw_data = log_data.get(np.uint8(51), [])
+        cw_data = log_data.get(np.uint8(52), [])
+
+        # We are guaranteed to have at least one code, either ccw or cw due to how the module is written. If the other
+        # code does not exist, this code uses the other one to generate one zero-displacement entry for the missing
+        # code. THis ensures the rest of this code works as expected and the parsed information is accurate.
+        if not ccw_data:
+            first_timestamp = cw_data[0]["timestamp"]
+            ccw_data = [{"timestamp": first_timestamp + 1, "data": 0}]
+        elif not cw_data:
+            first_timestamp = ccw_data[0]["timestamp"]
+            cw_data = [{"timestamp": first_timestamp + 1, "data": 0}]
+
         # Precreates the output arrays, based on the number of recorded CW and CCW displacements.
-        total_length = len(log_data[np.uint8(51)]) + len(log_data[np.uint8(52)])
+        total_length = len(ccw_data) + len(cw_data)
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         displacements = np.empty(total_length, dtype=np.float64)
 
         # Processes CCW rotations (Code 51). CCW rotation is interpreted as positive displacement
-        ccw_data = log_data[np.uint8(51)]
         n_ccw = len(ccw_data)
         timestamps[:n_ccw] = [value["timestamp"] for value in ccw_data]  # Extracts timestamps for each value
         # The values are initially using the uint32 type. This converts them to float64 during the initial assignment
         displacements[:n_ccw] = [np.float64(value["data"]) for value in ccw_data]
 
         # Processes CW rotations (Code 52). CW rotation is interpreted as negative displacement
-        cw_data = log_data[np.uint8(52)]
         timestamps[n_ccw:] = [value["timestamp"] for value in cw_data]  # CW data just fills remaining space after CCW.
         displacements[n_ccw:] = [-np.float64(value["data"]) for value in cw_data]
 
