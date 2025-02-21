@@ -772,7 +772,6 @@ class ZaberAxis:
         # is busy.
         elif self.is_parked:
             self.unpark()
-            self._reset_pad_timer()
 
         # If the motor is not homed, homes the motor before moving it in the park position.
         if not self.is_homed:
@@ -1049,7 +1048,7 @@ class ZaberConnection:
             device.shutdown()
 
         # Resets the device list, closes the connection, and sets the connection tracker to False.
-        self._devices: list[ZaberDevice] = []
+        self._devices = []
         self._is_connected: bool = False
         self._connection.close()
 
