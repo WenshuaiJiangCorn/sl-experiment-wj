@@ -79,6 +79,390 @@ class _ZaberPositions(YamlConfig):
     """The absolute position, in native motor units, of the LickPort y-axis motor."""
 
 
+class _HeadBar:
+    """Interfaces with Zaber motors that control the position of the HeadBar manipulator arm.
+
+    This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes. It is used
+    by the major runtime classes, such as MesoscopeExperiment, to interface with HeadBar motors. The class is designed
+    to transition the HeadBar between a small set of predefined states and should not be used directly by the user.
+
+    Notes:
+        This class does not contain the guards that notify users about risks associated with moving the motors. Do not
+        use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
+        mesoscope, or harm the animal.
+
+        To fine-tune the position of any HeadBar motors in real time, use the main Zaber interface from the VRPC.
+
+    Args:
+        headbar_port: The USB port used by the HeadBar Zaber motor controllers (devices).
+        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during
+            previous runtime.
+
+    Attributes:
+        _headbar: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
+            devices (controllers) that allow repositioning the headbar holder.
+        _headbar_z: The ZaberAxis class instance for the HeadBar z-axis motor.
+        _headbar_pitch: The ZaberAxis class instance for the HeadBar pitch-axis motor.
+        _headbar_roll: The ZaberAxis class instance for the HeadBar roll-axis motor.
+        _previous_positions: An instance of _ZaberPositions class that stores the positions of HeadBar motors during a
+           previous runtime. If this data is not available, this attribute is set to None to indicate there are no
+           previous positions to use.
+        _delay_timer: A PrecisionTimer instance used to wait for the motors to move into requested positions.
+    """
+
+    def __init__(self, headbar_port: str, zaber_positions_path: Path) -> None:
+        # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
+        # headbar attached to the mouse in Z, Roll, and Pitch dimensions. Note, this assumes that the chaining order of
+        # individual zaber devices is fixed and is always Z-Pitch-Roll.
+        self._headbar: ZaberConnection = ZaberConnection(port=headbar_port)
+        self._headbar.connect()
+        self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
+        self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
+        self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
+
+        # If the previous positions path points to an existing .yaml file, loads the data from the file into
+        # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
+        # previous positions.
+        self._previous_positions: None | _ZaberPositions = None
+        if zaber_positions_path.exists():
+            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
+
+        # Initializes a timer used to wait for the motors to move into requested positions.
+        self._delay_timer = PrecisionTimer("ms")
+
+    def restore_position(self) -> None:
+        """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
+
+        For most runtimes, this method is used to restore the HeadBar to the state used during a previous experiment or
+        training session for each animal. Since all animals are slightly different, the optimal HeadBar positions will
+        vary slightly for each animal.
+
+        Notes:
+            If previous positions are not available, the method falls back to moving the HeadBar motors to the general
+            'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
+            to work for most animals and provide an initial HeadBar position for the animal to be mounted into the VR
+            rig.
+
+            When used together with the LickPort class, this method should always be called before the similar method
+            from the LickPort class.
+
+            This method moves all HeadBar axes in-parallel to optimize runtime speed.
+        """
+        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
+        if self._previous_positions is None:
+            message = (
+                "No previous positions found when attempting to restore HeadBar to the previous runtime state. Setting "
+                "the HeadBar motors to the default animal mounting positions loaded from motor controller non-volatile "
+                "memory."
+            )
+            warnings.warn(message)
+            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
+            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
+            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
+        else:
+            # Otherwise, restores Zaber positions.
+            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
+            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
+            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
+
+        # Waits for the motors to finish moving before returning to caller.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Checks every 0.5 seconds
+
+    def prepare_motors(self) -> None:
+        """Unparks and homes all HeadBar motors.
+
+        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all HeadBar
+        motors can be moved (are not parked) and have a stable point of reference. The motors are left at their
+        respective homing positions at the end of this method's runtime, and it is assumed that a different class
+        method is called after this method to set the motors into the desired position.
+
+        Notes:
+            This method moves all HeadBar axes in-parallel to optimize runtime speed.
+        """
+
+        # Unparks all motors.
+        self._headbar_z.unpark()
+        self._headbar_pitch.unpark()
+        self._headbar_roll.unpark()
+
+        # Homes all motors in-parallel.
+        self._headbar_z.home()
+        self._headbar_pitch.home()
+        self._headbar_roll.home()
+
+        # Waits for the HeadBar motors to finish homing.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+    def park_motors(self) -> None:
+        """Moves all HeadBar motors to their parking positions and parks (locks) them preventing future movements.
+
+        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all HeadBar motors
+        are positioned in a way that guarantees that they can be homed during the next runtime.
+
+        Notes:
+            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller. If
+            this class is used together with the LickPort class, this method should always be called before the similar
+            method from the LickPort class.
+
+            This method moves all HeadBar axes in-parallel to optimize runtime speed.
+        """
+
+        # Moves all HeadBar motors to their parking positions
+        self._headbar_z.move(amount=self._headbar_z.park_position, absolute=True, native=True)
+        self._headbar_pitch.move(amount=self._headbar_pitch.park_position, absolute=True, native=True)
+        self._headbar_roll.move(amount=self._headbar_roll.park_position, absolute=True, native=True)
+
+        # Waits for the HeadBar motors to finish moving.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+        # Parks all motors once they reach their park positions
+        self._headbar_z.park()
+        self._headbar_pitch.park()
+        self._headbar_roll.park()
+
+    def calibrate_position(self) -> None:
+        """Moves all HeadBar motors to the water valve calibration position.
+
+        This position is stored in the non-volatile memory of each motor controller. This position is used during the
+        water valve calibration to provide experimenters with easier access to the LickPort tube.
+
+        Notes:
+            This method moves all HeadBar axes in-parallel to optimize runtime speed.
+        """
+        # Moves all HeadBar motors to their calibration positions
+        self._headbar_z.move(amount=self._headbar_z.valve_position, absolute=True, native=True)
+        self._headbar_pitch.move(amount=self._headbar_pitch.valve_position, absolute=True, native=True)
+        self._headbar_roll.move(amount=self._headbar_roll.valve_position, absolute=True, native=True)
+
+        # Waits for the HeadBar motors to finish moving.
+        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+    def get_positions(self) -> tuple[int, int, int]:
+        """Returns the current position of all HeadBar motors in native motor units.
+
+        The positions are returned in the order of : Z, Pitch, and Roll. These positions can be saves as a
+        zaber_positions.yaml file to be used during the following runtimes.
+        """
+        return (
+            int(self._headbar_z.get_position(native=True)),
+            int(self._headbar_pitch.get_position(native=True)),
+            int(self._headbar_roll.get_position(native=True)),
+        )
+
+    def disconnect(self) -> None:
+        """Disconnects from the access port of the motor group.
+
+        This method should be called after the motors are parked to release the connection resources.
+        """
+        self._headbar.disconnect()
+
+
+class _LickPort:
+    """Interfaces with Zaber motors that control the position of the LickPort manipulator arm.
+
+    This class abstracts working with Zaber motors that move the LickPort in Z, X, and Y axes. It is used
+    by the major runtime classes, such as MesoscopeExperiment, to interface with LickPort motors. The class is designed
+    to transition the LickPort between a small set of predefined states and should not be used directly by the user.
+
+    Notes:
+        This class does not contain the guards that notify users about risks associated with moving the motors. Do not
+        use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
+        mesoscope, or harm the animal.
+
+        To fine-tune the position of any LickPort motors in real time, use the main Zaber interface from the VRPC.
+
+    Args:
+        lickport_port: The USB port used by the LickPort Zaber motor controllers (devices).
+        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during
+            previous runtime.
+
+    Attributes:
+        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
+            devices (controllers) that allow repositioning the lick tube.
+        _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
+        _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
+        _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
+        _previous_positions: An instance of _ZaberPositions class that stores the positions of LickPort motors during a
+           previous runtime. If this data is not available, this attribute is set to None to indicate there are no
+           previous positions to use.
+        _delay_timer: A PrecisionTimer instance used to wait for the motors to move into requested positions.
+    """
+
+    def __init__(self, lickport_port: str, zaber_positions_path: Path) -> None:
+        # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
+        # lick tube in Z, X, and Y dimensions. Note, this assumes that the chaining order of individual zaber devices is
+        # fixed and is always Z-X-Y.
+        self._lickport: ZaberConnection = ZaberConnection(port=lickport_port)
+        self._lickport.connect()
+        self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
+        self._lickport_x: ZaberAxis = self._lickport.get_device(1).axis
+        self._lickport_y: ZaberAxis = self._lickport.get_device(2).axis
+
+        # If the previous positions path points to an existing .yaml file, loads the data from the file into
+        # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
+        # previous positions.
+        self._previous_positions: None | _ZaberPositions = None
+        if zaber_positions_path.exists():
+            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
+
+        # Initializes a timer used to wait for the motors to move into requested positions.
+        self._delay_timer = PrecisionTimer("ms")
+
+    def restore_position(self) -> None:
+        """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
+
+        For most runtimes, this method is used to restore the LickPort to the state used during a previous experiment or
+        training session for each animal. Since all animals are slightly different, the optimal LickPort positions will
+        vary slightly for each animal.
+
+        Notes:
+            If previous positions are not available, the method falls back to moving the LickPort motors to the general
+            'parking' positions saved in the non-volatile memory of each motor controller. Note, this is in contrast to
+            the HeadBar, which falls back to using the 'mounting' positions. The mounting position for the LickPort
+            aligns it to the top left corner of the running wheel, to provide experimenter with easier access to the
+            HeadBar. The parking position, on the other hand, positions the lick tube roughly next to the animal's
+            head.
+
+            When used together with the HeadBar class, this method should always be called after the similar method
+            from the HeadBar class.
+
+            This method moves all LickPort axes in-parallel to optimize runtime speed.
+        """
+        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
+        if self._previous_positions is None:
+            message = (
+                "No previous positions found when attempting to restore LickPort to the previous runtime state. "
+                "Setting the LickPort motors to the default parking positions loaded from motor controller "
+                "non-volatile memory."
+            )
+            warnings.warn(message)
+            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
+            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
+            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
+        else:
+            # Otherwise, restores Zaber positions.
+            self._lickport_z.move(amount=self._previous_positions.lickport_z, absolute=True, native=True)
+            self._lickport_x.move(amount=self._previous_positions.lickport_x, absolute=True, native=True)
+            self._lickport_y.move(amount=self._previous_positions.lickport_y, absolute=True, native=True)
+
+        # Waits for the motors to finish moving before returning to caller.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=500)
+
+    def prepare_motors(self) -> None:
+        """Unparks and homes all LickPort motors.
+
+        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all LickPort
+        motors can be moved (are not parked) and have a stable point of reference. The motors are left at their
+        respective homing positions at the end of this method's runtime, and it is assumed that a different class
+        method is called after this method to set the motors into the desired position.
+
+        Notes:
+            This method moves all LickPort axes in-parallel to optimize runtime speed.
+        """
+
+        # Unparks all motors.
+        self._lickport_z.unpark()
+        self._lickport_x.unpark()
+        self._lickport_y.unpark()
+
+        # Homes all motors in-parallel.
+        self._lickport_z.home()
+        self._lickport_x.home()
+        self._lickport_y.home()
+
+        # Waits for the motors to finish homing.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+    def park_motors(self) -> None:
+        """Moves all LickPort motors to their parking positions and parks (locks) them preventing future movements.
+
+        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all LickPort motors
+        are positioned in a way that guarantees that they can be homed during the next runtime.
+
+        Notes:
+            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller. If
+            this class is used together with the HeadBar class, this method should always be called after the similar
+            method from the HeadBar class.
+
+            This method moves all LickPort axes in-parallel to optimize runtime speed.
+        """
+
+        # Moves all motors to their parking positions
+        self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
+        self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
+        self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
+
+        # Waits for the motors to finish moving.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+        # Parks all motors once they reach their park positions
+        self._lickport_z.park()
+        self._lickport_x.park()
+        self._lickport_y.park()
+
+    def calibrate_position(self) -> None:
+        """Moves all LickPort motors to the water valve calibration position.
+
+        This position is stored in the non-volatile memory of each motor controller. This position is used during the
+        water valve calibration to provide experimenters with easier access to the LickPort tube.
+
+        Notes:
+            This method moves all LickPort axes in-parallel to optimize runtime speed.
+        """
+        # Moves all motors to their calibration positions
+        self._lickport_z.move(amount=self._lickport_z.valve_position, absolute=True, native=True)
+        self._lickport_x.move(amount=self._lickport_x.valve_position, absolute=True, native=True)
+        self._lickport_y.move(amount=self._lickport_y.valve_position, absolute=True, native=True)
+
+        # Waits for the motors to finish moving.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+    def mount_position(self) -> None:
+        """Moves all LickPort motors to the animal mounting position.
+
+        This position is stored in the non-volatile memory of each motor controller. This position is used when the
+        animal is mounted into the VR rig to provide the experimenter with easy access to the HeadBar holder.
+
+        Notes:
+            This method moves all LickPort axes in-parallel to optimize runtime speed.
+        """
+        # Moves all motors to their mounting positions
+        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
+        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
+        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
+
+        # Waits for the motors to finish moving.
+        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+
+    def get_positions(self) -> tuple[int, int, int]:
+        """Returns the current position of all LickPort motors in native motor units.
+
+        The positions are returned in the order of : Z, X, and Y. These positions can be saves as a zaber_positions.yaml
+        file to be used during the following runtimes.
+        """
+        return (
+            int(self._lickport_z.get_position(native=True)),
+            int(self._lickport_x.get_position(native=True)),
+            int(self._lickport_y.get_position(native=True)),
+        )
+
+    def disconnect(self) -> None:
+        """Disconnects from the access port of the motor group.
+
+        This method should be called after the motors are parked to release the connection resources.
+        """
+        self._lickport.disconnect()
+
+
 class SessionData:
     """Provides methods for managing the experimental data acquired during one experimental session performed by the
     input animal as part of the input experimental project.
@@ -607,16 +991,8 @@ class MesoscopeExperiment:
             the left side of the animal and the right and center VR screens.
         _right_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
             the right side of the animal and the left VR screen.
-        _headbar: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber devices
-            (controllers) that allow repositioning the headbar.
-        _headbar_z: Stores the Axis (motor) class that controls the position of the headbar along the Z axis.
-        _headbar_pitch: Stores the Axis (motor) class that controls the position of the headbar along the Pitch axis.
-        _headbar_roll: Stores the Axis (motor) class that controls the position of the headbar along the Roll axis.
-        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the lick tube.
-        _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
-        _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
-        _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
+        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
         _screen_on: Tracks whether the VR displays are currently ON.
         _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
@@ -638,7 +1014,7 @@ class MesoscopeExperiment:
     """
 
     # Maps integer VR state codes to human-readable string-names.
-    _state_map: dict[int, str] = {0: "Idle", 1: "Rest", 2: "Run", 3: "Lick Train", 4: "Run Train"}
+    _state_map: dict[int, str] = {0: "Idle", 1: "Rest", 2: "Run"}
 
     def __init__(
         self,
@@ -888,23 +1264,15 @@ class MesoscopeExperiment:
             quantization_parameter=30,
         )
 
-        # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # headbar attached to the mouse in Z, Roll, and Pitch dimensions. Note, this assumes that the chaining order of
-        # individual zaber devices is fixed and is always Z-Pitch-Roll.
-        self._headbar: ZaberConnection = ZaberConnection(port=headbar_port)
-        self._headbar.connect()  # Since this does not reserve additional resources, establishes connection right away
-        self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
-        self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
-        self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
+        # HeadBar controller
+        self._headbar: _HeadBar = _HeadBar(
+            headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+        )
 
-        # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # lick tube in Z, X, and Y dimensions. Note, this assumes that the chaining order of individual zaber devices is
-        # fixed and is always Z-X-Y.
-        self._lickport: ZaberConnection = ZaberConnection(port=lickport_port)
-        self._lickport.connect()  # Since this does not reserve additional resources, establishes connection right away
-        self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
-        self._lickport_x: ZaberAxis = self._lickport.get_device(1).axis
-        self._lickport_y: ZaberAxis = self._lickport.get_device(2).axis
+        # LickPort controller
+        self._lickport: _LickPort = _LickPort(
+            lickport_port=lickport_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+        )
 
     def start(self) -> None:
         """Sets up all assets used during the experiment.
@@ -980,88 +1348,45 @@ class MesoscopeExperiment:
         message = "VideoSystems: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # This is a fairly long section that involves user feedback. It guides the user through mounting the mouse and
-        # adjusting the HeadBar, LickPort, and the mesoscope objective.
-
-        # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures. This code
-        # will get stuck in the 'input' mode until the user confirms.
+        # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures.
         message = (
-            "Preparing to position the HeadBar motors. Remove the mesoscope objective, swivel out the VR screens, "
-            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
-            "mesoscope and / or HARM the animal."
+            "Preparing to position HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR "
+            "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
+            "the mesoscope and / or HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Unparks all motors. It is safe to do this for all motors at the same time, as the motors are not moving during
-        # this operation. After this step all motors are 'armed' and can be interfaced with using the Zaber UI.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._lickport_z.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
+        # Unparks and homes both motors.
+        self._headbar.prepare_motors()
+        self._lickport.prepare_motors()
 
-        # First, homes lickport motors. The homing procedure aligns the lickport tube to the top right corner of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage). Assuming both HeadBar and LickPort
-        # start from the parked position, the LickPort should be able to home without obstruction.
-        self._lickport_z.home()
-        self._lickport_x.home()
-        self._lickport_y.home()
+        # Sets the HeadBar to the previous session position or to the default mounting position if previous session
+        # data is not available.
+        self._headbar.restore_position()
 
-        # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
-        # LickPort homing trajectory.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
-
-        # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage).
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-
-        # Waits for the HeadBar motors to finish homing.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
-
-        # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default mounting position. This HAS to be done before
-        # moving the lickport motors to the mounting position
-        self._headbar_restore()
-
-        # Moves the LickPort to the mounting position. The mounting position is aligned to the top left corner
-        # of the running wheel. This moves the LickPort out of the way the experimenter will use to mount the animal,
-        # making it easier to mount the mouse. The trajectory to go from homing position to the mounting position
-        # goes underneath the properly restored or mounter HeadBar, so there should be no risk of collision.
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+        # Moves the LickPort to the mounting position so that it is easier to access the HeadBar
+        self._lickport.mount_position()
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
             "Preparing to position the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. Do NOT swivel the VR screens back into position until instructed."
+            "objetive. Run all mesoscope / HeadBar alignment procedures and ensure the system is ready for imaging. Do "
+            "NOT swivel the VR screens back until instructed to do so."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Attempts to restore the LickPort to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default PARKING position roughly aligned to the animal's
-        # mouse.
-        self._lickport_restore()
+        # Restores the lickPort to the previous session's position or to the default parking position
+        self._lickport.restore_position()
 
         message = "Zaber motor positioning: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
         message = (
-            "If necessary, adjust the HeadBar and LickPort positions to optimize imaging quality and animal running "
-            "performance. Align the mesoscope objective with the cranial window and carry out the imaging preparation "
-            "steps. Once everything is ready, swivel the VR screens back into position and arm the Mesoscope and "
-            "Unity. This is the last manual checkpoint before the experiment starts."
+            "If necessary, adjust LickPort position and swivel the VR screens back into the guiding sockets. This is "
+            "the last manual checkpoint, entering 'y' after this message will begin the experiment."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -1160,17 +1485,10 @@ class MesoscopeExperiment:
     def stop(self) -> None:
         """Stops and terminates the MesoscopeExperiment runtime.
 
-        First, stops acquiring mesoscope and visual camera frames. Then, disables all hardware modules and disconnects
-        from cameras, microcontrollers, and data logger cores. Next, prompts the user to remove the animal from the
-        VR rig and reset all Zaber motors to parking positions.
-
-        Once all assets are terminated, pulls the data acquired from the mesoscope to the local session directory and
-        preprocesses the mesoscope frame data and the behavioral data acquired during runtime. Finally, pushes the
-        preprocessed session data directory to the NAS and Server.
-
-        Notes:
-            This method aggregates asset termination and data processing. After this method finishes its runtime, the
-            experiment is complete, and it is safe to run another animal.
+        This method achieves two main purposes. First, it terminates all cameras, data loggers, and microcontrollers. It
+        also stops the mesoscope acquisition and disconnects from Unity game engine. Once all assets are terminated,
+        it pulls all data to the raw_data folder of the session and carries out initial data preprocessing.
+        Once preprocessing is complete, the data is pushed to the NAS and the BioHPC server for long-term storage.
         """
 
         # Prevents stopping an already stopped VR process.
@@ -1237,13 +1555,15 @@ class MesoscopeExperiment:
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
+        head_bar_positions = self._headbar.get_positions()
+        lickport_positions = self._lickport.get_positions()
         zaber_positions = _ZaberPositions(
-            headbar_z=int(self._headbar_z.get_position(native=True)),
-            headbar_pitch=int(self._headbar_pitch.get_position(native=True)),
-            headbar_roll=int(self._headbar_roll.get_position(native=True)),
-            lickport_z=int(self._lickport_z.get_position(native=True)),
-            lickport_x=int(self._lickport_x.get_position(native=True)),
-            lickport_y=int(self._lickport_y.get_position(native=True)),
+            headbar_z=head_bar_positions[0],
+            headbar_pitch=head_bar_positions[1],
+            headbar_roll=head_bar_positions[2],
+            lickport_z=lickport_positions[0],
+            lickport_x=lickport_positions[1],
+            lickport_y=lickport_positions[2],
         )
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
 
@@ -1255,13 +1575,7 @@ class MesoscopeExperiment:
             continue
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-
-        # Waits for the lickport motors to finish moving.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)  # Delays for 1 second
+        self._lickport.mount_position()
 
         # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
         # further.
@@ -1274,7 +1588,9 @@ class MesoscopeExperiment:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Disconnects from all Zaber motors. This moves them into the parking position via the shutdown() method.
+        # Parks both motors and then disconnects from their Connection classes
+        self._headbar.park_motors()
+        self._lickport.park_motors()
         self._headbar.disconnect()
         self._lickport.disconnect()
 
@@ -1382,89 +1698,6 @@ class MesoscopeExperiment:
 
         # Configures the state tracker to reflect RUN state
         self._change_vr_state(2)
-
-    def _headbar_restore(self) -> None:
-        """Restores the motor positions for the HeadBar to the states recorded at the end of the previous experiment
-        or training session.
-
-        This method is called as part of the start() method runtime to prepare the VR system for mounting the
-        animal. It tries to adjust the HeadBar motors to match the position used during the previous session, which
-        should be optimal for the animal whose data will be recorded by the MesoscopeExperiment class. Additionally,
-        this helps with aligning the cranial window and the mesoscope objective, by ensuring the animal head is oriented
-        consistently across sessions.
-
-        Notes:
-            If this is the first ever session for the animal, this method will move the HeadBar to the predefined
-            mounting position. Although it is not perfect for the given animal, the generic mounting position should
-            still be fairly comfortable for the animal to be initially mounted into the VR system.
-
-            This method should be called before calling the _lickport_restore() method.
-        """
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._session_data.previous_zaber_positions_path is None:
-            message = (
-                "No previous Zaber positions found when attempting to restore HeadBar to the previous session "
-                "position. Setting the HeadBar motors to use the default animal mounting positions. Adjust the "
-                "positions manually when prompted by the startup runtime to optimize imaging quality and animal's"
-                "running performance."
-            )
-            warnings.warn(message)
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-        else:
-            # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._session_data.previous_zaber_positions_path)
-
-            # Otherwise, restores Zaber positions.
-            self._headbar_z.move(amount=previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=previous_positions.headbar_roll, absolute=True, native=True)
-
-        # Waits for the motors to finish moving before returning to caller.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)
-
-    def _lickport_restore(self) -> None:
-        """Restores the motor positions for the LickPort to the states recorded at the end of the previous experiment
-        or training session.
-
-        This method is called as part of the start() method runtime after the animal is mounted into the VR system.
-        It positions the lickport to be comfortably accessible for the mounted animal.
-
-        Notes:
-            Unlike the _headbar_restore() method, this method falls back to the parking, rather than mounting position
-            if it is not able to restore the animal to the previous session's position. This is intentional. The
-            mounting position for the LickPort aligns it to the bottom left corner of the running wheel, rather than the
-            animals' mouth. This provides the experimenter with more space for mounting the animal and will NOT be
-            adequate for running experiment or training sessions. The parking position for the LickPort, on the other
-            hand, aligns it to be easily accessible by the animal locked in the default 'mounting' HeadBar position.
-
-            This method should be called after the _headbar_restore() method.
-        """
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._session_data.previous_zaber_positions_path is None:
-            message = (
-                "No previous Zaber positions found when attempting to restore LickPort to the previous session "
-                "position. Setting the LickPort motors to use the default parking positions. Adjust the "
-                "positions manually when prompted by the startup runtime to optimize animal's running performance."
-            )
-            warnings.warn(message)
-            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
-            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
-            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
-        else:
-            # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._session_data.previous_zaber_positions_path)
-
-            # Otherwise, restores Zaber positions.
-            self._lickport_z.move(amount=previous_positions.lickport_z, absolute=True, native=True)
-            self._lickport_x.move(amount=previous_positions.lickport_x, absolute=True, native=True)
-            self._lickport_y.move(amount=previous_positions.lickport_y, absolute=True, native=True)
-
-        # Waits for the motors to finish moving before returning to caller.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._timestamp_timer.delay_noblock(delay=1000000)
 
     def _get_cue_sequence(self) -> NDArray[np.uint8]:
         """Requests Unity game engine to transmit the sequence of virtual reality track wall cues for the current task.
@@ -1931,15 +2164,19 @@ class SystemCalibration:
     """The base class for all Sun lab calibration runtimes.
 
     This class is used to test and calibrate various elements of the Mesoscope-VR system before conducting experiment
-    and training runtimes. It is heavily used during initial system construction and configuration. Once the system is
+    and training runtimes. It is mostly used during initial system construction and configuration. Once the system is
     built, this class is primarily used for water valve setup (filling / emptying) and calibration, which has to be
     carried out frequently between experimental days.
 
     This class exposes many methods that address individual components in the system. These methods should be used
     to issue commands to the calibrated systems. This is similar to the 'state' setter methods of MesoscopeExperiment
-    and BehavioralTraining classes, but provides a considerably finer control over modules.
+    and BehavioralTraining classes, but provides a considerably finer control over hardware modules and other assets.
 
     Notes:
+        This class is NOT intended to be used with animals. Do not mount the animal or mesoscope objective onto the
+        system when using this class. Using this class with animals and mesoscope objective can damage the equipment and
+        harm the animal.
+
         Calling the initializer does not start the underlying processes. Use the start() method before issuing other
         commands to properly initialize all remote processes.
 
@@ -1995,23 +2232,14 @@ class SystemCalibration:
             the left side of the animal and the right and center VR screens.
         _right_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
             the right side of the animal and the left VR screen.
-        _headbar: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber devices
-            (controllers) that allow repositioning the headbar.
-        _headbar_z: Stores the Axis (motor) class that controls the position of the headbar along the Z axis.
-        _headbar_pitch: Stores the Axis (motor) class that controls the position of the headbar along the Pitch axis.
-        _headbar_roll: Stores the Axis (motor) class that controls the position of the headbar along the Roll axis.
-        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the lick tube.
-        _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
-        _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
-        _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
         _delay_timer: Stores the PrecisionTimer used to delay execution where necessary.
         _test_folder: Stores the path to the root test directory used to store the data generated during calibration
             runtime.
         _zaber_positions_path: Stores the path to the YAML file that contains the Zaber motor positions used during
             previous calibration runtimes. This is used to simulate the behavior of experiment and training classes with
-            respect to restoring Zaber positions across experimental sessions. If the file does not exist, this will
-            be set to None.
+            respect to restoring Zaber positions across experimental sessions.
+        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
 
     Raises:
         TypeError: If any of the arguments are not of the expected type.
@@ -2038,22 +2266,19 @@ class SystemCalibration:
         right_camera_index: int = 2,
         harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
     ) -> None:
-
         # Initializes the start state tracker first
         self._started: bool = False
 
-        # Initializes a timer to delay code execution. Primarily, this is used during Zaber motor manipulation.
-        self._delay_timer = PrecisionTimer('s')
+        # Initializes a timer to delay code execution.
+        self._delay_timer = PrecisionTimer("s")
 
         # Resets the test folder and saves its path to class attribute
         shutil.rmtree(test_root, ignore_errors=True)
         ensure_directory_exists(test_root)
         self._test_folder: Path = test_root
 
-        # Generates the path to the zaber yaml file. If the file does not exist, this will be set to None.
-        self._zaber_positions_path: Path | None = Path(self._test_folder.parent.joinpath("zaber_positions.yaml"))
-        if not self._zaber_positions_path.exists():
-            self._zaber_positions_path = None
+        # Generates the path to the zaber positions .yaml file.
+        self._zaber_positions_path: Path = Path(self._test_folder.parent.joinpath("zaber_positions.yaml"))
 
         if not isinstance(valve_calibration_data, tuple) or not all(
             isinstance(item, tuple)
@@ -2235,23 +2460,15 @@ class SystemCalibration:
             quantization_parameter=30,
         )
 
-        # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # headbar attached to the mouse in Z, Roll, and Pitch dimensions. Note, this assumes that the chaining order of
-        # individual zaber devices is fixed and is always Z-Pitch-Roll.
-        self._headbar: ZaberConnection = ZaberConnection(port=headbar_port)
-        self._headbar.connect()  # Since this does not reserve additional resources, establishes connection right away
-        self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
-        self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
-        self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
+        # HeadBar controller
+        self._headbar: _HeadBar = _HeadBar(
+            headbar_port=headbar_port, zaber_positions_path=self._zaber_positions_path
+        )
 
-        # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # lick tube in Z, X, and Y dimensions. Note, this assumes that the chaining order of individual zaber devices is
-        # fixed and is always Z-X-Y.
-        self._lickport: ZaberConnection = ZaberConnection(port=lickport_port)
-        self._lickport.connect()  # Since this does not reserve additional resources, establishes connection right away
-        self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
-        self._lickport_x: ZaberAxis = self._lickport.get_device(1).axis
-        self._lickport_y: ZaberAxis = self._lickport.get_device(2).axis
+        # LickPort controller
+        self._lickport: _LickPort = _LickPort(
+            lickport_port=lickport_port, zaber_positions_path=self._zaber_positions_path
+        )
 
     def start(self) -> None:
         """Sets up all assets used during calibration.
@@ -2312,61 +2529,24 @@ class SystemCalibration:
         message = "VideoSystems: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # This is a fairly long section that involves user feedback. It guides the user through mounting the mouse and
-        # adjusting the HeadBar, LickPort, and the mesoscope objective.
-
         # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures. This code
         # will get stuck in the 'input' mode until the user confirms.
         message = (
-            "Preparing to position the HeadBar motors. Remove the mesoscope objective, swivel out the VR screens, "
-            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
-            "mesoscope and / or HARM the animal."
+            "Preparing to position the HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR "
+            "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
+            "the mesoscope and / or HARM the animal. There will be no further warnings or manual checkpoints."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Attempts to restore the HeadBar to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default mounting position. This HAS to be done before
-        # moving the lickport motors to the mounting position
-        self.headbar_restore()
-
-        # Moves the LickPort to the mounting position. The mounting position is aligned to the top left corner
-        # of the running wheel. This moves the LickPort out of the way the experimenter will use to mount the animal,
-        # making it easier to mount the mouse. The trajectory to go from homing position to the mounting position
-        # goes underneath the properly restored or mounter HeadBar, so there should be no risk of collision.
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
-
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
-            "Preparing to position the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. Do NOT swivel the VR screens back into position until instructed."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
-
-        # Attempts to restore the LickPort to the position used during the previous experiment or training session.
-        # If restore positions are not available, uses the default PARKING position roughly aligned to the animal's
-        # mouse.
-        self.lickport_restore()
-
-        message = "Zaber motor positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-        message = (
-            "If necessary, adjust the HeadBar and LickPort positions to optimize imaging quality and animal running "
-            "performance. Align the mesoscope objective with the cranial window and carry out the imaging preparation "
-            "steps. Once everything is ready, swivel the VR screens back into position and arm the Mesoscope and "
-            "Unity. This is the last manual checkpoint before the runtime starts."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        # Sets the HeadBar and LickPort to calibration positions. It is in-contrast to other runtimes and assumes the
+        # caller likely intends to work with the water valve. Generally, SystemCalibration is NOT intended to be
+        # used with animals, so we do not set positions to mount the animal.
+        self._headbar.prepare_motors()
+        self._lickport.prepare_motors()
+        self._headbar.calibrate_position()
+        self._lickport.calibrate_position()
 
         # Starts all microcontroller interfaces
         self._actor.start()
@@ -2437,10 +2617,6 @@ class SystemCalibration:
         logger. It then runs the behavioral data log processing algorithm on the data collected during calibration and
         displays the results to the user. Overall, this method simulates the stop() method behavior of the
         MesoscopeExperiment and BehavioralTraining classes.
-
-        Notes:
-            This method aggregates asset termination and data processing. After this method finishes its runtime, the
-            calibration is complete, and it is safe to start another runtime.
         """
 
         # Prevents stopping an already stopped VR process.
@@ -2488,44 +2664,30 @@ class SystemCalibration:
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
+        head_bar_positions = self._headbar.get_positions()
+        lickport_positions = self._lickport.get_positions()
         zaber_positions = _ZaberPositions(
-            headbar_z=int(self._headbar_z.get_position(native=True)),
-            headbar_pitch=int(self._headbar_pitch.get_position(native=True)),
-            headbar_roll=int(self._headbar_roll.get_position(native=True)),
-            lickport_z=int(self._lickport_z.get_position(native=True)),
-            lickport_x=int(self._lickport_x.get_position(native=True)),
-            lickport_y=int(self._lickport_y.get_position(native=True)),
+            headbar_z=head_bar_positions[0],
+            headbar_pitch=head_bar_positions[1],
+            headbar_roll=head_bar_positions[2],
+            lickport_z=lickport_positions[0],
+            lickport_x=lickport_positions[1],
+            lickport_y=lickport_positions[2],
         )
         zaber_positions.to_yaml(file_path=self._zaber_positions_path)
 
-        # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
-        # further.
-        message = "Preparing to move the LickPort into the mounting position. Swivel the VR screens out."
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
-
-        # Moves the LickPort to the mounting position to assist removing the animal from the rig.
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-
-        # Waits for the lickport motors to finish moving.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
-
-        # Gives user time to remove the animal and the mesoscope objective and requires confirmation before proceeding
-        # further.
+        # Gives user time to remove any equipment used during calibration.
         message = (
-            "Preparing to reset the HeadBar and LickPort back to the parking position. Uninstall the mesoscope "
-            "objective and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and "
-            "HARM the animal."
+            "Preparing to reset the HeadBar and LickPort back to the parking position. Remove any equipment that may "
+            "obstruct the HeadBar and LickPort movement path, such as water collection flasks."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        # Disconnects from all Zaber motors. This moves them into the parking position via the shutdown() method.
+        # Parks both motors and then disconnects from their Connection classes
+        self._headbar.park_motors()
+        self._lickport.park_motors()
         self._headbar.disconnect()
         self._lickport.disconnect()
 
@@ -2534,119 +2696,6 @@ class SystemCalibration:
 
         message = "SystemCalibration runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def headbar_restore(self) -> None:
-        """Restores the motor positions for the HeadBar to the states recorded at the end of the previous calibration
-        runtime.
-
-        This method is called as part of the start() method runtime to simulate the animal mounting procedure performed
-        during MesoscopeExperiment and BehavioralTraining runtimes.
-
-        Notes:
-            If the position log file is not available, this method will move the HeadBar to the predefined mounting
-            position.
-
-            This method should be called before calling the _lickport_restore() method.
-        """
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._zaber_positions_path is None:
-            message = (
-                "No previous Zaber positions found when attempting to restore HeadBar to the previous session "
-                "position. Setting the HeadBar motors to use the default animal mounting positions. Adjust the "
-                "positions manually when prompted by the startup runtime to optimize imaging quality and animal's"
-                "running performance."
-            )
-            warnings.warn(message)
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-        else:
-            # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._zaber_positions_path)
-
-            # Otherwise, restores Zaber positions.
-            self._headbar_z.move(amount=previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=previous_positions.headbar_roll, absolute=True, native=True)
-
-        # Waits for the motors to finish moving before returning to caller.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=1)
-
-    def lickport_restore(self) -> None:
-        """Restores the motor positions for the LickPort to the states recorded at the end of the previous calibration
-        runtime.
-
-        This method is called as part of start() method runtime to simulate the animal mounting procedure performed
-        during MesoscopeExperiment and BehavioralTraining runtimes.
-
-        Notes:
-            If the position log file is not available, this method will move the LickPort to the predefined parking
-            position.
-
-            This method should be called after the _headbar_restore() method.
-        """
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._zaber_positions_path is None:
-            message = (
-                "No previous Zaber positions found when attempting to restore LickPort to the previous session "
-                "position. Setting the LickPort motors to use the default parking positions. Adjust the "
-                "positions manually when prompted by the startup runtime to optimize animal's running performance."
-            )
-            warnings.warn(message)
-            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
-            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
-            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
-        else:
-            # Loads previous zaber positions if they were saved
-            previous_positions = _ZaberPositions.from_yaml(file_path=self._zaber_positions_path)
-
-            # Otherwise, restores Zaber positions.
-            self._lickport_z.move(amount=previous_positions.lickport_z, absolute=True, native=True)
-            self._lickport_x.move(amount=previous_positions.lickport_x, absolute=True, native=True)
-            self._lickport_y.move(amount=previous_positions.lickport_y, absolute=True, native=True)
-
-        # Waits for the motors to finish moving before returning to caller.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=1)
-
-    def home_zaber_motors(self) -> None:
-        """Unparks and homes all Zaber motors controlling the HeadBar and LickPort.
-
-        This method is used as part of the start() method runtime to ensure Zaber motors are unparked and homed before
-        they are used to position the HeadBar and Lickport for the task (calibration, mounting, etc.).
-        """
-
-        # Unparks all motors. It is safe to do this for all motors at the same time, as the motors are not moving during
-        # this operation. After this step all motors are 'armed' and can be interfaced with using the Zaber UI.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._lickport_z.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
-
-        # First, homes lickport motors. The homing procedure aligns the lickport tube to the top right corner of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage). Assuming both HeadBar and LickPort
-        # start from the parked position, the LickPort should be able to home without obstruction.
-        self._lickport_z.home()
-        self._lickport_x.home()
-        self._lickport_y.home()
-
-        # Waits for the lickport motors to finish homing. This is essential, since HeadBar homing trajectory intersects
-        # LickPort homing trajectory.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
-
-        # Homes the HeadBar motors. The HeadBar homing procedure aligns the headbar roughly to the top middle of the
-        # running wheel (looking at the wheel from the front of the mesoscope cage).
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-
-        # Waits for the HeadBar motors to finish homing.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=1)  # Delays for 1 second
 
     def enable_encoder_monitoring(self, polling_delay: int = 500) -> None:
         """Enables wheel encoder monitoring with the provided polling delay in microseconds."""
@@ -2767,27 +2816,3 @@ if __name__ == "__main__":
     while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
         continue
     test_class.stop()
-
-    # calibration()
-
-    # session_dir = SessionData(
-    #     project_name="TestProject",
-    #     animal_name="TM1",
-    #     create=True,
-    # )
-    # session_dir.create_session()
-    # print(session_dir.session_name)
-    # print(session_dir.session_path)
-    #
-    # # Generates 10000 files with random arrays
-    # # for i in range(10000):
-    # #     arr = np.random.rand(100, 100)  # 100x100 array of random floats
-    # #     filename = session_dir.session_path.joinpath(f"test_{i:03d}.npy")
-    # #     np.save(filename, arr)
-    #
-    # # Moves test data from holdout to the generated session
-    # root_data = Path("/media/Data/Holdout")
-    # calculate_directory_checksum(root_data)
-    # transfer_directory(root_data, session_dir.session_path, num_threads=30)
-    #
-    # session_dir.push_to_destinations()
