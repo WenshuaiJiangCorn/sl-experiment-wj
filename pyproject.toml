@@ -39,23 +39,31 @@ classifiers = [
 
 # Runtime project dependencies. This overlaps with 'condarun' optional list.
 dependencies = [
+    "zaber-motion>=7,<8",
+    "crc>=7,<8",
+    "tabulate>=0,<1",
+    "click>=8,<9",
     "numpy>=2,<3",
     "numba>=0,<1",
+    "scipy>=1,<2",
+    "matplotlib>=3,<4",
     "ataraxis-time>=3,<4",
     "ataraxis-base-utilities>=3,<4",
-    "ataraxis-data-structures>=2,<3",
+    "ataraxis-data-structures>=3,<4",
     "ataraxis-transport-layer-pc>=1,<2",
-    "ataraxis-communication-interface>=2,<3",
-    "tifffile>=2024,<2025",
-    "paramiko>=3,<4",
-    "smbprotocol>=1,<2",
+    "ataraxis-communication-interface>=3,<4",
+    "ataraxis-video-system>=1,<2",
+    "tifffile>=2025,<2026",
+    "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
     "xxhash>=3,<4",
+    "google-api-python-client>=2,<3",
+    "polars>=1,<2"
 ]
 
 [project.urls]
-Homepage = "https://github.com/Sun-Lab-NBB/sl-mesoscope"
-Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
+Homepage = "https://github.com/Sun-Lab-NBB/sl-experiment"
+Documentation = "https://sl-experiment-api-docs.netlify.app/"
 
 # Specifies additional dependencies that can be installed alongside the main library. Also, this is the section that
 # stores conda, condarun, and noconda lists that facilitate setting up dependencies via conda where possible.
@@ -66,11 +74,15 @@ Documentation = "https://sl-mesoscope-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy>=2,<3",
+    "scipy>=1,<2",
     "tifffile>=2024,<2025",
-    "paramiko>=3,<4",
-    "smbprotocol>=1,<2",
+    "imagecodecs>=2024,<2025",
     "tqdm>=4,<5",
-
+    "matplotlib>=3,<4",
+    "zaber-motion>=7,<8",
+    "tabulate>=0,<1",
+    "click>=8,<9",
+    "polars>=1,<2"
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
@@ -101,9 +113,6 @@ conda = [
     # Distribution
     "twine>=6,<7",
     "grayskull>=2,<3",
-
-    # Miscellaneous helpers
-    "black>=24,<25",
 ]
 
 # Dependencies known to not be installable with conda for at least one supported development platform
@@ -113,6 +122,9 @@ noconda = [
     "tox>=4,<5",
     "tox-uv>=1,<2",
     "uv>=0,<1",
+
+    # Types:
+    "types-tqdm>=4,<5",
 
     # Documentation
     "sphinx-rtd-dark-mode>=1,<2",

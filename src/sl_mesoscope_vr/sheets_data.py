@@ -4,6 +4,8 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from datetime import datetime
 from ataraxis_base_utilities import console
+# from ataraxis_data_structures import YamlConfig
+import re 
 
 @dataclass
 class AttributeData:
@@ -41,14 +43,17 @@ class ProtocolData:
 
 @dataclass
 class ImplantData:
-
     def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
         """
         Initializes the attributes of the InjectionData class for any column headers containing the string "implant".
         """
         for header, i in headers.items():
+
             if "implant" in header.lower():
-                setattr(self, f"_{header.lower()}", row[i])
+                if "coordinates" in header.lower():
+                    setattr(self, f"_{header.lower()}", parse_coordinates(row[i]))
+                else:
+                    setattr(self, f"_{header.lower()}", row[i])
 
     def __repr__(self):
         """
@@ -73,7 +78,11 @@ class InjectionData:
         """
         for header, i in headers.items():
             if "injection" in header.lower():
-                setattr(self, f"_{header}", row[i])
+                if "coordinates" in header.lower():
+                    setattr(self, f"_{header.lower()}", parse_coordinates(row[i]))
+                else:
+                    setattr(self, f"_{header.lower()}", row[i])
+
 
     def __repr__(self):
         """
@@ -90,6 +99,44 @@ class InjectionData:
     
 
 @dataclass
+class Coordinates:
+    _AP: Optional[float] = None
+    _ML: Optional[float] = None
+    _DV: Optional[float] = None
+
+    def __repr__(self):
+        return f"Coordinates(AP={self._AP}, ML={self._ML}, DV={self._DV})"
+    
+
+def extract_numerical(part: str) -> Optional[float]:
+    pattern = r"([-+]?\d*\.?\d+)\s*(AP|ML|DV)"
+    match = re.search(pattern, part)
+
+    if match:
+        numeric_value = match.group(1)  
+        return float(numeric_value)  
+    else:
+        return None
+    
+
+def parse_coordinates(coord_string: Optional[str]) -> Coordinates:
+    coordinates = Coordinates()
+    
+    if coord_string:
+        coord_substring = [part.strip() for part in coord_string.split(",")]
+
+        for part in coord_substring:
+            if "AP" in part.upper():
+                coordinates._AP = extract_numerical(part)
+            elif "ML" in part.upper():
+                coordinates._ML = extract_numerical(part)
+            elif "DV" in part.upper():
+                coordinates._DV = extract_numerical(part)
+
+    return coordinates
+    
+
+@dataclass
 class Drug:
     LRS: Optional[float] = None
     ketoprofen: Optional[float] = None
@@ -101,7 +148,7 @@ class Drug:
         Initializes the attributes of the Drug dataclass for columns containing data for the LRS,
         ketoprofen, buprenorphin and dexomethazone dosages. 
 
-        Units (mL) of the headers are removed. 
+        Units (mL) of the headers are initially removed when naming attributes. 
         """
         drug_list = ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]
 
@@ -120,8 +167,8 @@ class Drug:
 
         for key, value in self.__dict__.items():
             if any(drug in key for drug in ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]):
-                drug_fields[key.lstrip('_')] = value
-
+                drug_fields[f"{key.lstrip('_')}(mL)"] = value
+                
         return f"Drug({drug_fields})"
 
 
@@ -132,32 +179,6 @@ class IndividualMouseData:
     _implant_data: ImplantData
     _injection_data: InjectionData
     _drug_data: Drug
-
-    def __getattr__(self, name: str) -> Optional[str]:
-        """
-        Checks if an attribute from ProtocolData, ImplantData and InjectionData classes
-        and obtains the value if it exists. 
-        """
-        updated_drug_name = name.lower().replace(" (ml)", "")
-
-        if hasattr(self._protocol_data, name):
-            return getattr(self._protocol_data, name)
-        
-        if hasattr(self._implant_data, name):
-            return getattr(self._implant_data, name)
-        
-        if hasattr(self._injection_data, name):
-            return getattr(self._injection_data, name)
-        
-        if hasattr(self._drug_data, name):
-            return getattr(self._drug_data, updated_drug_name)
-        
-        message = (
-            f"{self.__class__.__name__}' object has no attribute '{name}'"
-        )
-        console.error(message = message, error = AttributeError)
-        raise AttributeError("Unknown attribute") 
-
 
     def __repr__(self):
         """
@@ -182,7 +203,7 @@ class MiceData:
             self.sheet_id = '1fOM2SenU7Dcz6Y1fw_cd7g4eJRuxXdjgZUofOuMNo7k'  # Replace based on sheet 
             self.range = 'A1:Z'
             self.SERVICE_ACCOUNT_FILE = '/Users/natalieyeung/Documents/GitHub/sl-mesoscope/mesoscope_data.json'   # Replace based on sheet 
-            self.range = 'A1:Z'
+            # self.range = 'A1:Z'
             self.SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
             self.data: List[AttributeData] = []
             self.headers: Dict[str, int] = {}
@@ -210,7 +231,7 @@ class MiceData:
                 processed_row = []
 
                 for val in row + [None] * (max_columns - len(row)):
-                    if val in {'', 'n/a', 'N/A', '--'}:
+                    if val in {'', 'n/a', 'N/A', '--', '---'}:
                         processed_row.append(None)
                     elif val and val.strip():
                         processed_row.append(val.strip())
@@ -286,13 +307,13 @@ class MiceData:
     
 
 # MAIN 
-# mice_data = MiceData()
-# results = mice_data._get_mice(ID='2', surgeon="Chelsea", date="1-24-25", protocol="2024-0019")
-# for result in results:
-#     print(result)
-    # print(f"ID: {result._ID}")
-    # print(f"Protocol: {result._protocol}")
-    # print(f"Injection 1 region: {result._injection1}")
-    # print(f"LRS: {result._lrs}")
+mice_data = MiceData()
+results = mice_data._get_mice(ID='2', surgeon="Chelsea", date="1-24-25", protocol="2024-0019")
+for result in results:
+    print(result)
+    print(f"ID: {result._protocol_data._ID}")
+    print(f"Protocol: {result._protocol_data._protocol}")
+    print(f"Injection 1 region: {result._injection_data._injection1_region}")
+    print(f"AP: {result._injection_data._injection1_coordinates._AP}")
 
 
