@@ -462,14 +462,13 @@ class ZaberAxis:
         # Unless the motor is already shut, ensures the motor gracefully stops and parks before the class is destroyed.
         # Does not carry out the shutdown procedure, as it may harm the animal and / or damage the mesoscope.
         if not self._shutdown_flag:
+
             # Issues the stop command
-            self._reset_pad_timer()
             self.stop()
 
             # Waits for the motor to seize movement
             while self._motor.is_busy():
-                self._ensure_call_padding()
-                self._reset_pad_timer()
+                continue
 
             # Parks the motor
             self.park()
@@ -558,14 +557,7 @@ class ZaberAxis:
         It is assumed that the home sensor position is always defined as 0. The returned position is in
         millimeters for linear axes and degrees for rotary axes.
         """
-        self._ensure_call_padding()
-        limit: float = self._motor.settings.convert_from_native_units(
-            setting=_ZaberSettings.axis_maximum_limit,
-            value=self._max_limit,
-            unit=self._units.displacement_units,
-        )
-        self._reset_pad_timer()
-        return limit
+        return self._max_limit
 
     @property
     def minimum_limit(self) -> float:
@@ -574,14 +566,7 @@ class ZaberAxis:
         It is assumed that the home sensor position is always defined as 0. The returned position is in
         millimeters for linear axes and degrees for rotary axes.
         """
-        self._ensure_call_padding()
-        limit: float = self._motor.settings.convert_from_native_units(
-            setting=_ZaberSettings.axis_minimum_limit,
-            value=self._min_limit,
-            unit=self._units.displacement_units,
-        )
-        self._reset_pad_timer()
-        return limit
+        return self._min_limit
 
     @property
     def park_position(self) -> int:
@@ -614,7 +599,7 @@ class ZaberAxis:
         """
         return self._mount_position
 
-    def home(self) -> bool:
+    def home(self) -> None:
         """Homes the motor by moving it towards the home sensor position until it triggers the sensor.
 
         This method establishes a stable reference point used to execute all further motion commands.
@@ -627,40 +612,34 @@ class ZaberAxis:
             The method initializes the homing procedure but does not block until it is over. As such, it is likely
             that the motor would still be moving when this method returns. This feature is designed to support homing
             multiple axes in parallel.
-
-        Returns:
-            True if the method successfully initiates the motor homing procedure. If this method returns False, the
-            axis is either parked or busy executing other commands and cannot be homed at this time.
         """
 
-        # A parked motor cannot be homed until it is unparked. AS a safety measure, this command does NOT automatically
+        # A parked motor cannot be homed until it is unparked. As a safety measure, this command does NOT automatically
         # override the parking state.
         if self.is_parked:
-            return False
+            return
 
         # In line with the logic of handling conflicting motion commands, the motor is not allowed to execute a home
         # command unless it is idle.
         if self.is_busy:
-            return False
+            return
 
-        # If the motor has already been homed, moves it to the 0-position instead of carrying out the actual home
-        # command. The reason behind this implementation instead of the default 'home' command is to handle a case
+        # If the motor has already been homed, first moves it to the parking position and then repeats the homing
+        # procedure. The reason behind this implementation instead of the default 'home' command is to handle a case
         # unique to rotary axis that has been artificially limited to a certain motion range. In our case, this is the
         # headbar yaw axis, which can collide with a physical limiter if it is homed when it is 'below' home sensor.
         if self.is_homed:
             self._ensure_call_padding()
-            self._motor.move_absolute(position=0, wait_until_idle=False)
+            self._motor.move_absolute(position=self._park_position, wait_until_idle=False)
             self._reset_pad_timer()
-            return True
 
-        # If the motor has not been homed, moves it towards the home sensor until it triggers the limit switch. This
-        # is the default 'home' action intended to ONLY be triggered after power cycling.
+        # Moves the motor towards the home sensor until it triggers the limit switch. This is the default 'home' action
+        # intended to ONLY be triggered from the default parking position.
         self._ensure_call_padding()
         self._motor.home(wait_until_idle=False)
         self._reset_pad_timer()
-        return True
 
-    def move(self, amount: float, absolute: bool, native: bool = False) -> bool:
+    def move(self, amount: float, absolute: bool, native: bool = False) -> None:
         """Moves the motor to the requested position.
 
         Depending on the type of the motor and the native flag, the motion is either performed in millimeters (for
@@ -682,11 +661,6 @@ class ZaberAxis:
                 (relative to its current absolute position).
             native: A boolean flag that determines whether the input amount is given in metric displacement units of the
                 motor or in native motor units.
-
-        Returns:
-            True if the method initiates the motor movement. If this method returns False, the axis is either parked,
-            busy executing other commands, has not been homed, or the end position is outside the physical motion limits
-            of the motor. In all such cases, the axis cannot be moved.
         """
 
         # If the motor is already executing a different command, it has to be stopped or allowed to finish the command
@@ -694,16 +668,16 @@ class ZaberAxis:
         # command, but this way of handling conflicting commands promotes safety and was therefore considered
         # preferable.
         if self.is_busy:
-            return False
+            return
 
         # Due to the way movement position resolution is implemented below, the motor cannot move reliably unless it
         # has been homed.
         if not self.is_homed:
-            return False
+            return
 
         # Parking prevents the motor from moving at all, so a parked motor cannot be moved either.
         if self.is_parked:
-            return False
+            return
 
         # Converts the displacement amount into native units (and, together with the step below), converts it to the
         # target absolute position to move the motor to.
@@ -726,13 +700,12 @@ class ZaberAxis:
 
         # Ensures that the position to move the motor to is within the motor software limits.
         if position < self._min_limit or position > self._max_limit:
-            return False
+            return
 
         # Initiates the movement of the motor
         self._ensure_call_padding()
         self._motor.move_absolute(position=position, wait_until_idle=False)
         self._reset_pad_timer()
-        return True
 
     def stop(self) -> None:
         """Decelerates and stops the motor.
@@ -755,26 +728,21 @@ class ZaberAxis:
         self._motor.stop(wait_until_idle=False)
         self._reset_pad_timer()
 
-    def park(self) -> bool:
+    def park(self) -> None:
         """Parks the motor, which makes it unresponsive to motor commands and stores current absolute motor position in
         non-volatile memory.
 
         This method is mostly used to avoid re-homing the device after power cycling, as parking ensures the reference
         point for the motor is maintained in non-volatile memory. Additionally, parking is used to lock the motor
         in place as an additional safety measure.
-
-        Returns:
-            True if the method successfully parks the motor. If this method returns False, the axis is busy executing
-            other commands and cannot be parked at this time.
         """
         # The motor has to be idle to be parked.
         if self.is_busy:
-            return False
+            return
 
         self._ensure_call_padding()
         self._motor.park()
         self._reset_pad_timer()
-        return True
 
     def unpark(self) -> None:
         """Unparks a parked motor, which allows the motor to accept and execute motion commands."""
@@ -808,6 +776,7 @@ class ZaberAxis:
 
         # If the motor is not homed, homes the motor before moving it in the park position.
         if not self.is_homed:
+            self._ensure_call_padding()
             self._motor.home(wait_until_idle=True)
             self._reset_pad_timer()
 
@@ -914,7 +883,7 @@ class ZaberDevice:
                 f"not properly shutdown during the previous runtime. Ensure that the device is set (positioned) "
                 f"correctly for homing procedure, manually set the value of the shutdown tracker to 1 and reinitialize "
                 f"the class. The default Zaber controller non-volatile memory variable used for the tracker is "
-                f"USER_DATA_2."
+                f"USER_DATA_1."
             )
             console.error(message=message, error=RuntimeError)
 

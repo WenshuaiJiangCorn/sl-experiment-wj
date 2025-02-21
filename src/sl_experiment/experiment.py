@@ -2,6 +2,7 @@
 and SessionData class that abstracts working with experimental data."""
 
 import os
+import sys
 import warnings
 from pathlib import Path
 
@@ -107,7 +108,6 @@ class _HeadBar:
         _previous_positions: An instance of _ZaberPositions class that stores the positions of HeadBar motors during a
            previous runtime. If this data is not available, this attribute is set to None to indicate there are no
            previous positions to use.
-        _delay_timer: A PrecisionTimer instance used to wait for the motors to move into requested positions.
     """
 
     def __init__(self, headbar_port: str, zaber_positions_path: Path) -> None:
@@ -126,9 +126,6 @@ class _HeadBar:
         self._previous_positions: None | _ZaberPositions = None
         if zaber_positions_path.exists():
             self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
-
-        # Initializes a timer used to wait for the motors to move into requested positions.
-        self._delay_timer = PrecisionTimer("ms")
 
     def restore_position(self) -> None:
         """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
@@ -167,7 +164,7 @@ class _HeadBar:
 
         # Waits for the motors to finish moving before returning to caller.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Checks every 0.5 seconds
+            pass
 
     def prepare_motors(self) -> None:
         """Unparks and homes all HeadBar motors.
@@ -193,7 +190,7 @@ class _HeadBar:
 
         # Waits for the HeadBar motors to finish homing.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
     def park_motors(self) -> None:
         """Moves all HeadBar motors to their parking positions and parks (locks) them preventing future movements.
@@ -216,7 +213,8 @@ class _HeadBar:
 
         # Waits for the HeadBar motors to finish moving.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
+
 
         # Parks all motors once they reach their park positions
         self._headbar_z.park()
@@ -239,7 +237,7 @@ class _HeadBar:
 
         # Waits for the HeadBar motors to finish moving.
         while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
     def get_positions(self) -> tuple[int, int, int]:
         """Returns the current position of all HeadBar motors in native motor units.
@@ -289,7 +287,6 @@ class _LickPort:
         _previous_positions: An instance of _ZaberPositions class that stores the positions of LickPort motors during a
            previous runtime. If this data is not available, this attribute is set to None to indicate there are no
            previous positions to use.
-        _delay_timer: A PrecisionTimer instance used to wait for the motors to move into requested positions.
     """
 
     def __init__(self, lickport_port: str, zaber_positions_path: Path) -> None:
@@ -308,9 +305,6 @@ class _LickPort:
         self._previous_positions: None | _ZaberPositions = None
         if zaber_positions_path.exists():
             self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
-
-        # Initializes a timer used to wait for the motors to move into requested positions.
-        self._delay_timer = PrecisionTimer("ms")
 
     def restore_position(self) -> None:
         """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
@@ -351,7 +345,7 @@ class _LickPort:
 
         # Waits for the motors to finish moving before returning to caller.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=500)
+            pass
 
     def prepare_motors(self) -> None:
         """Unparks and homes all LickPort motors.
@@ -377,7 +371,7 @@ class _LickPort:
 
         # Waits for the motors to finish homing.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
     def park_motors(self) -> None:
         """Moves all LickPort motors to their parking positions and parks (locks) them preventing future movements.
@@ -400,7 +394,7 @@ class _LickPort:
 
         # Waits for the motors to finish moving.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
         # Parks all motors once they reach their park positions
         self._lickport_z.park()
@@ -423,7 +417,7 @@ class _LickPort:
 
         # Waits for the motors to finish moving.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
     def mount_position(self) -> None:
         """Moves all LickPort motors to the animal mounting position.
@@ -441,7 +435,7 @@ class _LickPort:
 
         # Waits for the motors to finish moving.
         while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
-            self._delay_timer.delay_noblock(delay=500)  # Delays for 0.5 second
+            pass
 
     def get_positions(self) -> tuple[int, int, int]:
         """Returns the current position of all LickPort motors in native motor units.
@@ -2811,8 +2805,42 @@ class SystemCalibration:
 
 
 if __name__ == "__main__":
-    test_class = SystemCalibration()
-    test_class.start()
-    while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
-        continue
-    test_class.stop()
+    headbar_port: str = "/dev/ttyUSB0"
+    lickport_port: str = "/dev/ttyUSB1"
+
+    out_file = Path("/home/cybermouse/Desktop/TestOut/zaber_positions.yaml")
+
+    sys.exit("SAFETY!")
+
+    headbar = _HeadBar(headbar_port, out_file)
+    lickport = _LickPort(lickport_port, out_file)
+
+    head_pos = headbar.get_positions()
+    lick_pos = lickport.get_positions()
+
+    file = _ZaberPositions(
+        headbar_z=head_pos[0],
+        headbar_pitch=head_pos[1],
+        headbar_roll=head_pos[2],
+        #lickport_z=lick_pos[0],
+        #lickport_x=lick_pos[1],
+        #lickport_y=lick_pos[2],
+    )
+    file.to_yaml(file_path=out_file)
+
+    headbar.prepare_motors()
+    lickport.prepare_motors()
+
+    headbar.park_motors()
+    lickport.park_motors()
+
+    headbar.disconnect()
+    lickport.disconnect()
+
+    sys.exit()
+
+    # test_class = SystemCalibration()
+    # test_class.start()
+    # while input("Calibration runtime goes brrr. Enter 'exit' to exit.") != "exit":
+    #     continue
+    # test_class.stop()
