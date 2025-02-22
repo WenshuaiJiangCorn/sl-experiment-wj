@@ -143,9 +143,9 @@ class _HeadBar:
             from the LickPort class.
 
             This method moves all HeadBar axes in-parallel to optimize runtime speed.
-            
+
         Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without 
+            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
                 waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
                 time.
         """
@@ -182,9 +182,9 @@ class _HeadBar:
 
         Notes:
             This method moves all HeadBar axes in-parallel to optimize runtime speed.
-            
+
         Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without 
+            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
                 waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
                 time.
         """
@@ -217,9 +217,9 @@ class _HeadBar:
             method from the LickPort class.
 
             This method moves all HeadBar axes in-parallel to optimize runtime speed.
-            
+
         Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without 
+            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
                 waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
                 time.
         """
@@ -243,9 +243,9 @@ class _HeadBar:
 
         Notes:
             This method moves all HeadBar axes in-parallel to optimize runtime speed.
-            
+
         Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without 
+            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
                 waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
                 time.
         """
@@ -259,7 +259,7 @@ class _HeadBar:
         # groups at the same time.
         if wait_until_idle:
             self.wait_until_idle()
-    
+
     def mount_position(self, wait_until_idle: bool = True) -> None:
         """Moves all HeadBar motors to the animal mounting position.
 
@@ -268,9 +268,9 @@ class _HeadBar:
 
         Notes:
             This method moves all HeadBar axes in-parallel to optimize runtime speed.
-            
+
         Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without 
+            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
                 waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
                 time.
         """
@@ -284,7 +284,7 @@ class _HeadBar:
         # groups at the same time.
         if wait_until_idle:
             self.wait_until_idle()
-    
+
     def get_positions(self) -> tuple[int, int, int]:
         """Returns the current position of all HeadBar motors in native motor units.
 
@@ -1007,59 +1007,48 @@ class SessionData:
         shutil.rmtree(source)
 
 
-class MicroControllerInterfaces:
-    """The base class for all Sun lab calibration runtimes.
+class _MicroControllerInterfaces:
+    """Interfaces with all Ataraxis Micro Controller (AMC) devices that control and record non-video behavioral data
+    from the Mesoscope-VR system.
 
-    This class is used to test and calibrate various elements of the Mesoscope-VR system before conducting experiment
-    and training runtimes. It is mostly used during initial system construction and configuration. Once the system is
-    built, this class is primarily used for water valve setup (filling / emptying) and calibration, which has to be
-    carried out frequently between experimental days.
-
-    This class exposes many methods that address individual components in the system. These methods should be used
-    to issue commands to the calibrated systems. This is similar to the 'state' setter methods of MesoscopeExperiment
-    and BehavioralTraining classes, but provides a considerably finer control over hardware modules and other assets.
+    This class interfaces with the three AMC controllers used during various runtimes: Actor, Sensor, and Encoder. The
+    class exposes methods to send commands to the hardware modules managed by these microcontrollers. In turn, these
+    modules control specific components of the Mesoscope-Vr system, such as rotary encoders, solenoid valves, and
+    conductive lick sensors.
 
     Notes:
-        This class is NOT intended to be used with animals. Do not mount the animal or mesoscope objective onto the
-        system when using this class. Using this class with animals and mesoscope objective can damage the equipment and
-        harm the animal.
+        This class is primarily intended to be used internally by the MesoscopeExperiment and BehavioralTraining
+        classes. Our valve calibration CLI uses this class directly to calibrate the water valve, but this is a unique
+        use scenario. Do not initialize this class directly unless you know what you are doing.
+
+        This class is calibrated and statically configured for the Mesoscope-VR system used in the Sun lab. Source code
+        refactoring will likely be necessary to adapt the class to other runtime conditions.
 
         Calling the initializer does not start the underlying processes. Use the start() method before issuing other
-        commands to properly initialize all remote processes.
-
-        See the 'axtl-ports' cli command from the ataraxis-transport-layer-pc library if you need help discovering the
-        USB ports used by Ataraxis Micro Controller (AMC) devices.
-
-        See the 'axvs-ids' cli command from ataraxis-video-system if you need help discovering the camera indices used
-        by the Harvesters-managed and OpenCV-managed cameras.
-
-        See the 'sl-devices' cli command from this library if you need help discovering the serial ports used by the
-        Zaber motion controllers.
-
-        This class is specifically designed to test Mesoscope-VR system components. To run a training session, use
-        BehavioralTraining class. To run experiments, use MesoscopeExperiment class.
+        commands to properly initialize all remote processes. This design is intentional and is used during experiment
+        and training runtimes to parallelize data preprocessing and starting the next animal's session.
 
     Args:
+        data_logger: The initialized DataLogger instance that should be used to log the data generated by the managed
+            microcontrollers. For most runtimes, this argument is resolved by the MesoscopeExperiment or
+            BehavioralTraining classes that initialize this class.
         screens_on: Determines whether the VR screens are ON when this class is initialized. Since there is no way of
-            getting this information via hardware, the initial screen state has to be supplied by the user as an
-            argument. The class will manage and track the state after initialization.
-        actor_port: The USB port used by the actor Microcontroller.
-        sensor_port: The USB port used by the sensor Microcontroller.
-        encoder_port: The USB port used by the encoder Microcontroller.
-        headbar_port: The USB port used by the headbar Zaber motor controllers (devices).
-        lickport_port: The USB port used by the lickport Zaber motor controllers (devices).
+            getting this information via hardware, the initial screen state has to be supplied as an argument. The class
+            will manage and track the state after initialization.
+        actor_port: The USB port used by the Actor Microcontroller.
+        sensor_port: The USB port used by the Sensor Microcontroller.
+        encoder_port: The USB port used by the Encoder Microcontroller.
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters.
-        face_camera_index: The index of the face camera in the list of all available Harvester-managed cameras.
-        left_camera_index: The index of the left camera in the list of all available OpenCV-managed cameras.
-        right_camera_index: The index of the right camera in the list of all available OpenCV-managed cameras.
-        harvesters_cti_path: The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.
+            microliters. This data is used by the ValveInterface to calculate pulse times necessary to deliver requested
+            volumes of water.
+        debug: Determines whether to run the managed interfaces in debug mode. Generally, this mode should be disabled
+            for most runtimes. It is used during the initial system calibration to interactively debug and adjust the
+            hardware module and interface configurations.
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
-        _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
-            cameras, and the MesoscopeExperiment instance.
+        _previous_volume: Tracks the volume of water dispensed during previous deliver_reward() calls
         _mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
         _mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
         _break: The interface that controls the electromagnetic break attached to the running wheel.
@@ -1073,60 +1062,32 @@ class MicroControllerInterfaces:
         _wheel_encoder: The interface that monitors the rotation of the running wheel and converts it into the distance
             traveled by the animal.
         _encoder: The main interface for the 'Encoder' Ataraxis Micro Controller (AMC) device.
-        _face-camera: The interface that captures and saves the frames acquired by the 9MP scientific camera aimed at
-            the animal's face and eye from the left side (via a hot mirror).
-        _left_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
-            the left side of the animal and the right and center VR screens.
-        _right_camera: The interface that captures and saves the frames acquired by the 1080P security camera aimed on
-            the right side of the animal and the left VR screen.
-        _delay_timer: Stores the PrecisionTimer used to delay execution where necessary.
-        _test_folder: Stores the path to the root test directory used to store the data generated during calibration
-            runtime.
-        _zaber_positions_path: Stores the path to the YAML file that contains the Zaber motor positions used during
-            previous calibration runtimes. This is used to simulate the behavior of experiment and training classes with
-            respect to restoring Zaber positions across experimental sessions.
-        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
-        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
 
     Raises:
-        TypeError: If any of the arguments are not of the expected type.
-        ValueError: If any of the arguments are not of the expected value.
+        TypeError: If the provided valve_calibration_data argument is not a tuple or does not contain valid elements.
     """
 
     def __init__(
         self,
-        test_root: Path = Path("/media/Data/Experiments/Test/test_data"),
+        data_logger: DataLogger,
         screens_on: bool = False,
         actor_port: str = "/dev/ttyACM0",
         sensor_port: str = "/dev/ttyACM1",
         encoder_port: str = "/dev/ttyACM2",
-        headbar_port: str = "/dev/ttyUSB0",
-        lickport_port: str = "/dev/ttyUSB1",
         valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
             (15000, 1.8556),
             (30000, 3.4844),
             (45000, 7.1846),
             (60000, 10.0854),
         ),
-        face_camera_index: int = 0,
-        left_camera_index: int = 0,
-        right_camera_index: int = 2,
-        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        debug: bool = False,
     ) -> None:
         # Initializes the start state tracker first
         self._started: bool = False
 
-        # Initializes a timer to delay code execution.
-        self._delay_timer = PrecisionTimer("s")
+        self._previous_volume: float = 0.0
 
-        # Resets the test folder and saves its path to class attribute
-        shutil.rmtree(test_root, ignore_errors=True)
-        ensure_directory_exists(test_root)
-        self._test_folder: Path = test_root
-
-        # Generates the path to the zaber positions .yaml file.
-        self._zaber_positions_path: Path = Path(self._test_folder.parent.joinpath("zaber_positions.yaml"))
-
+        # Verifies water valve calibration data.
         if not isinstance(valve_calibration_data, tuple) or not all(
             isinstance(item, tuple)
             and len(item) == 2
@@ -1135,46 +1096,35 @@ class MicroControllerInterfaces:
             for item in valve_calibration_data
         ):
             message = (
-                f"Unable to initialize the SystemCalibration class. Expected a tuple of 2-element tuples with "
+                f"Unable to initialize the MicroControllerInterfaces class. Expected a tuple of 2-element tuples with "
                 f"integer or float values for 'valve_calibration_data' argument, but instead encountered "
                 f"{valve_calibration_data} of type {type(valve_calibration_data).__name__} with at least one "
                 f"incompatible element."
             )
             console.error(message=message, error=TypeError)
 
-        # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
-        # class instance.
-        self._logger: DataLogger = DataLogger(
-            output_directory=self._test_folder,
-            instance_name="system",
-            sleep_timer=0,
-            exist_ok=True,
-            process_count=1,
-            thread_count=10,
-        )
-
         # ACTOR. Actor AMC controls the hardware that needs to be triggered by PC at irregular intervals. Most of such
         # hardware is designed to produce some form of an output: deliver water reward, engage wheel breaks, issue a
         # TTL trigger, etc.
 
         # Module interfaces:
-        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=True)
-        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2), debug=True)
+        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
+        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2), debug=debug)
         self._break = BreakInterface(
             minimum_break_strength=43.2047,  # 0.6 in oz
             maximum_break_strength=1152.1246,  # 16 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
-            debug=True,
+            debug=debug,
         )
-        self._reward = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
-        self._screens = ScreenInterface(initially_on=screens_on, debug=True)
+        self._reward = ValveInterface(valve_calibration_data=valve_calibration_data, debug=debug)
+        self._screens = ScreenInterface(initially_on=screens_on, debug=debug)
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=actor_port,
-            data_logger=self._logger,
+            data_logger=data_logger,
             module_interfaces=(self._mesoscope_start, self._mesoscope_stop, self._break, self._reward, self._screens),
         )
 
@@ -1185,14 +1135,14 @@ class MicroControllerInterfaces:
         # Module interfaces:
         # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
-        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=True)
-        self._lick: LickInterface = LickInterface(lick_threshold=1000, debug=True)  # Lick sensor
+        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
+        self._lick: LickInterface = LickInterface(lick_threshold=1000, debug=debug)  # Lick sensor
         self._torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
             maximum_voltage=2750,  # This was determined experimentally and matches the torque that overcomes break
             sensor_capacity=720.0779,  # 10 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
-            debug=True,
+            debug=debug,
         )
 
         # Main interface:
@@ -1200,7 +1150,7 @@ class MicroControllerInterfaces:
             controller_id=np.uint8(152),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=sensor_port,
-            data_logger=self._logger,
+            data_logger=data_logger,
             module_interfaces=(self._mesoscope_frame, self._lick, self._torque),
         )
 
@@ -1210,7 +1160,7 @@ class MicroControllerInterfaces:
 
         # Module interfaces:
         self._wheel_encoder: EncoderInterface = EncoderInterface(
-            encoder_ppr=8192, object_diameter=15.0333, cm_per_unity_unit=10.0, debug=True
+            encoder_ppr=8192, object_diameter=15.0333, cm_per_unity_unit=10.0, debug=debug
         )
 
         # Main interface:
@@ -1218,191 +1168,42 @@ class MicroControllerInterfaces:
             controller_id=np.uint8(203),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=encoder_port,
-            data_logger=self._logger,
+            data_logger=data_logger,
             module_interfaces=(self._wheel_encoder,),
         )
 
-        # FACE CAMERA. This is the high-grade scientific camera aimed at the animal's face using the hot-mirror. It is
-        # a 10-gigabit 9MP camera with a red long-pass filter and has to be interfaced through the GeniCam API. Since
-        # the VRPC has a 4090 with 2 hardware acceleration chips, we are using the GPU to save all of our frame data.
-        self._face_camera: VideoSystem = VideoSystem(
-            system_id=np.uint8(51),
-            data_logger=self._logger,
-            output_directory=self._test_folder,
-            harvesters_cti_path=harvesters_cti_path,
-        )
-        # The acquisition parameters (framerate, frame dimensions, crop offsets, etc.) are set via the SVCapture64
-        # software and written to non-volatile device memory. Generally, all projects in the lab should be using the
-        # same parameters.
-        self._face_camera.add_camera(
-            save_frames=True,
-            camera_index=face_camera_index,
-            camera_backend=CameraBackends.HARVESTERS,
-            output_frames=False,
-            display_frames=True,
-            display_frame_rate=25,
-        )
-        self._face_camera.add_video_saver(
-            hardware_encoding=True,
-            video_format=VideoFormats.MP4,
-            video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.MEDIUM,
-            input_pixel_format=InputPixelFormats.MONOCHROME,
-            output_pixel_format=OutputPixelFormats.YUV444,
-            quantization_parameter=15,
-        )
-
-        # LEFT CAMERA. A 1080P security camera that is mounted on the left side from the mouse's perspective
-        # (viewing the left side of the mouse and the right screen). This camera is interfaced with through the OpenCV
-        # backend.
-        self._left_camera: VideoSystem = VideoSystem(
-            system_id=np.uint8(62),
-            data_logger=self._logger,
-            output_directory=self._test_folder,
-        )
-
-        # DO NOT try to force the acquisition rate. If it is not 30 (default), the video will not save.
-        self._left_camera.add_camera(
-            save_frames=True,
-            camera_index=left_camera_index,
-            camera_backend=CameraBackends.OPENCV,
-            output_frames=False,
-            display_frames=True,
-            display_frame_rate=25,
-            color=False,
-        )
-        self._left_camera.add_video_saver(
-            hardware_encoding=True,
-            video_format=VideoFormats.MP4,
-            video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTEST,
-            input_pixel_format=InputPixelFormats.MONOCHROME,
-            output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=30,
-        )
-
-        # RIGHT CAMERA. Same as the left camera, but mounted on the right side from the mouse's perspective.
-        self._right_camera: VideoSystem = VideoSystem(
-            system_id=np.uint8(73),
-            data_logger=self._logger,
-            output_directory=self._test_folder,
-        )
-        # Same as above, DO NOT force acquisition rate
-        self._right_camera.add_camera(
-            save_frames=True,
-            camera_index=right_camera_index,  # The only difference between left and right cameras.
-            camera_backend=CameraBackends.OPENCV,
-            output_frames=False,
-            display_frames=True,
-            display_frame_rate=25,
-            color=False,
-        )
-        self._right_camera.add_video_saver(
-            hardware_encoding=True,
-            video_format=VideoFormats.MP4,
-            video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTEST,
-            input_pixel_format=InputPixelFormats.MONOCHROME,
-            output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=30,
-        )
-
-        # HeadBar controller
-        self._headbar: _HeadBar = _HeadBar(
-            headbar_port=headbar_port, zaber_positions_path=self._zaber_positions_path
-        )
-
-        # LickPort controller
-        self._lickport: _LickPort = _LickPort(
-            lickport_port=lickport_port, zaber_positions_path=self._zaber_positions_path
-        )
-
     def start(self) -> None:
-        """Sets up all assets used during calibration.
+        """Starts MicroController communication processes and configures all hardware modules to use predetermined
+        runtime parameters.
 
-        This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. After this method's runtime, it is possible to use most other class methods to issue commands
-        to all Mesoscope-VR systems addressable through this class.
+        This method sets up the necessary assets that enable MicroController-PC communication. Until this method is
+        called, all other class methods will not function correctly.
 
         Notes:
-            This method will not run unless the host PC has access to the necessary number of logical CPU cores
-            and other required hardware resources (GPU for video encoding, etc.). This prevents using the class on
-            machines that are unlikely to sustain the runtime requirements.
+            After calling this method, most hardware modules will be initialized to an idle state. The only exception to
+            this rule is the wheel break, which initializes to the 'engaged' state. Use other class methods to
+            switch individual hardware modules into the desired state.
 
-            Zaber devices are connected during the initialization process and do not require a call to this method to
-            operate. This design pattern is used to enable manipulating Headbar and Lickport before starting the main
-            experiment.
+            Since most modules initialize to an idle state, they will not be generating data. Therefore, it is safe
+            to call this method before enabling the DataLogger class. However, it is strongly advised to enabled the
+            DataLogger as soon as possible to avoid data piling up in the buffer.
 
-            Calling this method automatically enables Console class (via console variable) if it was not enabled.
-
-        Raises:
-            RuntimeError: If the host PC does not have enough logical CPU cores available.
+            This method uses Console to notify the user about the initialization progress, but it does not enable the
+            Console class itself. Make sure the console is enabled before calling this method.
         """
 
         # Prevents (re) starting an already started VR process.
         if self._started:
             return
 
-        # Activates the console to display messages to the user
-        if not console.enabled:
-            console.enable()
-
-        # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
-        # configuration (3 producers, 3 consumer), 1 core for the central process calling this method. 11 cores
-        # total.
-        if not os.cpu_count() >= 11:
-            message = (
-                f"Unable to start the MesoscopeExperiment runtime. The host PC must have at least 11 logical CPU "
-                f"cores available for this class to work as expected, but only {os.cpu_count()} cores are "
-                f"available."
-            )
-            console.error(message=message, error=RuntimeError)
-
-        message = "Initializing SystemCalibration assets..."
+        message = "Initializing Ataraxis Micro Controller (AMC) Interfaces..."
         console.echo(message=message, level=LogLevel.INFO)
-
-        # Starts the data logger
-        self._logger.start()
-
-        message = "DataLogger: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Starts all video systems. Note, this does NOT start frame saving. This is intentional, as it may take the
-        # user some time to orient the mouse and the mesoscope.
-        self._face_camera.start()
-        self._left_camera.start()
-        self._right_camera.start()
-
-        message = "VideoSystems: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Forces the user to confirm the system is prepared for zaber motor homing and positioning procedures. This code
-        # will get stuck in the 'input' mode until the user confirms.
-        message = (
-            "Preparing to position the HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR "
-            "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-            "the mesoscope and / or HARM the animal. There will be no further warnings or manual checkpoints."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
-
-        # Sets the HeadBar and LickPort to calibration positions. It is in-contrast to other runtimes and assumes the
-        # caller likely intends to work with the water valve. Generally, SystemCalibration is NOT intended to be
-        # used with animals, so we do not set positions to mount the animal.
-        self._headbar.prepare_motors()
-        self._lickport.prepare_motors()
-        self._headbar.calibrate_position()
-        self._lickport.calibrate_position()
 
         # Starts all microcontroller interfaces
         self._actor.start()
         self._actor.unlock_controller()  # Only Actor outputs data, so no need to unlock other controllers.
         self._sensor.start()
         self._encoder.start()
-
-        message = "SystemCalibration: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Configures the encoder to only report forward motion (CW) if the motion exceeds ~ 1 mm of distance.
         self._wheel_encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=15)
@@ -1417,13 +1218,13 @@ class MicroControllerInterfaces:
         # Configures the water valve to deliver ~ 5 uL of water. Also configures the valve calibration method to run the
         # 'reference' calibration for 5 uL rewards used to verify the valve calibration before every experiment.
         self._reward.set_parameters(
-            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
         )
 
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
         self._lick.set_parameters(
-            signal_threshold=np.uint16(300), delta_threshold=np.uint16(300), averaging_pool_size=np.uint8(30)
+            signal_threshold=np.uint16(500), delta_threshold=np.uint16(500), averaging_pool_size=np.uint8(30)
         )
 
         # Configures the torque sensor to filter out noise and sub-threshold 'slack' torque signals.
@@ -1435,119 +1236,47 @@ class MicroControllerInterfaces:
             averaging_pool_size=np.uint8(5),
         )
 
-        # The mesoscope acquires frames at ~10 Hz and sends triggers with the on-phase duration of ~100 ms. We use
-        # a polling frequency of ~1000 Hz here to ensure frame acquisition times are accurately detected.
-        self._mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
-
-        # Starts monitoring licks. Uses 1000 Hz polling frequency, which should be enough to resolve individual
-        # licks of variable duration.
-        self._lick.check_state(repetition_delay=np.uint32(1000))
-
-        message = "Hardware module setup: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Finally, begins saving camera frames to disk
-        self._face_camera.start_frame_saving()
-        self._left_camera.start_frame_saving()
-        self._right_camera.start_frame_saving()
-
         # The setup procedure is complete.
         self._started = True
 
-        message = "SystemCalibration assets: Initialized."
+        message = "Ataraxis Micro Controller (AMC) Interfaces: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self) -> None:
-        """Stops and terminates the SystemCalibration runtime.
+        """Stops all MicroController communication processes and releases all resources.
 
-        This method shuts down all data collectors and disconnects from all cameras, microcontrollers, and the data
-        logger. It then runs the behavioral data log processing algorithm on the data collected during calibration and
-        displays the results to the user. Overall, this method simulates the stop() method behavior of the
-        MesoscopeExperiment and BehavioralTraining classes.
+        This method needs to be called at the end of each runtime to release the resources reserved by the start()
+        method. Until the stop() method is called, the DataLogger instance may receive data from running
+        MicroControllers, so calling this method also guarantees no MicroController data will be lost if the DataLogger
+        process is terminated.
         """
 
         # Prevents stopping an already stopped VR process.
         if not self._started:
             return
 
-        message = "Terminating SystemCalibration runtime..."
+        message = "Terminating Ataraxis Micro Controller (AMC) Interfaces..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Resets the _started tracker
         self._started = False
 
-        # Instructs all cameras to stop saving frames
-        self._face_camera.stop_frame_saving()
-        self._left_camera.stop_frame_saving()
-        self._right_camera.stop_frame_saving()
-
-        message = "Camera frame saving: stopped."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Delays for 10 seconds. This ensures that the cameras have time to stop producing data.
-        self._delay_timer.delay_noblock(10)
-
-        # Stops all microcontroller interfaces. This directly shuts down all individual modules.
+        # Stops all microcontroller interfaces. This directly shuts down and resets all managed hardware modules.
         self._actor.stop()
         self._sensor.stop()
         self._encoder.stop()
 
-        message = "MicroControllers: stopped."
+        message = "Ataraxis Micro Controller (AMC) Interfaces: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Stops all cameras
-        self._face_camera.stop()
-        self._left_camera.stop()
-        self._right_camera.stop()
+    def enable_encoder_monitoring(self) -> None:
+        """Enables wheel encoder monitoring at 2 kHz rate.
 
-        message = "Cameras: stopped."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Stops the data logger instance
-        self._logger.stop()
-
-        message = "Data Logger: stopped."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
-        # to be done before Zaber motors are reset back to parking position.
-        head_bar_positions = self._headbar.get_positions()
-        lickport_positions = self._lickport.get_positions()
-        zaber_positions = _ZaberPositions(
-            headbar_z=head_bar_positions[0],
-            headbar_pitch=head_bar_positions[1],
-            headbar_roll=head_bar_positions[2],
-            lickport_z=lickport_positions[0],
-            lickport_x=lickport_positions[1],
-            lickport_y=lickport_positions[2],
-        )
-        zaber_positions.to_yaml(file_path=self._zaber_positions_path)
-
-        # Gives user time to remove any equipment used during calibration.
-        message = (
-            "Preparing to reset the HeadBar and LickPort back to the parking position. Remove any equipment that may "
-            "obstruct the HeadBar and LickPort movement path, such as water collection flasks."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
-
-        # Parks both motors and then disconnects from their Connection classes
-        self._headbar.park_position()
-        self._lickport.park_position()
-        self._headbar.disconnect()
-        self._lickport.disconnect()
-
-        message = "HeadBar and LickPort: reset."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        message = "SystemCalibration runtime: terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def enable_encoder_monitoring(self, polling_delay: int = 500) -> None:
-        """Enables wheel encoder monitoring with the provided polling delay in microseconds."""
+        This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
+        at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
+        """
         self._wheel_encoder.reset_pulse_count()
-        self._wheel_encoder.check_state(repetition_delay=np.uint32(polling_delay))
+        self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
 
     def disable_encoder_monitoring(self) -> None:
         """Stops monitoring the wheel encoder."""
@@ -1562,98 +1291,158 @@ class MicroControllerInterfaces:
         self._mesoscope_stop.send_pulse()
 
     def enable_break(self) -> None:
-        """Engages wheel break, preventing the animal from running on the wheel."""
+        """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
         self._break.toggle(state=True)
 
     def disable_break(self) -> None:
-        """Disengages wheel break, enabling the animal to run on the wheel."""
+        """Disengages the wheel break, enabling the animal to run on the wheel."""
         self._break.toggle(state=False)
 
-    def toggle_screens(self) -> None:
-        """Changes (flips) the current state of the VR screens (On / Off)."""
+    def change_screen_state(self) -> None:
+        """Changes (flips) the current state of the VR screens between On and Off.
+
+        This command will change the state of all three VR screens at the same time. This command has no way of
+        verifying the actual state of the screens and, therefore, cannot enforce a particular screen state. It can,
+        however, guarantee that the screens will change their states as a result of this command.
+        """
         self._screens.toggle()
 
-    def enable_mesoscope_frame_monitoring(self, polling_delay: int) -> None:
-        """Enables monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame with the
-        provided polling delay in microseconds."""
-        self._mesoscope_frame.check_state(repetition_delay=np.uint32(polling_delay))
+    def enable_mesoscope_frame_monitoring(self) -> None:
+        """Enables monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame at
+        ~ 1 kHZ rate.
+
+        The mesoscope sends the HIGH phase of the TTL pulse while it is scanning the frame, which produces a pulse of
+        ~100ms. This is followed by ~5ms LOW phase during which the Galvos are executing the flyback procedure. This
+        command checks the state of the TTL pin at the 1 kHZ rate, which is enough to accurately report both phases.
+        """
+        self._mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
 
     def disable_mesoscope_frame_monitoring(self) -> None:
         """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
         self._mesoscope_frame.reset_command_queue()
 
-    def enable_lick_monitoring(self, polling_delay: int) -> None:
-        """Enables lick sensor monitoring with the provided polling delay in microseconds."""
-        self._lick.check_state(repetition_delay=np.uint32(polling_delay))
+    def enable_lick_monitoring(self) -> None:
+        """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
+
+        The lick sensor measures the voltage across the lick sensor and reports surges in voltage to the PC as a
+        reliable proxy for tongue-to-sensor contact. Most lick events span at least 100 ms of time and, therefore, the
+        rate of 1 kHZ is adequate for resolving all expected single-lick events.
+        """
+        self._lick.check_state(repetition_delay=np.uint32(1000))
 
     def disable_lick_monitoring(self) -> None:
-        """Disables lick sensor monitoring."""
+        """Stops monitoring the conductive lick sensor."""
         self._lick.reset_command_queue()
 
-    def enable_torque_monitoring(self, polling_delay: int) -> None:
-        """Enables torque sensor monitoring with the provided polling delay in microseconds."""
-        self._torque.check_state(repetition_delay=np.uint32(polling_delay))
+    def enable_torque_monitoring(self) -> None:
+        """Enables monitoring the torque sensor at ~ 1 kHZ rate.
+
+        The torque sensor detects CW and CCW torques applied by the animal to the wheel. Currently, we do not have a
+        way of reliably calibrating the sensor, so detected torque magnitudes are only approximate. However, the sensor
+        reliably distinguishes large torques from small torques and accurately tracks animal motion activity when the
+        wheel break is engaged.
+        """
+        self._torque.check_state(repetition_delay=np.uint32(1000))
 
     def disable_torque_monitoring(self) -> None:
-        """Disables torque sensor monitoring."""
+        """Stops monitoring the torque sensor."""
         self._torque.reset_command_queue()
 
     def open_valve(self) -> None:
-        """Opens the solenoid valve to enable water flow."""
+        """Opens the water reward solenoid valve.
+
+        This method is primarily used to prime the water line with water before the first experiment or training session
+        of the day.
+        """
         self._reward.toggle(state=True)
 
     def close_valve(self) -> None:
-        """Closes the solenoid valve to restrict water flow."""
+        """Closes the water reward solenoid valve."""
         self._reward.toggle(state=False)
 
     def deliver_reward(self, volume: float = 5.0) -> None:
-        """Pulses the valve for the duration of time necessary to deliver the provided volume of water.
+        """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
+        water.
 
-        Note, the way the requested volume is translated into valve open time depends on the calibration data
-        provided to the class at initialization.
+        This method assumes that the valve has been calibrated before calling this method. It uses the calibration data
+        provided at class instantiation to determine the period of time the valve should be kept open to deliver the
+        requested volume of water.
+
+        Args:
+            volume: The volume of water to deliver, in microliters.
         """
-        self._reward.set_parameters(pulse_duration=self._reward.get_duration_from_volume(volume))
+
+        # This ensures that the valve settings are only updated if the new volume does not match the previous volume.
+        # This minimizes unnecessary updates to the valve settings.
+        if volume != self._previous_volume:
+            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
+            # consistency
+            self._reward.set_parameters(
+                pulse_duration=self._reward.get_duration_from_volume(volume),
+                calibration_delay=np.uint32(200000),
+                calibration_count=np.uint16(200),
+            )
         self._reward.send_pulse()
 
     def reference_valve(self) -> None:
-        """Runs the 'reference' valve calibration procedure.
+        """Runs the reference valve calibration procedure.
 
-        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding syringe
-        filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which should
-        overall deliver ~ 1 ml of water.
+        Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
+        to deliver the overall volume of water recognizable for the human eye looking at the syringe holding the water
+        (water 'tank' used in our system). Additionally, this uses the 5 uL volume as the reference volume, which
+        matches the volume we use during experiments and training sessions.
+
+        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding ('tank')
+        syringe filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which
+        should overall dispense ~ 1 ml of water.
 
         Notes:
-            This method repositions HeadBar and LickPort motors to optimize collecting dispensed water before the
-            procedure and move them back to the parking positions when the referencing is over.
+            Use one of the conical tubes stored next to the Mesoscope cage to collect the dispensed water. It is highly
+            encouraged to use both the visual confirmation (looking at the syringe water level drop) and the weight
+            confirmation (weighing the water dispensed into the collection tube). This provides the most accurate
+            referencing result.
 
-            Use one of the conical tubes stored next to the mesoscope to collect the dispensed water. We advise using
-            both the visual confirmation (looking at the syringe water level drop) and the weight confirmation
-            (weighing the water dispensed into the collection tube). This provides the most accurate referencing result.
+            If the referencing procedure fails to deliver 5 +- 0.5 uL of water measured with either method, the valve
+            needs to be recalibrated using the calibrate_valve() method. Also, if valve referencing result stability
+            over multiple days fluctuates significantly, it is advised to recalibrate the valve using the
+            calibrate_valve() method.
         """
         self._reward.set_parameters(
-            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
+            pulse_duration=np.uint32(self._reward.get_duration_from_volume(target_volume=5.0)),
+            calibration_delay=np.uint32(200000),
+            calibration_count=np.uint16(200),
         )  # 5 ul x 200 times
         self._reward.calibrate()
 
-    def calibrate_valve(self) -> None:
-        self._reward.set_parameters(
-            pulse_duration=np.uint32(15000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-        )  # 15 milliseconds
-        self._reward.calibrate()
+    def calibrate_valve(self, pulse_duration: int) -> None:
+        """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
+        pulse_duration.
 
-        self._reward.set_parameters(
-            pulse_duration=np.uint32(30000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-        )  # 30 milliseconds
-        self._reward.calibrate()
+        The valve is kept open for the specified number of milliseconds. Between pulses, the valve is kept closed for
+        200 ms. Due to our valve design, keeping the valve closed for less than 200 ms generates a large pressure
+        at the third (Normally Open) port, which puts unnecessary strain on the port plug.
 
-        self._reward.set_parameters(
-            pulse_duration=np.uint32(45000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-        )  # 45 milliseconds
-        self._reward.calibrate()
+        During runtime, the valve will be pulsed 500 times to provide a large sample size. During calibration, the water
+        should be collected in a pre-weighted conical tube. After the calibration is over, the tube with dispensed water
+        has to be weighted to determine the dispensed volume by weight.
 
+        Notes:
+            The calibration should be run with the following durations: 15 ms, 30 ms, 45 ms, and 60 ms. During testing,
+            we found that these values roughly cover the range from 2 uL to 10 uL, which is enough to cover most
+            training and experiment runtimes.
+
+            Make sure that the water line is primed, deaerated, and the holding ('tank') syringe filled exactly to the
+            5 mL mark at the beginning of each calibration cycle. Depending on the calibrated pulse_duration, you may
+            need to refill the syringe during the calibration runtime. The calibration durations mentioned above should
+            not need manual tank refills.
+
+        Args:
+            pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
+        """
+        pulse_us = pulse_duration * 1000  # Convert milliseconds to microseconds
         self._reward.set_parameters(
-            pulse_duration=np.uint32(60000), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
-        )  # 60 milliseconds
+            pulse_duration=np.uint32(pulse_us), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
+        )
         self._reward.calibrate()
 
 

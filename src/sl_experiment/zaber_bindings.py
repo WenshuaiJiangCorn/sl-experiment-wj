@@ -462,7 +462,6 @@ class ZaberAxis:
         # Unless the motor is already shut, ensures the motor gracefully stops and parks before the class is destroyed.
         # Does not carry out the shutdown procedure, as it may harm the animal and / or damage the mesoscope.
         if not self._shutdown_flag:
-
             # Issues the stop command
             self.stop()
 
