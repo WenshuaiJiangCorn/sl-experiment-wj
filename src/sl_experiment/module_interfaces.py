@@ -291,9 +291,11 @@ class EncoderInterface(ModuleInterface):
         ccw_data = log_data.get(np.uint8(51), [])
         cw_data = log_data.get(np.uint8(52), [])
 
-        # We are guaranteed to have at least one code, either ccw or cw due to how the module is written. If the other
-        # code does not exist, this code uses the other one to generate one zero-displacement entry for the missing
-        # code. THis ensures the rest of this code works as expected and the parsed information is accurate.
+        # The way EncoderModule is implemented guarantees there is at least one CW code message with the displacement
+        # of 0 that is received by the PC. In the worst case scenario, there will be no CCW codes and the parsing will
+        # not work. To avoid that issue, we generate an artificial zero-code CCW value at the same timestamp + 1
+        # microsecond as the original CW zero-code value. This does not affect the accuracy of our data, just makes the
+        # code work for edge-cases.
         if not ccw_data:
             first_timestamp = cw_data[0]["timestamp"]
             ccw_data = [{"timestamp": first_timestamp + 1, "data": 0}]
@@ -565,28 +567,40 @@ class TTLInterface(ModuleInterface):
             module. The timestamps correspond to the time when the LOW phase translates into the HIGH phase
             (rising edges). Currently, this method is only called for the TTLModule that monitors mesoscope frame
             acquisition stamps and, therefore, the timestamps denote the time when the mesoscope starts acquiring
-            (scanning) each frame.
+            (scanning) each frame. If the module received no TTL pulses during runtime, this method will return an
+            empty array.
         """
         # Reads the data logged during runtime as a dictionary of dictionaries.
         log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
 
         # Here, we only look for event-codes 52 (InputON) and event-codes 53 (InputOFF).
 
+        # Gets the data for both message types. The way the module is written guarantees that the PC receives code 53
+        # at least once. No such guarantee is made for code 52, however. We still default to empty lists for both
+        # to make this code a bit friendlier to future changes.
+        on_data = log_data.get(np.uint8(52), [])
+        off_data = log_data.get(np.uint8(53), [])
+
+        # Since this code ultimately looks for rising edges, it will not find any unless there is at least one ON and
+        # one OFF message. Therefore, if any of the codes is actually missing, shorts to returning an empty array.
+        if len(on_data) == 0 or len(off_data) == 0:
+            return np.array([], dtype=np.uint64)
+
+        # Determines the total length of the output array using the length of ON and OFF data arrays.
+        total_length = len(on_data) + len(off_data)
+
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype and the trigger
         # values are boolean. We use uint8 as it has the same memory footprint as a boolean and allows us to use integer
         # types across the entire dataset.
-        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         triggers: NDArray[np.uint8] = np.empty(total_length, dtype=np.uint8)
 
         # Extracts ON (Code 52) trigger codes. Statically assigns the value '1' to denote ON signals.
-        on_data = log_data[np.uint8(52)]
         n_on = len(on_data)
         timestamps[:n_on] = [value["timestamp"] for value in on_data]
         triggers[:n_on] = np.uint8(1)  # All code 52 signals are ON (High)
 
         # Extracts OFF (Code 53) trigger codes.
-        off_data = log_data[np.uint8(53)]
         timestamps[n_on:] = [value["timestamp"] for value in off_data]
         triggers[n_on:] = np.uint8(0)  # All code 53 signals are OFF (Low)
 
@@ -878,16 +892,19 @@ class BreakInterface(ModuleInterface):
         # variable breaking power. If we ever use variable breaking power, this section would need to be expanded to
         # allow parsing code 54 events.
 
+        # Gets the data, defaulting to an empty list if the data is missing
+        engaged_data = log_data.get(np.uint8(52), [])
+        disengaged_data = log_data.get(np.uint8(53), [])
+
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although trigger
         # values are boolean, we translate them into the actual torque applied by the break in Newton centimeters and
         # store them as float 64 values.
-        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        total_length = len(engaged_data) + len(disengaged_data)
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         torques: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
 
         # Processes Engaged (code 52) triggers. When the motor is engaged, it applies the maximum possible torque to
         # the break.
-        engaged_data = log_data[np.uint8(52)]
         n_engaged = len(engaged_data)
         timestamps[:n_engaged] = [value["timestamp"] for value in engaged_data]  # Extracts timestamps for each value
         # Since engaged strength means that the torque is delivering maximum force, uses the maximum force in N cm as
@@ -897,7 +914,6 @@ class BreakInterface(ModuleInterface):
         # Processes Disengaged (code 53) triggers. Contrary to naive expectation, the torque of a disengaged break is
         # NOT zero. Instead, it is at least the same as the minimum break strength, likely larger due to all mechanical
         # couplings in the system.
-        disengaged_data = log_data[np.uint8(53)]
         timestamps[n_engaged:] = [value["timestamp"] for value in disengaged_data]
         torques[n_engaged:] = [self._minimum_break_strength for _ in disengaged_data]  # Already in rounded float 64
 
@@ -1240,10 +1256,20 @@ class ValveInterface(ModuleInterface):
 
         # Here, we only look for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
 
+        # The way this module is implemented guarantees there is at lesat code 53 message, but there may be no code
+        # 52 messages.
+        open_data = log_data.get(np.uint8(52), [])
+        closed_data = log_data[np.uint8(53)]
+
+        # If there were no valve open events, no water was dispensed. In this case, uses the first code 53 timestamp
+        # to report zero-volume reward and ends the runtime early.
+        if not open_data:
+            return np.array([closed_data[0]["timestamp"]], dtype=np.uint64), np.array([0], dtype=np.float64)
+
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although valve
         # trigger values are boolean, we translate them into the total volume of water, in microliters, dispensed to the
         # animal at each time-point and store that value as a float64.
-        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        total_length = len(open_data) + len(closed_data)
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         volume: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
 
@@ -1253,14 +1279,12 @@ class ValveInterface(ModuleInterface):
         # Open/Close cycle duration into the dispensed volume.
 
         # Extracts Open (Code 52) trigger codes. Statically assigns the value '1' to denote Open signals.
-        open_data = log_data[np.uint8(52)]
         n_on = len(open_data)
         timestamps[:n_on] = [value["timestamp"] for value in open_data]
         volume[:n_on] = np.uint8(1)  # All code 52 signals are Open (High)
 
         # Extracts Closed (Code 53) trigger codes.
-        off_data = log_data[np.uint8(53)]
-        timestamps[n_on:] = [value["timestamp"] for value in off_data]
+        timestamps[n_on:] = [value["timestamp"] for value in closed_data]
         volume[n_on:] = np.uint8(0)  # All code 53 signals are Closed (Low)
 
         # Sorts both arrays based on timestamps.
@@ -1562,6 +1586,9 @@ class LickInterface(ModuleInterface):
         # LickModule only sends messages with code 51 (Voltage level changed). Therefore, this extraction pipeline has
         # to apply the threshold filter, similar to how the real-time processing method.
 
+        # Unlike the other parsing methods, this one will always work as expected since it only deals with one code and
+        # that code is guaranteed to be received for each runtime.
+
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Lick sensor
         # voltage levels come in as uint16, but we later replace them with binary uint8 1 and 0 values.
         voltage_data = log_data[np.uint8(51)]
@@ -1857,18 +1884,33 @@ class TorqueInterface(ModuleInterface):
         # Reads the data logged during runtime as a dictionary of dictionaries.
         log_data: dict[Any, list[dict[str, Any]]] = self.extract_logged_data()
 
-        # Here, we only look for event-codes 51 (CW Torque) and event-codes 52 (CCW Torque). CCW torque is interpreted
+        # Here, we only look for event-codes 51 (CCW Torque) and event-codes 52 (CW Torque). CCW torque is interpreted
         # as torque in the positive direction, and CW torque is interpreted as torque in the negative direction.
+
+        # Gets the data, defaulting to an empty list if the data is missing
+        ccw_data = log_data.get(np.uint8(51), [])
+        cw_data = log_data.get(np.uint8(52), [])
+
+        # The way TorqueModule is implemented guarantees there is at least one CW code message with the displacement
+        # of 0 that is received by the PC. In the worst case scenario, there will be no CCW codes and the parsing will
+        # not work. To avoid that issue, we generate an artificial zero-code CCW value at the same timestamp + 1
+        # microsecond as the original CW zero-code value. This does not affect the accuracy of our data, just makes the
+        # code work for edge-cases.
+        if not ccw_data:
+            first_timestamp = cw_data[0]["timestamp"]
+            ccw_data = [{"timestamp": first_timestamp + 1, "data": 0}]
+        elif not cw_data:
+            first_timestamp = ccw_data[0]["timestamp"]
+            cw_data = [{"timestamp": first_timestamp + 1, "data": 0}]
 
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype. Although torque
         # values are uint16, we translate them into the actual torque applied by the animal in Newton centimeters and
         # store them as float 64 values.
-        total_length = len(log_data[np.uint8(51)]) + len(log_data[np.uint8(52)])
+        total_length = len(ccw_data) + len(cw_data)
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         torques: NDArray[np.float64] = np.empty(total_length, dtype=np.float64)
 
         # Processes CCW torques (Code 51). CCW torque is interpreted as positive torque
-        ccw_data = log_data[np.uint8(51)]
         n_ccw = len(ccw_data)
         timestamps[:n_ccw] = [value["timestamp"] for value in ccw_data]  # Extracts timestamps for each value
         # The values are initially using the uint16 type. This converts them to float64 and translates from raw ADC
@@ -1878,7 +1920,6 @@ class TorqueInterface(ModuleInterface):
         ]
 
         # Processes CW torques (Code 52). CW torque is interpreted as negative torque
-        cw_data = log_data[np.uint8(52)]
         timestamps[n_ccw:] = [value["timestamp"] for value in cw_data]  # CW data just fills remaining space after CCW.
         torques[n_ccw:] = [
             np.round(-np.float64(value["data"]) * self._torque_per_adc_unit, decimals=8) for value in cw_data
@@ -2026,21 +2067,30 @@ class ScreenInterface(ModuleInterface):
 
         # Here, we only look for event-codes 52 (pulse ON) and event-codes 53 (pulse OFF).
 
+        # The way the module is implemented guarantees there is at least one code 53 message. However, if screen state
+        # is never toggled, there may be no code 52 messages.
+        on_data = log_data.get(np.uint8(52), [])
+        off_data = log_data[np.uint8(53)]
+
+        # If there were no ON pulses, screens never changed state. In this case, shorts to returning the data for the
+        # initial screen state using the initial Off timestamp. Otherwise, parses the data
+        if not on_data:
+            # Return first timestamp with initial state
+            return np.array([off_data[0]["timestamp"]], dtype=np.uint64), np.array([self._initially_on], dtype=np.uint8)
+
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype and the trigger
         # values are boolean. We use uint8 as it has the same memory footprint as a boolean and allows us to use integer
         # types across the entire dataset.
-        total_length = len(log_data[np.uint8(52)]) + len(log_data[np.uint8(53)])
+        total_length = len(on_data) + len(off_data)
         timestamps: NDArray[np.uint64] = np.empty(total_length, dtype=np.uint64)
         triggers: NDArray[np.uint8] = np.empty(total_length, dtype=np.uint8)
 
         # Extracts ON (Code 52) trigger codes. Statically assigns the value '1' to denote ON signals.
-        on_data = log_data[np.uint8(52)]
         n_on = len(on_data)
         timestamps[:n_on] = [value["timestamp"] for value in on_data]
         triggers[:n_on] = np.uint8(1)  # All code 52 signals are ON (High)
 
         # Extracts OFF (Code 53) trigger codes.
-        off_data = log_data[np.uint8(53)]
         timestamps[n_on:] = [value["timestamp"] for value in off_data]
         triggers[n_on:] = np.uint8(0)  # All code 53 signals are OFF (Low)
 
