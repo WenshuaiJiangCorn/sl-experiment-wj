@@ -1,5 +1,5 @@
-"""This module provides the main MesoscopeExperiment class that abstracts working with Sun lab's mesoscope-VR system
-and SessionData class that abstracts working with experimental data."""
+"""This module provides the main MesoscopeExperiment and BehavioralTraining classes that abstract working with Sun
+lab's Mesoscope-VR system and SessionData class that abstracts working with acquired experimental data."""
 
 import os
 import warnings
