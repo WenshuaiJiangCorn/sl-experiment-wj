@@ -8,6 +8,7 @@ from ataraxis_data_structures import YamlConfig
 from dataclasses import is_dataclass
 import re 
 
+
 @dataclass
 class AttributeData:
     values: List[Optional[str]]
@@ -15,111 +16,44 @@ class AttributeData:
 
 @dataclass
 class ProtocolData:
-    def __init__(self, ID: str, date: str, protocol: str, genotype: str, sex: str, dob: str, cage: int, weight: float, ear_punch: str):
-        self._id = ID
-        self._date = date
-        self._protocol = protocol
-        self._sex = sex
-        self._genotype = genotype
-        self._dob = dob
-        self._cage = cage
-        self._weight = weight
-        self._ear_punch = ear_punch
-
-
-    def __post_init__(self):
-        """
-        Parses the date of surgery into the form ("%-m-%-d-%y").
-        """
-        if self.date:
-            try:
-                parsed_date = datetime.strptime(self.date, "%Y-%m-%d")
-                self.date = parsed_date.strftime("%-m-%-d-%y")
-
-            except ValueError:
-                pass
-
+    id: str
+    date: str
+    surgeon: str
+    protocol: str
+    cage: int
+    ear_punch: str 
+    sex: str
+    genotype: str
+    dob: str
+    weight: float
+    location_housed: str 
+    status: str
 
     def __repr__(self):
         """
-        Returns the representation string of an instance of the ProtocolData class. 
+        Returns the string representation of an instance of the ProtocolData class.
         """
-        return f"ProtocolData(ID:{self._id}, Date:{self._date}, Protocol:{self._protocol}, Cage #:{self._cage}, Genotype:{self._genotype}, Sex:{self._sex}, DOB:{self._dob}, Weight:{self._weight}, Ear punch:{self._ear_punch})"
-
-
-@dataclass
-class ImplantData:
-
-    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
-        """
-        Initializes the attributes of the InjectionData class for any column headers containing
-        the string "injection". Coordinates are parsed if the header contains "coordinates".
-        """
-        self._implant = [] 
-
-        for header, i in headers.items():
-            if "implant" in header.lower():
-                value = row[i]
-
-                if "coordinates" in header.lower():
-                    value = Coordinates.parse_coordinates(row[i]) 
-
-                attribute_name = f"_{header.lower()}"
-                setattr(self, attribute_name, value)
-                self._implant.append((header.lower(), value))
-                
-
-    def __repr__(self):
-        return f"ImplantData({self._implant})"
-
-
-    def get_injection_data(self) -> List[tuple[str, str]]:
-        return self._implant
-
-
-@dataclass
-class InjectionData:
-
-    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
-        """
-        Initializes the attributes of the InjectionData class for any column headers containing
-        the string "injection". 
-        """
-        self._injection = [] 
-
-        for header, i in headers.items():
-            if "injection" in header.lower():
-                value = row[i]
-
-                if "coordinates" in header.lower():
-                    value = Coordinates.parse_coordinates(row[i]) 
-
-                attribute_name = f"_{header.lower()}"
-                setattr(self, attribute_name, value)
-                self._injection.append((header.lower(), value))
-                
-
-    def __repr__(self):
-        return f"InjectionData{self._injection}"
-
-
-    def get_injection_data(self) -> List[tuple[str, str]]:
-        return self._injection
+        return (
+            f"ProtocolData(ID:{self.id}, Date:{self.date}, Surgeon:{self.surgeon}, Protocol:{self.protocol}, "
+            f"Cage #:{self.cage}, Ear punch:{self.ear_punch}, Sex:{self.sex}, Genotype:{self.genotype}, DOB:{self.dob}, "
+            f"Weight (g):{self.weight}, Location housed:{self.location_housed}, Status:{self.status})"
+        )
 
 
 @dataclass
 class Coordinates:
-
-    _AP: Optional[float] = None
-    _ML: Optional[float] = None
-    _DV: Optional[float] = None
+    AP: Optional[float] = None
+    ML: Optional[float] = None
+    DV: Optional[float] = None
 
     def __repr__(self):
-        return f"Coordinates(AP={self._AP}, ML={self._ML}, DV={self._DV})"
-    
-    
+        return f"Coordinates(AP={self.AP}, ML={self.ML}, DV={self.DV})"
+
     @staticmethod
     def extract_numerical(part: str) -> Optional[float]:
+        """
+        Extracts a numerical value from a string like "1.8 AP" or "2 ML".
+        """
         pattern = r"([-+]?\d*\.?\d+)\s*(AP|ML|DV)"
         match = re.search(pattern, part)
 
@@ -129,76 +63,172 @@ class Coordinates:
         else:
             return None
         
-        
+
     @staticmethod
     def parse_coordinates(coord_string: Optional[str]) -> 'Coordinates':
+        """
+        Parses a coordinate string like "1.8 AP, 2 ML, 0 DV" into a Coordinates object.
+        """
         coordinates = Coordinates()
-        
+
         if coord_string:
             coord_substring = [part.strip() for part in coord_string.split(",")]
 
             for part in coord_substring:
                 if "AP" in part.upper():
-                    coordinates._AP = Coordinates.extract_numerical(part)
+                    coordinates.AP = Coordinates.extract_numerical(part)
                 elif "ML" in part.upper():
-                    coordinates._ML = Coordinates.extract_numerical(part)
+                    coordinates.ML = Coordinates.extract_numerical(part)
                 elif "DV" in part.upper():
-                    coordinates._DV = Coordinates.extract_numerical(part)
+                    coordinates.DV = Coordinates.extract_numerical(part)
 
         return coordinates
     
 
 @dataclass
-class Drug:
-    # Should NOT be OPTIONAL 
-    LRS: Optional[float] = None
-    ketoprofen: Optional[float] = None
-    buprenorphin: Optional[float] = None
-    dexomethazone: Optional[float] = None
+class ImplantData:
+    implant1: Optional[str] = None
+    implant1_location: Optional[str] = None
+    implant1_coordinates: Optional[Coordinates] = None
+    implant2: Optional[str] = None
+    implant2_location: Optional[str] = None
+    implant2_coordinates: Optional[Coordinates] = None
 
+    def __init__(self, headers: Dict[str, int], row: tuple[Optional[str], ...]):
+    
+        implants = ("implant1", "implant2")
 
-    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
-        """
-        Initializes the attributes of the Drug dataclass for columns containing data for the LRS,
-        ketoprofen, buprenorphin and dexomethazone dosages.
-        """
-        drug_list = ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]
+        for implant in implants:
 
-        for header, i in headers.items():
-            updated_header = header.strip().lower().replace(" (ml)", "")
-            if any(drug in updated_header for drug in drug_list):
-                setattr(self, f"_{updated_header}", row[i])
+            if f"{implant}" in headers:
+                setattr(self, implant, row[headers[f"{implant}"]])
+
+                if f"{implant}_location" in headers:
+                    setattr(self, f"{implant}_location", row[headers[f"{implant}_location"]])
+
+                if f"{implant}_coordinates" in headers and row[headers[f"{implant}_coordinates"]]:
+                    coords_str = row[headers[f"{implant}_coordinates"]]
+                    setattr(
+                        self, f"{implant}_coordinates", Coordinates.parse_coordinates(coords_str))
+                    
+
+    def __repr__(self):
+        return (
+            f"Implant1: {self.implant1}, Implant1_location: {self.implant1_location}, "
+            f"Implant1_coordinates: {self.implant1_coordinates}, "
+            f"Implant2: {self.implant2}, Implant2_location: {self.implant2_location}, "
+            f"Implant2_coordinates: {self.implant2_coordinates}"
+        )
+    
+
+@dataclass
+class InjectionData:
+    injection1: Optional[str] = None
+    injection1_region: Optional[str] = None
+    injection1_coordinates: Optional[Coordinates] = None
+    injection2: Optional[str] = None
+    injection2_region: Optional[str] = None
+    injection2_coordinates: Optional[Coordinates] = None
+
+    def __init__(self, headers: Dict[str, int], row: tuple[Optional[str], ...]):
+    
+        injections = ("injection1", "injection2")
+
+        for injection in injections:
+    
+            if f"{injection}" in headers:
+                setattr(self, injection, row[headers[f"{injection}"]])
+
+                if f"{injection}_region" in headers:
+                    setattr(self, f"{injection}_region", row[headers[f"{injection}_region"]])
+
+                if f"{injection}_coordinates" in headers and row[headers[f"{injection}_coordinates"]]:
+                    coords_str = row[headers[f"{injection}_coordinates"]]
+                    setattr(
+                        self, f"{injection}_coordinates", Coordinates.parse_coordinates(coords_str))
+                    
+
+    def __repr__(self):
+        return (
+            f"injection1: {self.injection1}, injection1_location: {self.injection1_region}, "
+            f"injection1_coordinates: {self.injection1_coordinates}, "
+            f"injection2: {self.injection2}, injection2_location: {self.injection2_region}, "
+            f"injection2_coordinates: {self.injection2_coordinates}"
+        )
+    
+
+@dataclass
+class BrainData:
+    brain_location: str
+    brain_status: str
+
+    def __init__(self, headers: dict, row_values: list):
+        self.brain_location = row_values[headers["brain_location"]]
+        self.brain_status = row_values[headers["brain_status"]]
 
 
     def __repr__(self):
         """
-        Returns the representation string of an instance of the Drug class. The drug fields are 
-        initialized as a dictionary. 
+        Returns the brain location and brain status of the mouse post-surgery. 
         """
-        drug_fields = {}
+        return (
+            f"BrainData(Brain location:{self.brain_location}, Brain status:{self.brain_status})"
+        )
 
-        for key, value in self.__dict__.items():
-            if any(drug in key for drug in ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]):
-                drug_fields[f"{key.lstrip('_')}"] = value
-                
+
+@dataclass
+class Drug:
+    lrs: Optional[float] = None
+    ketoprofen: Optional[float] = None
+    buprenorphin: Optional[float] = None
+    dexomethazone: Optional[float] = None
+
+    def __init__(self, headers: Dict[str, int], row: tuple[Optional[str], ...]):
+        """
+        Initializes the attributes of the Drug class for columns containing data for LRS,
+        ketoprofen, buprenorphin, and dexomethazone dosages.
+        """
+        drug_list = ("lrs", "ketoprofen", "buprenorphin", "dexomethazone")
+
+        for header, i in headers.items():
+            updated_header = header.strip().lower().replace(" (ml)", "").replace("_(ml)", "")
+
+            if updated_header in drug_list:
+                value = row[i].strip() if row[i] else ""
+                setattr(self, updated_header, float(value) if value else None)
+
+
+    def __repr__(self):
+        """
+        Returns the representation string of an instance of the Drug class.
+        """
+        drug_fields = {key: getattr(self, key) for key in ["lrs", "ketoprofen", "buprenorphin", "dexomethazone"]}
         return f"Drug({drug_fields})"
     
 
 @dataclass
 class SurgeryData:
-    
     _protocol_data: ProtocolData
     _implant_data: ImplantData
     _injection_data: InjectionData
     _drug_data: Drug
+    _brain_data: BrainData
+    _start: str
+    _end: str
+    _duration: str 
     _surgery_notes: str
-
+    _post_op_notes: str
+    
     def __repr__(self):
         """
         Returns the combined representation string the ProtocolData, ImplantData, InjectionData classes and surgery notes. 
         """
-        return f"({self._protocol_data}, {self._implant_data}, {self._injection_data}, {self._drug_data}, {self._surgery_notes})"
-    
+        return (
+            f"({self._protocol_data}, {self._implant_data}, {self._injection_data}, "
+            f"{self._drug_data}, {self._start}, {self._end}, {self._duration}, "
+            f"{self._surgery_notes}, {self._post_op_notes}, {self._brain_data})"
+        )
+
 
 class ParseData:
     def __init__(self):
@@ -269,12 +299,11 @@ class ParseData:
             self.headers = {}
 
             for i, column in enumerate(first_row):
-                normalized_column = column.lower().replace(" ", "_").replace(":", "_")
+                normalized_column = column.lower().replace(" ", "_").replace(":", "_").replace("-", "_")
                 self.headers[normalized_column] = i
             
             # print("Parsed Headers:", self.headers)  
             self.data = [AttributeData(values=row) for row in replaced_data[1:]]
-
 
 
     def _get_mice(self, ID: str, date: str, protocol: str, genotype: str) -> List[SurgeryData]:
@@ -282,26 +311,32 @@ class ParseData:
             return []
 
         search_key = {key: value for key, value in zip(
-            ["id", "date", "protocol", "genotype"], [ID.lower(), date.lower(), protocol.lower(), genotype.lower()]
+            ["id", "date", "protocol", "genotype"], 
+            [ID.lower(), date.lower(), protocol.lower(), genotype.lower()]
         )}
+
+        column_mapping = {
+            "cage_#": "cage",
+            "weight_(g)": "weight"
+        }
 
         return [
             SurgeryData(
-                ProtocolData(
-                    ID=row.values[self._sheet_data.headers["id"]].strip().lower(),
-                    date=row.values[self._sheet_data.headers["date"]].strip().lower(),
-                    protocol=row.values[self._sheet_data.headers["protocol"]].strip().lower(),
-                    genotype=row.values[self._sheet_data.headers["genotype"]].strip().lower(),
-                    sex=row.values[self._sheet_data.headers["sex"]],
-                    dob=row.values[self._sheet_data.headers["dob"]],
-                    ear_punch=row.values[self._sheet_data.headers.get("ear_punch")],
-                    cage=row.values[self._sheet_data.headers["cage_#"]],
-                    weight=row.values[self._sheet_data.headers["weight_(g)"]]
-                ),
+                ProtocolData(**{
+                    key: row.values[self._sheet_data.headers[key]].strip().lower()
+                    for key in ["id", "date", "protocol", "genotype"]
+                }, **{
+                    column_mapping.get(key, key): row.values[self._sheet_data.headers[key]]
+                    for key in ["surgeon", "sex", "dob", "ear_punch", "cage_#", "weight_(g)", "status", "location_housed"]
+                }),
                 ImplantData(self._sheet_data.headers, row.values),
                 InjectionData(self._sheet_data.headers, row.values),
                 Drug(self._sheet_data.headers, row.values),
-                row.values[self._sheet_data.headers["surgery_notes"]]
+                BrainData(self._sheet_data.headers, row.values),
+                *[
+                    f"{key}: {row.values[self._sheet_data.headers[key]]}"
+                    for key in ["start", "end", "duration", "surgery_notes", "post_op_notes"]
+                ]
             )
             for row in self._sheet_data.data
             if all(row.values[self._sheet_data.headers[key]].strip().lower() == search_key[key] for key in search_key)
@@ -313,12 +348,12 @@ mice_data = ParseData()
 results = mice_data._get_mice(ID='2', genotype="WT", date="1-24-25", protocol="2024-0019")
 for result in results:
     print(result)
-    print(is_dataclass(result) and isinstance(result, SurgeryData)) 
-    # print(f"Cage: {result._protocol_data._cage}")
-    # print(f"Protocol: {result._protocol_data._genotype}")
-    # print(f"Injection 1 region: {result._injection_data._injection1_region}")
-    # print(f"Implant1: {result._implant_data._implant1}")
-    # print(f"AP: {result._injection_data._injection1_coordinates._AP}")
-    # print(result._surgery_notes)
+    # print(is_dataclass(result) and isinstance(result, SurgeryData)) 
+    # print(f"Protocol: {result._protocol_data.genotype}")
+    # print(f"Injection 1 region: {result._injection_data.injection1_region}")
+    # print(f"Injection 1 coords: {result._injection_data.injection1_coordinates.AP}")
+    # print(f"ketoprofen: {result._drug_data.ketoprofen}")
+    # print(result._post_op_notes)
+    # print(result._start)
   
 
