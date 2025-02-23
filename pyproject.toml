@@ -146,8 +146,8 @@ dev = [
 
 # Future support for CLI interface(s) can be realizied through this section.
 [project.scripts]
-sl-crc = "sl-experiment:cli:calculate_crc"
-sl-devices = "sl-experiment:cli:list_devices"
+sl-crc = "sl_experiment.cli:calculate_crc"
+sl-devices = "sl_experiment.cli:list_devices"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

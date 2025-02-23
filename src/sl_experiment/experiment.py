@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 from ataraxis_time import PrecisionTimer
 
-from module_interfaces import (
+from .module_interfaces import (
     TTLInterface,
     LickInterface,
     BreakInterface,
@@ -33,10 +33,10 @@ from ataraxis_video_system import (
     OutputPixelFormats,
 )
 
-from zaber_bindings import ZaberConnection, ZaberAxis
-from transfer_tools import transfer_directory
-from packaging_tools import calculate_directory_checksum
-from data_preprocessing import interpolate_data, process_mesoscope_directory
+from .zaber_bindings import ZaberConnection, ZaberAxis
+from .transfer_tools import transfer_directory
+from .packaging_tools import calculate_directory_checksum
+from .data_preprocessing import interpolate_data, process_mesoscope_directory
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import shutil
 from dataclasses import dataclass

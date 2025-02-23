@@ -1,9 +1,8 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR setup."""
 
-from zaber_motion import Tools
+from zaber_motion import Tools, Units
 from tabulate import tabulate
 from typing import Any
-from zaber_motion import Units
 from zaber_motion.ascii import Connection, Axis, Device, SettingConstants
 from dataclasses import dataclass, field
 from crc import Calculator, Configuration
