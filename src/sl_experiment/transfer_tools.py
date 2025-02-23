@@ -30,7 +30,7 @@ def _transfer_file(src_file: Path, source_directory: Path, dest_directory: Path)
     shutil.copy2(src_file, dest_file)
 
 
-def transfer_directory(source: Path, destination: Path, num_threads: int = 1) -> None:
+def transfer_directory(source: Path, destination: Path, num_threads: int = 1, verify_integrity: bool = True) -> None:
     """Copies the contents of the input directory tree from source to destination while preserving the folder
     structure.
 
@@ -43,10 +43,10 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
         done before copying the files.
 
         The method executes a multithreading copy operation. It does not clean up the source files. That job is handed
-        to the ProjectData class, which also executes the copy operation simultaneously for multiple destinations.
+        to the SessionData class, which also executes the copy operation simultaneously for multiple destinations.
 
-        The method verifies the integrity of the transferred files by rerunning the xxHash3-128 checksum calculation and
-        comparing the returned checksum to the one stored in the source directory. The method assumes that all input
+        if the method is configured to verify transferred file integrity, it reruns the xxHash3-128 checksum calculation
+        and compares the returned checksum to the one stored in the source directory. The method assumes that all input
         directories contain the 'ax_checksum.txt' file that stores the 'source' directory checksum at the highest level
         of the input directory tree.
 
@@ -57,6 +57,9 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
             type of transfer (local or remote) and is not guaranteed to provide improved transfer performance. For local
             transfers, setting this number above 1 will likely provide a performance boost. For remote transfers using
             a single TCP / IP socket (such as non-multichannel SMB protocol), the number should be set to 1.
+        verify_integrity: Determines whether to perform integrity verification for the transferred files. Note,
+            integrity verification is a time-consuming process and generally would not be a concern for most runtimes.
+            Therefore, it is often fine to disable this option to optimize method runtime speed.
 
     Raises:
         RuntimeError: If the transferred files do not pass the xxHas3-128 checksum integrity verification.
@@ -102,12 +105,13 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1) ->
             _transfer_file(file, source, destination)
 
     # Verifies the integrity of the transferred directory by rerunning xxHash3-128 calculation.
-    destination_checksum = calculate_directory_checksum(directory=destination, batch=False, save_checksum=False)
-    with open(file=source.joinpath("ax_checksum.txt"), mode="r") as local_checksum:
-        message = (
-            f"Checksum mismatch detected when transferring {Path(*source.parts[-6:])} to "
-            f"{Path(*destination.parts[-6:])}! The data was likely corrupted in transmission. User intervention "
-            f"required."
-        )
-        if not destination_checksum == local_checksum.readline().strip():
-            console.error(message=message, error=RuntimeError)
+    if verify_integrity:
+        destination_checksum = calculate_directory_checksum(directory=destination, batch=False, save_checksum=False)
+        with open(file=source.joinpath("ax_checksum.txt"), mode="r") as local_checksum:
+            message = (
+                f"Checksum mismatch detected when transferring {Path(*source.parts[-6:])} to "
+                f"{Path(*destination.parts[-6:])}! The data was likely corrupted in transmission. User intervention "
+                f"required."
+            )
+            if not destination_checksum == local_checksum.readline().strip():
+                console.error(message=message, error=RuntimeError)
