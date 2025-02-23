@@ -1256,7 +1256,7 @@ class ValveInterface(ModuleInterface):
 
         # Here, we only look for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
 
-        # The way this module is implemented guarantees there is at lesat code 53 message, but there may be no code
+        # The way this module is implemented guarantees there is at least one code 53 message, but there may be no code
         # 52 messages.
         open_data = log_data.get(np.uint8(52), [])
         closed_data = log_data[np.uint8(53)]
