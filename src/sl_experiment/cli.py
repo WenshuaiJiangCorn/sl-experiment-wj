@@ -15,7 +15,7 @@ def calculate_crc(string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
     calculator = _CRCCalculator()
     crc_checksum = calculator.string_checksum(string)
-    click.echo(f"The CRC32-XFER checksum for the input string '{string}' is: {crc_checksum}")headbar_path
+    click.echo(f"The CRC32-XFER checksum for the input string '{string}' is: {crc_checksum}")
 
 
 @click.command()
