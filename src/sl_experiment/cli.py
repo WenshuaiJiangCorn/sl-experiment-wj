@@ -4,7 +4,17 @@ library through the terminal."""
 import click
 from pathlib import Path
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
-from .experiment import _HeadBar, _LickPort
+from .experiment import _HeadBar, _LickPort, _MicroControllerInterfaces, _VideoSystems
+from ataraxis_base_utilities import console, LogLevel
+from ataraxis_data_structures import DataLogger
+
+# Precalculated default valve calibration data. This is used as the 'default' field for our mesoscope-vr CLI
+DEFAULT_VALVE_CALIBRATION_DATA = (
+    (15000, 1.8556),
+    (30000, 3.4844),
+    (45000, 7.1846),
+    (60000, 10.0854),
+)
 
 
 @click.command()
@@ -34,63 +44,295 @@ def list_devices(errors: bool) -> None:
 
 @click.command()
 @click.option(
-    "-zp",
-    "--zaber_positions_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    default="/home/cybermouse/Desktop/TestOut/zaber_positions.yaml",
+    "-o",
+    "--output_path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default="/home/cybermouse/Desktop/TestOut",
+    path_type=Path,
+    show_default=True,
     help=(
-        "The path to the zaber_positions.yaml file. If the file exists, it will be used during runtime to restore "
-        "motor positions. Also, this path will be used to save the motor positions extracted during runtime."
+        "The path to the directory used to save the output data. Typically, this would be the path to a local "
+        "temporary directory on the VRPC."
     ),
 )
 @click.option(
-    "-hp", "--headbar_port", type=str, default="/dev/ttyUSB0", help="The USB port used by the HeadBar controller."
+    "-ap",
+    "--actor_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM0",
+    help="The USB port used by the actor MicroController.",
 )
 @click.option(
-    "-lp", "--lickport_port", type=str, default="/dev/ttyUSB1", help="The USB port used by the LickPort controller."
+    "-sp",
+    "--sensor_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM1",
+    help="The USB port used by the sensor MicroController.",
 )
-def mesoscope_vr_cli(zaber_positions_path: Path, headbar_port: str, lickport_port: str):
+@click.option(
+    "-ep",
+    "--encoder_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM2",
+    help="The USB port used by the encoder MicroController.",
+)
+@click.option(
+    "-hp",
+    "--headbar_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyUSB0",
+    help="The USB port used by the HeadBar controller.",
+)
+@click.option(
+    "-lp",
+    "--lickport_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyUSB1",
+    help="The USB port used by the LickPort controller.",
+)
+@click.option(
+    "-fc",
+    "--face_camera",
+    type=int,
+    default=0,
+    show_default=True,
+    help="The index of the face camera in the list of all available Harvester-managed cameras.",
+)
+@click.option(
+    "-fc",
+    "--left_camera",
+    type=int,
+    default=0,
+    show_default=True,
+    help="The index of the left camera in the list of all available OpenCV-managed cameras.",
+)
+@click.option(
+    "-fc",
+    "--right_camera",
+    type=int,
+    default=2,
+    show_default=True,
+    help="The index of the right camera in the list of all available OpenCV-managed cameras.",
+)
+@click.option(
+    "-cp",
+    "--cti_path",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    path_type=Path,
+    default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
+    show_default=True,
+    help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
+)
+@click.option(
+    "-s",
+    "--screens_on",
+    is_flag=True,
+    default=False,
+    help="Communicates whether the VR screens are currently ON.",
+)
+@click.option(
+    "-vd"
+    "--valve_calibration_data",
+    type=(int, float),
+    multiple=True,
+    default=DEFAULT_VALVE_CALIBRATION_DATA,
+    show_default=True,
+    help=(
+        "Supplies the data used by the solenoid valve module to determine how long to keep the valve open to "
+        "deliver requested water volumes. Provides calibration data as pairs of numbers, for example: "
+        "--valve-calibration-data 15000 1.8556."
+    )
+)
+def mesoscope_vr_cli(
+    output_path: Path,
+    actor_port: str,
+    sensor_port: str,
+    encoder_port: str,
+    headbar_port: str,
+    lickport_port: str,
+    face_camera: int,
+    left_camera: int,
+    right_camera: int,
+    cti_path: Path,
+    screens_on: bool,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+):
     """Provides the CLI to control all Mesoscope-VR components used during experiment and training runtimes.
 
-    Primarily, this is used to calibrate zaber motors and interface with the solenoid valve between experiment and
-    training runtimes.
+    Primarily, this interface is used to calibrate zaber motors and interface with the solenoid valve between
+    experiment and training runtimes.
     """
 
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    # Initializes the data logger
+    logger = DataLogger(
+        output_directory=output_path,
+        instance_name="behavior",  # Creates behavior_log subfolder under raw_data
+        sleep_timer=0,
+        exist_ok=True,
+        process_count=1,
+        thread_count=10,
+    )
+    logger.start()
+
     # Initializes binding classes
-    headbar = _HeadBar(headbar_port, zaber_positions_path)
-    lickport = _LickPort(lickport_port, zaber_positions_path)
+    headbar = _HeadBar(headbar_port, output_path.joinpath("zaber_positions.yaml"))
+    lickport = _LickPort(lickport_port, output_path.joinpath("zaber_positions.yaml"))
+    microcontrollers = _MicroControllerInterfaces(
+        data_logger=logger,
+        screens_on=screens_on,
+        actor_port=actor_port,
+        sensor_port=sensor_port,
+        encoder_port=encoder_port,
+        valve_calibration_data=valve_calibration_data
+    )
+    microcontrollers.start()
+
+    cameras = _VideoSystems(
+        data_logger=logger,
+        output_directory=output_path,
+        face_camera_index=face_camera,
+        left_camera_index=left_camera,
+        right_camera_index=right_camera,
+        harvesters_cti_path=cti_path
+    )
+    cameras.start_face_camera()
+    cameras.start_body_cameras()
+
+    message = "Mesoscope-VR CLI: Activated."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    message = (
+        "Supported Zaber position commands: home, mount, calibrate, restore, park. Each command moves the HeadBar "
+        "and LickPort motors to the respective positions."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
+    message = (
+        "Supported Camera commands: save_face, save_body. Each command starts saving frames acquired by the face "
+        "camera or body cameras respectively."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
+    message = (
+        "Supported MicroController commands: encoder_on, encoder_off, break_on, break_off, screen_on, screen_off, "
+        "torque_on, torque_off, start_mesoscope, stop_mesoscope, frames_on, frames_off, lick_on, lick_off, open_valve, "
+        "close_valve, reference_valve, deliver_reward, calibrate_valve. Each command interfaces with its respective "
+        "hardware module."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
 
     while True:
-        command = input("Enter command: ")
-
-        if command == 'home':
+        command = input("Use 'q' to quit. Enter command: ")
+        if command == "home":
             headbar.prepare_motors(wait_until_idle=False)
             lickport.prepare_motors(wait_until_idle=True)
             headbar.wait_until_idle()
 
-        if command == 'mount':
+        if command == "mount":
             headbar.mount_position(wait_until_idle=False)
             lickport.mount_position(wait_until_idle=True)
             headbar.wait_until_idle()
 
-        if command == 'calibrate':
+        if command == "calibrate":
             headbar.calibrate_position(wait_until_idle=False)
             lickport.calibrate_position(wait_until_idle=True)
             headbar.wait_until_idle()
 
-        if command == 'restore':
+        if command == "restore":
             headbar.restore_position(wait_until_idle=False)
             lickport.restore_position(wait_until_idle=True)
             headbar.wait_until_idle()
 
-        if command == 'park':
+        if command == "park":
             headbar.park_position(wait_until_idle=False)
             lickport.park_position(wait_until_idle=True)
             headbar.wait_until_idle()
 
-        # Shuts down zaber bindings
-        headbar.park_position(wait_until_idle=False)
-        lickport.park_position(wait_until_idle=True)
-        headbar.wait_until_idle()
-        headbar.disconnect()
-        lickport.disconnect()
+        if command == "save_face":
+            cameras.save_face_camera_frames()
+
+        if command == "save_body":
+            cameras.save_body_camera_frames()
+
+        if command == "encoder_on":
+            microcontrollers.enable_encoder_monitoring()
+
+        if command == "encoder_off":
+            microcontrollers.disable_encoder_monitoring()
+
+        if command == "break_on":
+            microcontrollers.enable_break()
+
+        if command == "break_off":
+            microcontrollers.disable_break()
+
+        if command == "screen_on":
+            microcontrollers.enable_vr_screens()
+
+        if command == "screen_off":
+            microcontrollers.disable_vr_screens()
+
+        if command == "torque_on":
+            microcontrollers.enable_torque_monitoring()
+
+        if command == "torque_off":
+            microcontrollers.disable_torque_monitoring()
+
+        if command == "start_mesoscope":
+            microcontrollers.start_mesoscope()
+
+        if command == "stop_mesoscope":
+            microcontrollers.stop_mesoscope()
+
+        if command == "frames_on":
+            microcontrollers.enable_mesoscope_frame_monitoring()
+
+        if command == "frames_off":
+            microcontrollers.disable_mesoscope_frame_monitoring()
+
+        if command == "lick_on":
+            microcontrollers.enable_lick_monitoring()
+
+        if command == "lick_off":
+            microcontrollers.disable_lick_monitoring()
+
+        if command == "open_valve":
+            microcontrollers.open_valve()
+
+        if command == "close_valve":
+            microcontrollers.close_valve()
+
+        if command == "deliver_reward":
+            microcontrollers.deliver_reward()
+
+        if command == "reference_valve":
+            microcontrollers.reference_valve()
+
+        if command == "calibrate_valve":
+            # TODO: Implement all 4 calibration steps
+            pass
+
+        if command == "q":
+            break
+
+    # Shuts down zaber bindings
+    headbar.park_position(wait_until_idle=False)
+    lickport.park_position(wait_until_idle=True)
+    headbar.wait_until_idle()
+    headbar.disconnect()
+    lickport.disconnect()
+
+    # Shuts down microcontroller interfaces
+    microcontrollers.stop()
+
+    # Shuts down cameras
+    cameras.stop()
