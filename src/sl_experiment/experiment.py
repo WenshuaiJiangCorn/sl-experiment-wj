@@ -1099,6 +1099,21 @@ class _MicroControllerInterfaces:
         """Returns true if the mesoscope is currently scanning (acquiring) a frame."""
         return self._mesoscope_frame.pulse_status
 
+    def lick_status(self) -> tuple[bool, int]:
+        """Returns the current boolean lick sensor status and the associated ADC value.
+
+        The lick status is True when the lick sensor detects lick contact by reporting an above-threshold ADC value.
+        """
+        return self._lick.lick_status
+
+    def valve_status(self) -> tuple[bool, float]:
+        """Returns the current boolean valve status and the cumulative total volume of water in microliters dispensed
+        by the valve during runtime.
+
+        The valve status is True if the valve is currently open.
+        """
+        return self._reward.valve_status
+
 
 class _VideoSystems:
     """Interfaces with all cameras managed by Ataraxis Video System (AVS) classes that acquire and save camera frames
@@ -2728,7 +2743,7 @@ class MesoscopeExperiment:
         self._cameras.process_log_data(output_file=self._session_data.camera_timestamps_path)
 
 
-class BehavioralTraining:
+class _BehavioralTraining:
     """The base class for all behavioral training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
@@ -3144,6 +3159,13 @@ class BehavioralTraining:
         # Sets the tracker
         self._lick_training = False
 
+    def deliver_reward(self, reward_size: float = 0.5) -> None:
+        """Uses the solenoid valve to deliver the requested volume of water in microliters.
+
+        This method is used by the training runtimes to reward the animal with water as part of the training process.
+        """
+        self._microcontrollers.deliver_reward(volume=reward_size)
+
     def _process_log_data(self) -> None:
         """Extracts the data logged during runtime from .npz archive files and uses it to generate the
         behavioral_dataset.parquet file and the camera_timestamps.parquet file.
@@ -3226,40 +3248,48 @@ class BehavioralTraining:
         self._cameras.process_log_data(output_file=self._session_data.camera_timestamps_path)
 
 
-if __name__ == "__main__":
-    pass
-    # headbar_port: str = "/dev/ttyUSB0"
-    # lickport_port: str = "/dev/ttyUSB1"
-    #
-    # out_file = Path("/home/cybermouse/Desktop/TestOut/zaber_positions.yaml")
-    #
-    # headbar = _HeadBar(headbar_port, out_file)
-    # lickport = _LickPort(lickport_port, out_file)
-    #
-    # headbar.prepare_motors(wait_until_idle=False)
-    # lickport.prepare_motors(wait_until_idle=True)
-    # headbar.wait_until_idle()
-    # input("Homed")
-    #
-    # headbar.mount_position(wait_until_idle=False)
-    # lickport.mount_position(wait_until_idle=True)
-    # headbar.wait_until_idle()
-    # input("Mounted")
-    #
-    # headbar.calibrate_position(wait_until_idle=False)
-    # lickport.calibrate_position(wait_until_idle=True)
-    # headbar.wait_until_idle()
-    # input("Calibrated")
-    #
-    # headbar.restore_position(wait_until_idle=False)
-    # lickport.restore_position(wait_until_idle=True)
-    # headbar.wait_until_idle()
-    # input("Restored")
-    #
-    # headbar.park_position(wait_until_idle=False)
-    # lickport.park_position(wait_until_idle=True)
-    # headbar.wait_until_idle()
-    # input("Parked")
-    #
-    # headbar.disconnect()
-    # lickport.disconnect()
+def lick_training(
+    runtime: _BehavioralTraining,
+    average_reward_delay: int = 12,
+    maximum_deviation_from_mean: int = 6,
+    maximum_water_volume: float = 1.0,
+    maximum_training_time: int = 30,
+) -> None:
+    """Encapsulates the logic used to train animals how to operate the lick port."""
+
+    # Computes lower and upper boundaries for the reward delay
+    lower_bound = average_reward_delay - maximum_deviation_from_mean
+    upper_bound = average_reward_delay + maximum_deviation_from_mean
+
+    # Converts maximum volume to uL and divides it by 5 uL (reward size) to get the number of delays to sample from
+    # the delay distribution
+    num_samples = np.ceil((maximum_water_volume * 1000) / 5)
+
+    # Generates samples from a uniform distribution within delay bounds
+    samples = np.random.uniform(lower_bound, upper_bound, num_samples)
+
+    # Calculates cumulative training time for each sampled delay. This communicates the total time passed when each
+    # reward is delivered to the animal
+    cumulative_time = np.cumsum(samples)
+
+    # Finds the maximum number of samples that fits within the maximum training time. This assumes that to consume 1
+    # ml of water, the animal would likely need more time than the maximum allowed training time, so we need to slice
+    # the sampled delay array to fit within the time boundary.
+    max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time, side="right")
+
+    # Slices the samples array to make the total training time be roughly 30 minutes.
+    reward_delays = samples[:max_samples_idx]
+
+    # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
+    # putting the animal on the VR rig.
+    runtime.start()
+
+    # Configures all system components to support lick training
+    runtime.lick_train_state()
+
+    for delay in reward_delays:
+        pass
+
+    # Terminates the runtime. This also triggers data preprocessing and, after than, moves the data to storage
+    # locations.
+    runtime.stop()

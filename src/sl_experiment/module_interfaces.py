@@ -18,6 +18,7 @@ from ataraxis_communication_interface import (
 )
 from typing import Any
 from scipy.optimize import curve_fit
+from ataraxis_time import PrecisionTimer
 
 
 class EncoderInterface(ModuleInterface):
@@ -958,14 +959,17 @@ class ValveInterface(ModuleInterface):
         _calibration_cov
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
+        _reward_tracker: Stores the SharedMemoryArray that tracks the current valve status and the total volume of
+            water dispensed by the valve.
+        _cycle_timer: A PrecisionTimer instance initialized in the Communication process to track how long the valve
+            stays open during cycling.
     """
 
     def __init__(
         self, valve_calibration_data: tuple[tuple[int | float, int | float], ...], debug: bool = False
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
-        # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
-        data_codes: set[np.uint8] = {np.uint8(54)}
+        data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
         mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
 
         self._debug: bool = debug
@@ -1005,29 +1009,76 @@ class ValveInterface(ModuleInterface):
         # Stores the reward topic separately to make it accessible via property
         self._reward_topic: str = "Gimbl/Reward/"
 
+        # Precreates a shared memory array used to track and share valve state data. Index 1 is used to report the
+        # current valve state (open or closed). Index 1 tracks the total amount of water dispensed by the valve
+        self._reward_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"{self._module_type}_{self._module_id}_reward_tracker",
+            prototype=np.empty(shape=2, dtype=np.float64),
+            exist_ok=True,
+        )
+
+        # Placeholder
+        self._cycle_timer: PrecisionTimer | None = None
+
+    def __del__(self) -> None:
+        """Ensures the reward_tracker is properly cleaned up when the class is garbage-collected."""
+        self._reward_tracker.disconnect()
+        self._reward_tracker.destroy()
+
     def initialize_remote_assets(self) -> None:
-        """Not used."""
-        pass
+        """Connects to the reward tracker SharedMemoryArray and initializes the cycle PrecisionTimer from the
+        Communication process."""
+        self._reward_tracker.connect()
+        self._cycle_timer = PrecisionTimer("us")
 
     def terminate_remote_assets(self) -> None:
-        """Not used."""
-        return
+        """Disconnects from the reward tracker SharedMemoryArray."""
+        self._reward_tracker.disconnect()
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Processes incoming data.
 
-        Valve calibration events (code 54) are sent to the terminal via console. If the class was initialized in the
-        debug mode, Valve opening (code 52) and closing (code 52) codes are also sent to the terminal.
+        Valve calibration events (code 54) are sent to the terminal via console regardless of the debug flag. If the
+        class was initialized in the debug mode, Valve opening (code 52) and closing (code 52) codes are also sent to
+        the terminal. Also, updates the reward_tracker state (index 0) each time the valve sends a new state message
+        and for each Open and Close cycle updates the total volume of dispensed waters stored under index 1 of the
+        reward_tracker.
 
         Note:
-            Make sure the console is enabled before this method is called.
+            Make sure the console is enabled before calling this method.
         """
+
+        # Extracts the previous valve state from the storage array
+        previous_state = bool(self._reward_tracker.read_data(index=0, convert_output=True))
+
         if message.event == 54:
             console.echo(f"Valve Calibration: Complete")
         elif message.event == 52:
-            console.echo(f"Valve Opened")
+            if self._debug:
+                console.echo(f"Valve Opened")
+
+            # Updates the current valve state in the storage array
+            self._reward_tracker.write_data(index=0, data=np.uint64(1))
+
+            # Resets the cycle timer each time the valve transitions from closed to open
+            if not previous_state:
+                self._cycle_timer.reset()
         elif message.event == 53:
-            console.echo(f"Valve Closed")
+            if self._debug:
+                console.echo(f"Valve Closed")
+
+            # Updates the current valve state in the storage array
+            self._reward_tracker.write_data(index=1, data=np.uint64(0))
+
+            # Each time the valve transitions from open to closed state, records the period of time the valve was open
+            # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
+            # the tracker array.
+            if previous_state:
+                open_duration = self._cycle_timer.elapsed
+                delivered_volume = np.float64(
+                    self._scale_coefficient * np.power(open_duration, self._nonlinearity_exponent)
+                )
+                self._reward_tracker.write_data(index=1, data=delivered_volume)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """When called, this method statically sends a reward delivery command to the ValveModule instance.
@@ -1243,6 +1294,16 @@ class ValveInterface(ModuleInterface):
         """
         return self._calibration_cov
 
+    @property
+    def valve_status(self) -> tuple[bool, float]:
+        """Returns a tuple that stores the boolean valve status and the total amount of water in microliters dispensed
+        by the valve during the current runtime.
+
+        The valve status is True when the valve is open, and False otherwise.
+        """
+        status, total_volume = self._reward_tracker.read_data(index=(0, 2), convert_output=True)
+        return bool(status), total_volume
+
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
 
@@ -1352,9 +1413,9 @@ class LickInterface(ModuleInterface):
         _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
         _communication: Stores the communication class used to send data to Unity over MQTT.
-        _lick_tracker: Stores the SharedMemoryArray object used to communicate the current lick status to other
-            processes.
         _debug: Stores the debug flag.
+        _lick_tracker: Stores the SharedMemoryArray that stores teh current lick detection status and the ADC value
+            associated with the status.
     """
 
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None:
@@ -1381,12 +1442,10 @@ class LickInterface(ModuleInterface):
         # issues
         self._communication: MQTTCommunication | None = None
 
-        # Precreates a shared memory array used to track and share the current lick status (detected / not detected)
-        # with other processes. This tracking method is faster than using multiprocessing queue, so it is preferred for
-        # time-critical application. Queue is easier to use, though, so we use it for non-time-critical applications.
+        # Precreates a shared memory array used to track and share the current lick sensor status.
         self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_lick_tracker",
-            prototype=np.empty(shape=1, dtype=np.uint8),
+            prototype=np.empty(shape=2, dtype=np.uint16),
             exist_ok=True,
         )
 
@@ -1414,12 +1473,12 @@ class LickInterface(ModuleInterface):
 
         Lick data (code 51) comes in as a change in the voltage level detected by the sensor pin. This value is then
         evaluated against the _lick_threshold and if the value exceeds the threshold, a binary lick trigger is sent to
-        Unity via MQTT. Additionally, the method sends both rising and falling lick detection triggers to the
-        central process via the local SharedMemoryArray instance so that the data can be used for closed-loop
-        lick-valve control.
+        Unity via MQTT. Additionally, the method sends both rising and falling lick detection triggers and their ADC
+        values to the central process via the local SharedMemoryArray object so that the data can be used for
+        closed-loop lick-valve control.
 
         Notes:
-            If the class is initialized with debug mode, this method sends all received lick sensor voltages to the
+            If the class runs in debug mode, this method sends all received lick sensor voltages to the
             terminal via console. Make sure the console is enabled before calling this method.
         """
 
@@ -1437,13 +1496,15 @@ class LickInterface(ModuleInterface):
             # which acts as a binary lick trigger.
             self._communication.send_data(topic=self._sensor_topic, payload=None)
 
-            # Each time a lick is detected, the lick tracker is set to 1.
+            # Updates the tracker array with new data
+            self._lick_tracker.write_data(index=0, data=np.uint16(1))
             # noinspection PyTypeChecker
-            self._lick_tracker.write_data(index=0, data=1)
+            self._lick_tracker.write_data(index=0, data=detected_voltage)
         else:
-            # Each time the voltage value is below the threshold, sets the lick tracker to 0.
+            # Updates the tracker array with new data
+            self._lick_tracker.write_data(index=0, data=np.uint16(0))
             # noinspection PyTypeChecker
-            self._lick_tracker.write_data(index=0, data=0)
+            self._lick_tracker.write_data(index=0, data=detected_voltage)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -1550,15 +1611,13 @@ class LickInterface(ModuleInterface):
         return self._volt_per_adc_unit
 
     @property
-    def lick_status(self) -> bool:
-        """Returns the current lick status of the lick sensor.
+    def lick_status(self) -> tuple[bool, int]:
+        """Returns a tuple that stores the boolean lick detection status and the associated integer ADC value.
 
-        If the lick sensor is currently detecting a lick, it returns True. Otherwise, returns False.
+        The lick status is True when the sensor detects a tongue contact and False otherwise.
         """
-        if self._lick_tracker.read_data(index=0) == 1:
-            return True
-        else:
-            return False
+        status, adc_value = self._lick_tracker.read_data(index=(0, 2), convert_output=True)
+        return bool(status), adc_value
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.

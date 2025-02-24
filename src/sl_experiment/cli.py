@@ -439,3 +439,112 @@ def mesoscope_vr_cli(
     logger.compress_logs(
         remove_sources=True, verbose=True, verify_integrity=False, memory_mapping=False, compress=False
     )
+
+
+@click.command()
+@click.option(
+    "-o",
+    "--output_path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default="/home/cybermouse/Desktop/TestOut",
+    path_type=Path,
+    show_default=True,
+    help=(
+        "The path to the directory used to save the output data. Typically, this would be the path to a "
+        "temporary testing directory on the VRPC."
+    ),
+)
+@click.option(
+    "-ap",
+    "--actor_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM0",
+    help="The USB port used by the actor MicroController.",
+)
+@click.option(
+    "-sp",
+    "--sensor_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM1",
+    help="The USB port used by the sensor MicroController.",
+)
+@click.option(
+    "-ep",
+    "--encoder_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyACM2",
+    help="The USB port used by the encoder MicroController.",
+)
+@click.option(
+    "-hp",
+    "--headbar_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyUSB0",
+    help="The USB port used by the HeadBar controller.",
+)
+@click.option(
+    "-lp",
+    "--lickport_port",
+    type=str,
+    show_default=True,
+    default="/dev/ttyUSB1",
+    help="The USB port used by the LickPort controller.",
+)
+@click.option(
+    "-fc",
+    "--face_camera",
+    type=int,
+    default=0,
+    show_default=True,
+    help="The index of the face camera in the list of all available Harvester-managed cameras.",
+)
+@click.option(
+    "-fc",
+    "--left_camera",
+    type=int,
+    default=0,
+    show_default=True,
+    help="The index of the left camera in the list of all available OpenCV-managed cameras.",
+)
+@click.option(
+    "-fc",
+    "--right_camera",
+    type=int,
+    default=2,
+    show_default=True,
+    help="The index of the right camera in the list of all available OpenCV-managed cameras.",
+)
+@click.option(
+    "-cp",
+    "--cti_path",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    path_type=Path,
+    default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
+    show_default=True,
+    help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
+)
+@click.option(
+    "-s",
+    "--screens_on",
+    is_flag=True,
+    default=False,
+    help="Communicates whether the VR screens are currently ON.",
+)
+@click.option(
+    "-vd--valve_calibration_data",
+    type=(int, float),
+    multiple=True,
+    default=DEFAULT_VALVE_CALIBRATION_DATA,
+    show_default=True,
+    help=(
+        "Supplies the data used by the solenoid valve module to determine how long to keep the valve open to "
+        "deliver requested water volumes. Provides calibration data as pairs of numbers, for example: "
+        "--valve-calibration-data 15000 1.8556."
+    ),
+)
+def lick_training():
+    runtime = _BehavioralTraining()
