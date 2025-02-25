@@ -127,7 +127,7 @@ class EncoderInterface(ModuleInterface):
         self._communication = MQTTCommunication()
         self._communication.connect()
         self._speed_tracker.connect()
-        self._speed_timer = PrecisionTimer('ms')
+        self._speed_timer = PrecisionTimer("ms")
 
     def terminate_remote_assets(self) -> None:
         """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""

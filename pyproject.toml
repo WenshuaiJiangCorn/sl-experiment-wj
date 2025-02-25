@@ -58,7 +58,9 @@ dependencies = [
     "tqdm>=4,<5",
     "xxhash>=3,<4",
     "google-api-python-client>=2,<3",
-    "polars>=1,<2"
+    "polars>=1,<2",
+    "pyside6>=6,<7",
+    "pyqt6>=6,<7",
 ]
 
 [project.urls]
