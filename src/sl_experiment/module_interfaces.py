@@ -54,6 +54,13 @@ class EncoderInterface(ModuleInterface):
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
         _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
+        _speed_tracker: Stores the SharedMemoryArray that stores the average running speed of the animal.
+        _speed_timer: Stores the PrecisionTimer instance when the class is in the Communication process. The timer is
+            used to calculate the average running speed from the received encoder data.
+        _previous_position: Stores the previous absolute position of the animal in centimeters relative to the runtime
+            onset. This value is updated to the _current_position value every 100 milliseconds.
+        _current_position: Stores the current absolute position of the animal in centimeters relative to the runtime
+            onset. This value is updated each time the encoder sends data to the PC.
     """
 
     def __init__(
@@ -97,22 +104,43 @@ class EncoderInterface(ModuleInterface):
         # issues
         self._communication: MQTTCommunication | None = None
 
+        # Precreates a shared memory array used to track and share the running speed of the animal. This is primarily
+        # used for data visualization and during run training.
+        self._speed_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"{self._module_type}_{self._module_id}_speed_tracker",
+            prototype=np.empty(shape=1, dtype=np.float64),
+            exist_ok=True,
+        )
+
+        # Initializes additional assets used to calculate running speed
+        self._speed_timer: None | PrecisionTimer = None  # Placeholder
+        self._previous_position: np.float64 = np.float64(0)
+        self._current_position: np.float64 = np.float64(0)
+
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class and connects to the MQTT broker."""
+        """Initializes the MQTTCommunication class and connects to the MQTT broker.
+
+        Also connects to the speed_tracker SharedMemoryArray and initializes the PrecisionTimer used in running speed
+        calculation.
+        """
         # MQTT Client is used to send motion data to Unity over MQTT
         self._communication = MQTTCommunication()
         self._communication.connect()
+        self._speed_tracker.connect()
+        self._speed_timer = PrecisionTimer('ms')
 
     def terminate_remote_assets(self) -> None:
-        """Destroys the MQTTCommunication class."""
+        """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""
         self._communication.disconnect()
+        self._speed_tracker.disconnect()
 
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
         """Processes incoming data in real time.
 
         Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
         is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console, so make sure the console is
-        enabled.
+        enabled. Also calculates the average running speed of the animal using 100 ms smoothing window and sends it to
+        the central process via the _speed_tracker SharedMemoryArray.
 
         Notes:
             If debug mode is enabled, motion data is also converted to centimeters and printed via console.
@@ -136,13 +164,27 @@ class EncoderInterface(ModuleInterface):
             decimals=8,
         )
 
-        # If the class is in the debug mode, converts the received motion data into centimeters and prints it via
-        # console
+        # Converts the motion into centimeters
+        cm_motion = np.round(
+            a=np.float64(message.data_object) * self._cm_per_pulse * sign,
+            decimals=8,
+        )
+
+        # Aggregates all motion data into the _current_position attribute.
+        self._current_position += cm_motion
+
+        # Every 100 milliseconds, calculates the average running speed using the absolute difference between the current
+        # and previous positions of the animal and updates the _speed_tracker with the data.
+        elapsed_time = np.float64(self._speed_timer.elapsed)
+        self._speed_timer.reset()  # Resets to start timing the next window while processing the data
+        if elapsed_time > 100:
+            position_change = np.abs(self._current_position - self._previous_position, dtype=np.float64)
+            average_speed = np.float64(position_change / elapsed_time) * 1000  # In cm / s
+            self._speed_tracker.write_data(index=0, data=average_speed)
+            self._previous_position = self._current_position
+
+        # If the class is in the debug mode, prints the motion data via console
         if self._debug:
-            cm_motion = np.round(
-                a=np.float64(message.data_object) * self._cm_per_pulse * sign,
-                decimals=8,
-            )
             console.echo(message=f"Encoder moved {cm_motion} cm.")
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
@@ -274,6 +316,15 @@ class EncoderInterface(ModuleInterface):
     def cm_per_pulse(self) -> np.float64:
         """Returns the conversion factor to translate raw encoder pulse count to distance moved in centimeters."""
         return self._cm_per_pulse
+
+    @property
+    def speed_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray that stores the average running speed of the animal in centimeters per second.
+
+        The running speed is computed over a window of 100 milliseconds. It is stored under the index 0 of the tracker
+        and uses a float64 datatype.
+        """
+        return self._speed_tracker
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
@@ -1058,17 +1109,18 @@ class ValveInterface(ModuleInterface):
                 console.echo(f"Valve Opened")
 
             # Updates the current valve state in the storage array
-            self._reward_tracker.write_data(index=0, data=np.uint64(1))
+            self._reward_tracker.write_data(index=0, data=np.float64(1))
 
             # Resets the cycle timer each time the valve transitions from closed to open
             if not previous_state:
                 self._cycle_timer.reset()
+
         elif message.event == 53:
             if self._debug:
                 console.echo(f"Valve Closed")
 
             # Updates the current valve state in the storage array
-            self._reward_tracker.write_data(index=1, data=np.uint64(0))
+            self._reward_tracker.write_data(index=1, data=np.float64(0))
 
             # Each time the valve transitions from open to closed state, records the period of time the valve was open
             # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
@@ -1295,14 +1347,20 @@ class ValveInterface(ModuleInterface):
         return self._calibration_cov
 
     @property
-    def valve_status(self) -> tuple[bool, float]:
-        """Returns a tuple that stores the boolean valve status and the total amount of water in microliters dispensed
-        by the valve during the current runtime.
+    def delivered_volume(self) -> float:
+        """Returns the total volume of water, in microliters, delivered by the valve during the current runtime."""
+        return self._reward_tracker.read_data(index=1, convert_output=True)
 
-        The valve status is True when the valve is open, and False otherwise.
+    @property
+    def reward_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray that stores the current valve state and the total volume of water delivered
+        during the current runtime.
+
+        The valve state is stored under index 0, while the total delivered volume is stored under index 1. Both values
+        are stored as a float64 datatype. The valve state is 1 when the valve is open and 0 otherwise. The total
+        delivered volume is given in microliters.
         """
-        status, total_volume = self._reward_tracker.read_data(index=(0, 2), convert_output=True)
-        return bool(status), total_volume
+        return self._reward_tracker
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
@@ -1414,7 +1472,7 @@ class LickInterface(ModuleInterface):
             voltage in Volts.
         _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
-        _lick_tracker: Stores the SharedMemoryArray that stores teh current lick detection status and the ADC value
+        _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the ADC value
             associated with the status.
     """
 
@@ -1474,8 +1532,7 @@ class LickInterface(ModuleInterface):
         Lick data (code 51) comes in as a change in the voltage level detected by the sensor pin. This value is then
         evaluated against the _lick_threshold and if the value exceeds the threshold, a binary lick trigger is sent to
         Unity via MQTT. Additionally, the method sends both rising and falling lick detection triggers and their ADC
-        values to the central process via the local SharedMemoryArray object so that the data can be used for
-        closed-loop lick-valve control.
+        values to the central process so that the data can be used for closed-loop lick-valve control.
 
         Notes:
             If the class runs in debug mode, this method sends all received lick sensor voltages to the
@@ -1497,14 +1554,10 @@ class LickInterface(ModuleInterface):
             self._communication.send_data(topic=self._sensor_topic, payload=None)
 
             # Updates the tracker array with new data
-            self._lick_tracker.write_data(index=0, data=np.uint16(1))
-            # noinspection PyTypeChecker
-            self._lick_tracker.write_data(index=0, data=detected_voltage)
+            self._lick_tracker.write_data(index=(0, 2), data=np.array([1, detected_voltage], dtype=np.uint16))
         else:
             # Updates the tracker array with new data
-            self._lick_tracker.write_data(index=0, data=np.uint16(0))
-            # noinspection PyTypeChecker
-            self._lick_tracker.write_data(index=0, data=detected_voltage)
+            self._lick_tracker.write_data(index=(0, 2), data=np.array([0, detected_voltage], dtype=np.uint16))
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -1611,13 +1664,23 @@ class LickInterface(ModuleInterface):
         return self._volt_per_adc_unit
 
     @property
-    def lick_status(self) -> tuple[bool, int]:
-        """Returns a tuple that stores the boolean lick detection status and the associated integer ADC value.
+    def lick_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray that stores the current lick status and the corresponding ADC value detected
+        by the sensor.
 
-        The lick status is True when the sensor detects a tongue contact and False otherwise.
+        The lick status is stored under index 0, while the ADC readout is stored under index 1. Both values are stored
+        as an uint16 datatype.
+
+        The lick status is 1 when the sensor detects a tongue contact and 0 otherwise. The ADC value is between 0,
+        representing no voltage flowing through the sensor (no tongue to complete the sensor circuit) and 4095,
+        representing maximum system voltage of 3.3 V flowing through the sensor.
         """
-        status, adc_value = self._lick_tracker.read_data(index=(0, 2), convert_output=True)
-        return bool(status), adc_value
+        return self._lick_tracker
+
+    @property
+    def lick_status(self) -> bool:
+        """Returns True if the sensor is currently detecting a lick and False otherwise."""
+        return bool(self._lick_tracker.read_data(index=0))
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.

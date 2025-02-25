@@ -20,7 +20,7 @@ from .module_interfaces import (
     EncoderInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
-from ataraxis_data_structures import DataLogger, LogPackage, YamlConfig
+from ataraxis_data_structures import DataLogger, LogPackage, YamlConfig, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
 from ataraxis_video_system import (
@@ -1095,24 +1095,42 @@ class _MicroControllerInterfaces:
         """
         return self._reward.parse_logged_data()
 
+    @property
     def frame_acquisition_status(self) -> bool:
         """Returns true if the mesoscope is currently scanning (acquiring) a frame."""
         return self._mesoscope_frame.pulse_status
 
-    def lick_status(self) -> tuple[bool, int]:
-        """Returns the current boolean lick sensor status and the associated ADC value.
+    @property
+    def total_delivered_volume(self) -> float:
+        """Returns the total volume of water, in microliters, dispensed by the valve since runtime onset."""
+        return self._reward.delivered_volume
 
-        The lick status is True when the lick sensor detects lick contact by reporting an above-threshold ADC value.
+    @property
+    def speed_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray used to communicate the average speed of the animal during runtime.
+
+        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
+        running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
         """
-        return self._lick.lick_status
+        return self._wheel_encoder.speed_tracker
 
-    def valve_status(self) -> tuple[bool, float]:
-        """Returns the current boolean valve status and the cumulative total volume of water in microliters dispensed
-        by the valve during runtime.
+    @property
+    def lick_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray used to communicate the lick sensor status.
 
-        The valve status is True if the valve is currently open.
+        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
+        lick detection plots.
         """
-        return self._reward.valve_status
+        return self._lick.lick_tracker
+
+    @property
+    def valve_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray used to communicate the water reward valve state.
+
+        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
+        reward delivery plots.
+        """
+        return self._reward.reward_tracker
 
 
 class _VideoSystems:
@@ -2473,7 +2491,7 @@ class MesoscopeExperiment:
         while timeout_timer.elapsed < 2:
             # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
             # acquisition.
-            if self._microcontrollers.frame_acquisition_status():
+            if self._microcontrollers.frame_acquisition_status:
                 return
 
         # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.

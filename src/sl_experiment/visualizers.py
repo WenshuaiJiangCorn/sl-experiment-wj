@@ -6,6 +6,7 @@ import numpy as np
 
 # Forces matplotlib to use a linux-compatible backend
 import matplotlib
+
 matplotlib.use("Tkagg")
 
 from matplotlib.ticker import MaxNLocator
@@ -15,10 +16,10 @@ from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from ataraxis_base_utilities import console
 from ataraxis_time import PrecisionTimer
-from .module_interfaces import LickInterface, ValveInterface
+from ataraxis_data_structures import SharedMemoryArray
 
 # Updates plotting dictionaries to preferentially use bolded Arial text style and specific sizes for different
-# text elements:
+# text elements in plots:
 # General parameters and the font size for axes' tick numbers
 plt.rcParams.update({"font.family": "Arial", "font.weight": "normal", "xtick.labelsize": 18, "ytick.labelsize": 18})
 
@@ -122,8 +123,9 @@ class BehaviorVisualizer:
     def __init__(
         self,
         lick_training: bool,
-        lick_module: LickInterface,
-        valve_module: ValveInterface,
+        lick_tracker: SharedMemoryArray,
+        valve_tracker: SharedMemoryArray,
+        speed_tracker: SharedMemoryArray,
         time_window: int = 60,
         update_interval: int = 10,
         lick_threshold: int = 1000,
@@ -133,7 +135,7 @@ class BehaviorVisualizer:
 
         # Saves runtime configuration data to class attributes
         self._lick_training = lick_training
-        self._minimum_time = -time_window*1000  # Converts to milliseconds and flips to negative
+        self._minimum_time = -time_window * 1000  # Converts to milliseconds and flips to negative
         self._update_interval = update_interval
         self._lick_threshold = lick_threshold
 
@@ -146,10 +148,9 @@ class BehaviorVisualizer:
 
         # Extracts tracker arrays from input interfaces. This is sued to directly sample the data from these arrays
         # during runtime.
-        # noinspection PyProtectedMember
-        self._lick_tracker = lick_module._lick_tracker
-        # noinspection PyProtectedMember
-        self._valve_tracker = valve_module._reward_tracker
+        self._lick_tracker = lick_tracker
+        self._valve_tracker = valve_tracker
+        self._speed_tracker = speed_tracker
 
         # Precreates plot objects used for visualization
         self._fig: Optional[Figure] = None
@@ -265,11 +266,11 @@ class BehaviorVisualizer:
             linestyle="dashed",
             linewidth=1.5,
             alpha=0.7,
-            label="Lick Threshold"
+            label="Lick Threshold",
         )
 
         # Adds a legend to identify the threshold line
-        self._lick_axis.legend(fontdict=_fontdict_legend, loc='upper right')
+        self._lick_axis.legend(fontdict=_fontdict_legend, loc="upper right")
 
         # Configures plot layout
         self._lick_axis.set_title("Lick Sensor State", fontdict=_fontdict_title)
@@ -306,17 +307,18 @@ class BehaviorVisualizer:
 
         # Add text showing total water volume if available
         self._valve_axis.text(
-            0.05, 0.9,  # Position in axis coordinates (5% from the left, 90% from bottom)
+            0.05,
+            0.9,  # Position in axis coordinates (5% from the left, 90% from bottom)
             f"Total Volume: {self._total_volume:.2f} μL",
             transform=self._valve_axis.transAxes,
             fontdict=_fontdict_legend,
-            bbox=dict(facecolor='white', alpha=0.7)
+            bbox=dict(facecolor="white", alpha=0.7),
         )
 
         # Optimizes tick locations - forces y-ticks to be at 0 and 1 only
         self._valve_axis.xaxis.set_major_locator(MaxNLocator(nbins="auto", integer=True))
         self._valve_axis.yaxis.set_major_locator(plt.FixedLocator([0, 1]))
-        self._valve_axis.yaxis.set_major_formatter(plt.FixedFormatter(['Closed', 'Open']))
+        self._valve_axis.yaxis.set_major_formatter(plt.FixedFormatter(["Closed", "Open"]))
 
     # def _update_movement_plot(self, ax: Axes, t_min: float, t_max: float) -> None:
     #     """Update the movement plot.
@@ -360,18 +362,19 @@ class BehaviorVisualizer:
         """Samples the data currently stored inside the tracker SharedMemoryArray instances of the visualized modules
         and saves it in the visualizer memory.
 
-        This method is continuously called during _update_plot() runtime to replace the oldest datapoint with new data.
-        It rolls the arrays to ensure that array data is properly aligned to the fixed timestamp index array used during
-        visualization.
+        This method is continuously called during _update_plot() runtime to replace the oldest datapoint in memory with
+        new data. The method shifts the data in memory so that it is properly aligned with correct timestamps, depending
+        on the 'age' of the data.
         """
         # Rolls arrays by one position to the left, so that the first element becomes last
         self._valve_data = np.roll(self._valve_data, shift=1)
         self._lick_data = np.roll(self._lick_data, shift=1)
+        self._speed_data = np.roll(self._speed_data, shift=1)
 
         # Replaces the last element (which was previously the first) with new data
         self._valve_data[-1] = self._valve_tracker.read_data(index=0, convert_output=False)
         self._lick_data[-1] = self._lick_tracker.read_data(index=0, convert_output=False)
+        self._speed_data[-1] = self._speed_tracker.read_data(index=0, convert_output=False)
 
-        # Also updates the total volume dispensed by teh valve
+        # Also updates the total volume dispensed by the valve
         self._total_volume = self._valve_tracker.read_data(index=1, convert_output=False)
-
