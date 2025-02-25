@@ -2,6 +2,7 @@
 
 import numpy as np
 import matplotlib
+
 matplotlib.use("QtAgg")  # Uses QT backend for performance and compatibility with Linux
 
 from matplotlib.ticker import MaxNLocator
@@ -143,7 +144,7 @@ class BehaviorVisualizer:
         self._speed_tracker = speed_tracker
 
         # Precreates the structures used to store the displayed data during visualization runtime
-        self._timestamps = np.arange(start=0-self._time_window, stop=0.1, step=0.1, dtype=np.float32)
+        self._timestamps = np.arange(start=0 - self._time_window, stop=0.025, step=0.025, dtype=np.float32)
         self._lick_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
         self._valve_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
         self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float32)
@@ -175,7 +176,7 @@ class BehaviorVisualizer:
 
         # Creates the figure with three subplots sharing the same x-axis
         self._figure, (self._lick_axis, self._valve_axis, self._speed_axis) = plt.subplots(
-            3, 1, figsize=(10, 8), sharex=True, gridspec_kw={'hspace': 0.3, 'left': 0.15}
+            3, 1, figsize=(10, 8), dpi=10, sharex=True, gridspec_kw={"hspace": 0.3, "left": 0.15}
         )
 
         # Sets consistent y-label padding for all axes. This aligns y-axis names for all axes, making the figure more
@@ -248,21 +249,30 @@ class BehaviorVisualizer:
         """
 
         # Lick plot
-        self._lick_line, = self._lick_axis.plot(
-            self._timestamps, self._lick_data, drawstyle="steps-post", color=_plt_palette("red"),
-            linewidth=2, alpha=1.0, linestyle="solid"
+        (self._lick_line,) = self._lick_axis.plot(
+            self._timestamps,
+            self._lick_data,
+            drawstyle="steps-post",
+            color=_plt_palette("red"),
+            linewidth=2,
+            alpha=1.0,
+            linestyle="solid",
         )
 
         # Valve plot
-        self._valve_line, = self._valve_axis.plot(
-            self._timestamps, self._valve_data, drawstyle="steps-post", color=_plt_palette("blue"),
-            linewidth=2, alpha=1.0, linestyle="solid"
+        (self._valve_line,) = self._valve_axis.plot(
+            self._timestamps,
+            self._valve_data,
+            drawstyle="steps-post",
+            color=_plt_palette("blue"),
+            linewidth=2,
+            alpha=1.0,
+            linestyle="solid",
         )
 
         # Speed plot
-        self._speed_line, = self._speed_axis.plot(
-            self._timestamps, self._speed_data, color=_plt_palette("green"),
-            linewidth=2, alpha=1.0, linestyle="solid"
+        (self._speed_line,) = self._speed_axis.plot(
+            self._timestamps, self._speed_data, color=_plt_palette("green"), linewidth=2, alpha=1.0, linestyle="solid"
         )
 
     def update(self) -> None:
@@ -342,7 +352,6 @@ class BehaviorVisualizer:
 
 # Example usage
 if __name__ == "__main__":
-
     console.enable()
 
     console.echo("Starting BehaviorVisualizer simulation...")
@@ -359,11 +368,7 @@ if __name__ == "__main__":
     )
 
     # Create and initialize the visualizer
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick,
-        valve_tracker=valve,
-        speed_tracker=speed
-    )
+    visualizer = BehaviorVisualizer(lick_tracker=lick, valve_tracker=valve, speed_tracker=speed)
     visualizer.initialize()
 
     # Generate test data
@@ -413,4 +418,3 @@ if __name__ == "__main__":
     valve.destroy()
     speed.disconnect()
     speed.destroy()
-

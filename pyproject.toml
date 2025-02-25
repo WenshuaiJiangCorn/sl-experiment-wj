@@ -59,7 +59,6 @@ dependencies = [
     "xxhash>=3,<4",
     "google-api-python-client>=2,<3",
     "polars>=1,<2",
-    "pyside6>=6,<7",
     "pyqt6>=6,<7",
 ]
 
@@ -76,6 +75,7 @@ Documentation = "https://sl-experiment-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy>=2,<3",
+    "numba>=0,<1",
     "scipy>=1,<2",
     "tifffile>=2024,<2025",
     "imagecodecs>=2024,<2025",
@@ -84,7 +84,8 @@ condarun = [
     "zaber-motion>=7,<8",
     "tabulate>=0,<1",
     "click>=8,<9",
-    "polars>=1,<2"
+    "google-api-python-client>=2,<3",
+    "polars>=1,<2",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).

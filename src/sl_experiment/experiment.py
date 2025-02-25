@@ -37,6 +37,7 @@ from .zaber_bindings import ZaberConnection, ZaberAxis
 from .transfer_tools import transfer_directory
 from .packaging_tools import calculate_directory_checksum
 from .data_preprocessing import interpolate_data, process_mesoscope_directory
+from .visualizers import BehaviorVisualizer
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import shutil
 from dataclasses import dataclass
@@ -3177,12 +3178,26 @@ class _BehavioralTraining:
         # Sets the tracker
         self._lick_training = False
 
-    def deliver_reward(self, reward_size: float = 0.5) -> None:
+    def deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
 
         This method is used by the training runtimes to reward the animal with water as part of the training process.
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
+
+    @property
+    def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
+        """Returns the tracker SharedMemoryArrays for (in this order) the LickInterface, ValveInterface, and
+        EncoderInterface.
+
+        These arrays should be passed to the BehaviorVisualizer class to monitor the lick, valve and running speed data
+        in real time during training.
+        """
+        return (
+            self._microcontrollers.lick_tracker,
+            self._microcontrollers.valve_tracker,
+            self._microcontrollers.speed_tracker,
+        )
 
     def _process_log_data(self) -> None:
         """Extracts the data logged during runtime from .npz archive files and uses it to generate the
@@ -3268,12 +3283,15 @@ class _BehavioralTraining:
 
 def lick_training(
     runtime: _BehavioralTraining,
+    visualizer: BehaviorVisualizer,
     average_reward_delay: int = 12,
     maximum_deviation_from_mean: int = 6,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 30,
 ) -> None:
     """Encapsulates the logic used to train animals how to operate the lick port."""
+    delay_timer = PrecisionTimer("ms")
+    visualizer_timer = PrecisionTimer("ms")
 
     # Computes lower and upper boundaries for the reward delay
     lower_bound = average_reward_delay - maximum_deviation_from_mean
@@ -3295,8 +3313,10 @@ def lick_training(
     # the sampled delay array to fit within the time boundary.
     max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time, side="right")
 
-    # Slices the samples array to make the total training time be roughly 30 minutes.
-    reward_delays = samples[:max_samples_idx]
+    # Slices the samples array to make the total training time be roughly 30 minutes. Converts each delay from seconds
+    # to milliseconds and rounds to the nearest integer. This is done to make delays compatible with PrecisionTimer
+    # class.
+    reward_delays: NDArray[np.float64] = np.round(samples[:max_samples_idx] * 1000)
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
@@ -3305,8 +3325,23 @@ def lick_training(
     # Configures all system components to support lick training
     runtime.lick_train_state()
 
+    # Starts the visualizer process
+    visualizer.initialize()
+
+    # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
+    delay_timer.reset()
     for delay in reward_delays:
-        pass
+        # Visualization code goes here
+        while delay_timer.elapsed < delay:
+            # Updates the visualizer plot ~every 100 ms
+            if visualizer_timer.elapsed > 100:
+                visualizer_timer.reset()
+                visualizer.update()
+
+        # Delivers the reward via the lickport
+        delay_timer.reset()
+        runtime.deliver_reward()
+
 
     # Terminates the runtime. This also triggers data preprocessing and, after than, moves the data to storage
     # locations.
