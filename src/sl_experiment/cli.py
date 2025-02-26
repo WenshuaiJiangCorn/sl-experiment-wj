@@ -3,8 +3,12 @@ library through the terminal."""
 
 import click
 from pathlib import Path
+
+from sl_experiment.experiment import SessionData
+
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
-from .experiment import _HeadBar, _LickPort, _MicroControllerInterfaces, _VideoSystems, _ZaberPositions
+from .experiment import _HeadBar, _LickPort, _MicroControllerInterfaces, _BehavioralTraining, _VideoSystems, _ZaberPositions, lick_training_logic
+from .visualizers import BehaviorVisualizer
 from ataraxis_base_utilities import console, LogLevel
 from ataraxis_data_structures import DataLogger
 
@@ -48,7 +52,6 @@ def list_devices(errors: bool) -> None:
     "--output_path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     default="/home/cybermouse/Desktop/TestOut",
-    path_type=Path,
     show_default=True,
     help=(
         "The path to the directory used to save the output data. Typically, this would be the path to a "
@@ -123,7 +126,6 @@ def list_devices(errors: bool) -> None:
     "-cp",
     "--cti_path",
     type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    path_type=Path,
     default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
     show_default=True,
     help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
@@ -136,7 +138,8 @@ def list_devices(errors: bool) -> None:
     help="Communicates whether the VR screens are currently ON.",
 )
 @click.option(
-    "-vd--valve_calibration_data",
+    "-vd",
+    "--valve_calibration_data",
     type=(int, float),
     multiple=True,
     default=DEFAULT_VALVE_CALIBRATION_DATA,
@@ -443,16 +446,18 @@ def mesoscope_vr_cli(
 
 @click.command()
 @click.option(
-    "-o",
-    "--output_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/home/cybermouse/Desktop/TestOut",
-    path_type=Path,
-    show_default=True,
-    help=(
-        "The path to the directory used to save the output data. Typically, this would be the path to a "
-        "temporary testing directory on the VRPC."
-    ),
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project for which to run the lick training session.",
+)
+@click.option(
+    "-a",
+    "--animal",
+    type=str,
+    required=True,
+    help="The name of the animal for which to run the lick training session.",
 )
 @click.option(
     "-ap",
@@ -522,7 +527,6 @@ def mesoscope_vr_cli(
     "-cp",
     "--cti_path",
     type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    path_type=Path,
     default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
     show_default=True,
     help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
@@ -535,7 +539,8 @@ def mesoscope_vr_cli(
     help="Communicates whether the VR screens are currently ON.",
 )
 @click.option(
-    "-vd--valve_calibration_data",
+    "-vd",
+    "--valve_calibration_data",
     type=(int, float),
     multiple=True,
     default=DEFAULT_VALVE_CALIBRATION_DATA,
@@ -546,5 +551,45 @@ def mesoscope_vr_cli(
         "--valve-calibration-data 15000 1.8556."
     ),
 )
-def lick_training():
-    runtime = _BehavioralTraining()
+def lick_training(
+    animal: str,
+    project: str,
+    actor_port: str,
+    sensor_port: str,
+    encoder_port: str,
+    headbar_port: str,
+    lickport_port: str,
+    face_camera: int,
+    left_camera: int,
+    right_camera: int,
+    cti_path: str,
+    screens_on: bool,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+):
+    session_data = SessionData(animal_name=animal, project_name=project)
+    cti_path = Path(cti_path)
+
+    runtime = _BehavioralTraining(
+        session_data=session_data,
+        actor_port=actor_port,
+        sensor_port=sensor_port,
+        encoder_port=encoder_port,
+        headbar_port=headbar_port,
+        lickport_port=lickport_port,
+        face_camera_index=face_camera,
+        left_camera_index=left_camera,
+        right_camera_index=right_camera,
+        harvesters_cti_path=cti_path,
+        screens_on=screens_on,
+        valve_calibration_data=valve_calibration_data
+    )
+
+    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
+
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker,
+        valve_tracker=valve_tracker,
+        speed_tracker=speed_tracker
+    )
+
+    lick_training_logic(runtime=runtime, visualizer=visualizer, maximum_training_time=2)

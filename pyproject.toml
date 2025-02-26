@@ -60,6 +60,7 @@ dependencies = [
     "google-api-python-client>=2,<3",
     "polars>=1,<2",
     "pyqt6>=6,<7",
+    "pyarrow>=19,<20",
 ]
 
 [project.urls]
@@ -86,6 +87,7 @@ condarun = [
     "click>=8,<9",
     "google-api-python-client>=2,<3",
     "polars>=1,<2",
+    "pyarrow>=19,<20",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
@@ -152,6 +154,7 @@ dev = [
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
 sl-cli = "sl_experiment.cli:mesoscope_vr_cli"
+sl-lick-train = "sl_experiment.cli:lick_training"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

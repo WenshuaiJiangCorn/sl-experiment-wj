@@ -161,7 +161,7 @@ class _HeadBar:
                 "the HeadBar motors to the default animal mounting positions loaded from motor controller non-volatile "
                 "memory."
             )
-            warnings.warn(message)
+            console.echo(message=message, level=LogLevel.ERROR)
             self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
             self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
             self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
@@ -408,7 +408,7 @@ class _LickPort:
                 "Setting the LickPort motors to the default parking positions loaded from motor controller "
                 "non-volatile memory."
             )
-            warnings.warn(message)
+            console.echo(message=message, level=LogLevel.ERROR)
             self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
             self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
             self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
@@ -1293,6 +1293,7 @@ class _VideoSystems:
 
         # Starts frame acquisition. Note, this does NOT start frame saving.
         self._face_camera.start()
+        self._face_camera_started = True
 
         message = "Face camera frame acquisition: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1315,6 +1316,7 @@ class _VideoSystems:
         # Starts frame acquisition. Note, this does NOT start frame saving.
         self._left_camera.start()
         self._right_camera.start()
+        self._body_cameras_started = True
 
         message = "Body cameras frame acquisition: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1482,7 +1484,7 @@ class SessionData:
         project_name: str,
         animal_name: str,
         local_root_directory: Path = Path("/media/Data/Experiments"),
-        server_root_directory: Path = Path("/media/cybermouse/Extra Data/server/storage"),
+        server_root_directory: Path = Path("/media/cybermouse/Extra Data"),
         nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
         mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata"),
     ) -> None:
@@ -1829,8 +1831,8 @@ class SessionData:
 
         # Destinations include short destination names used for progress reporting
         destinations = (
-            (self._nas.joinpath(self._session_name, "raw_data"), "NAS"),
-            (self._server.joinpath(self._session_name, "raw_data"), "Server"),
+            (self._nas.joinpath("raw_data"), "NAS"),
+            (self._server.joinpath("raw_data"), "Server"),
         )
 
         # Updates the zaber_positions.yaml file stored inside the persistent directory for the project+animal
@@ -2349,15 +2351,15 @@ class MesoscopeExperiment:
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("51.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("051.mp4"),
             new=self._session_data.camera_frames_path.joinpath("face_camera.mp4"),
         )
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("62.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("062.mp4"),
             new=self._session_data.camera_frames_path.joinpath("left_camera.mp4"),
         )
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("73.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("073.mp4"),
             new=self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
         )
 
@@ -3011,6 +3013,9 @@ class _BehavioralTraining:
         self._cameras.save_face_camera_frames()
         self._cameras.save_body_camera_frames()
 
+        # Initializes communication with the microcontrollers
+        self._microcontrollers.start()
+
         # The setup procedure is complete.
         self._started = True
 
@@ -3108,15 +3113,15 @@ class _BehavioralTraining:
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("51.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("051.mp4"),
             new=self._session_data.camera_frames_path.joinpath("face_camera.mp4"),
         )
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("62.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("062.mp4"),
             new=self._session_data.camera_frames_path.joinpath("left_camera.mp4"),
         )
         os.renames(
-            old=self._session_data.camera_frames_path.joinpath("73.mp4"),
+            old=self._session_data.camera_frames_path.joinpath("073.mp4"),
             new=self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
         )
 
@@ -3281,7 +3286,7 @@ class _BehavioralTraining:
         self._cameras.process_log_data(output_file=self._session_data.camera_timestamps_path)
 
 
-def lick_training(
+def lick_training_logic(
     runtime: _BehavioralTraining,
     visualizer: BehaviorVisualizer,
     average_reward_delay: int = 12,
@@ -3300,7 +3305,7 @@ def lick_training(
 
     # Converts maximum volume to uL and divides it by 5 uL (reward size) to get the number of delays to sample from
     # the delay distribution
-    num_samples = np.ceil((maximum_water_volume * 1000) / 5)
+    num_samples = np.ceil((maximum_water_volume * 1000) / 5).astype(np.uint64)
 
     # Generates samples from a uniform distribution within delay bounds
     samples = np.random.uniform(lower_bound, upper_bound, num_samples)
@@ -3323,11 +3328,11 @@ def lick_training(
     # putting the animal on the VR rig.
     runtime.start()
 
-    # Configures all system components to support lick training
-    runtime.lick_train_state()
-
     # Starts the visualizer process
     visualizer.initialize()
+
+    # Configures all system components to support lick training
+    runtime.lick_train_state()
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
@@ -3352,5 +3357,3 @@ def lick_training(
     # Terminates the runtime. This also triggers data preprocessing and, after than, moves the data to storage
     # locations.
     runtime.stop()
-
-
