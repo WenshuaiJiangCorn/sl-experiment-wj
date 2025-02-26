@@ -3290,8 +3290,9 @@ def lick_training(
     maximum_training_time: int = 30,
 ) -> None:
     """Encapsulates the logic used to train animals how to operate the lick port."""
+
+    # Initializes the timer used to enforce reward delays
     delay_timer = PrecisionTimer("ms")
-    visualizer_timer = PrecisionTimer("ms")
 
     # Computes lower and upper boundaries for the reward delay
     lower_bound = average_reward_delay - maximum_deviation_from_mean
@@ -3316,7 +3317,7 @@ def lick_training(
     # Slices the samples array to make the total training time be roughly 30 minutes. Converts each delay from seconds
     # to milliseconds and rounds to the nearest integer. This is done to make delays compatible with PrecisionTimer
     # class.
-    reward_delays: NDArray[np.float64] = np.round(samples[:max_samples_idx] * 1000)
+    reward_delays: NDArray[np.uint64] = np.round(samples[:max_samples_idx] * 1000, decimals=0).astype(np.uint64)
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
@@ -3331,18 +3332,25 @@ def lick_training(
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
     for delay in reward_delays:
-        # Visualization code goes here
-        while delay_timer.elapsed < delay:
-            # Updates the visualizer plot ~every 100 ms
-            if visualizer_timer.elapsed > 100:
-                visualizer_timer.reset()
-                visualizer.update()
 
-        # Delivers the reward via the lickport
+        # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done during
+        # the delay has to go here
+        while delay_timer.elapsed < delay:
+
+            # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
+            # interest and appear visually smooth to human observers.
+            visualizer.update()
+
+        # Once the delay is up, triggers the solenoid valve to deliver water to the animal. Resets the delay timer just
+        # before delivering the reward to absorb communication delays (should be very small) into the next delay period.
         delay_timer.reset()
         runtime.deliver_reward()
 
+    # Closes the visualizer, as the runtime is now over
+    visualizer.close()
 
     # Terminates the runtime. This also triggers data preprocessing and, after than, moves the data to storage
     # locations.
     runtime.stop()
+
+

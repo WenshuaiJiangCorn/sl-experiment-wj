@@ -7,8 +7,9 @@ matplotlib.use("QtAgg")  # Uses QT backend for performance and compatibility wit
 
 from matplotlib.ticker import MaxNLocator
 import matplotlib.pyplot as plt
-from ataraxis_base_utilities import console, LogLevel
+from ataraxis_base_utilities import console
 from ataraxis_data_structures import SharedMemoryArray
+from ataraxis_time import PrecisionTimer
 
 # Updates plotting dictionaries to preferentially use Arial text style and specific sizes for different text elements
 # in plots:
@@ -109,6 +110,13 @@ class BehaviorVisualizer:
     Attributes:
         _time_window: Specifies the time window, in seconds, to visualize during runtime. Currently, this is statically
             set to 20 seconds.
+        _time_step: Specifies the interval, in milliseconds, at which to update the visualization plots. Currently, this
+            is statically set to 30 milliseconds. Due to the current configuration of the monitored hardware modules,
+            this value has to be below 35 milliseconds to guarantee that the visualization will not miss any data
+            events. This assumes that the central process is NOT doing any time-consuming operations that deadlock the
+            thread for longer than _time_step duration and does not account for rendering time.
+        _update_timer: The PrecisionTimer instance used to ensure that the figure is updated once every _time_step
+            milliseconds.
         _lick_tracker: Stores the lick_tracker SharedMemoryArray.
         _valve_tracker: Stores the valve_tracker SharedMemoryArray.
         _speed_tracker: Stores the speed_tracker SharedMemoryArray.
@@ -137,6 +145,8 @@ class BehaviorVisualizer:
     ) -> None:
         # Currently, the class is statically configured to visualize the sliding window of 20 seconds.
         self._time_window: int = 20
+        self._time_step: int = 30
+        self._update_timer = PrecisionTimer("ms")
 
         # Saves the input trackers to class attributes
         self._lick_tracker = lick_tracker
@@ -144,7 +154,9 @@ class BehaviorVisualizer:
         self._speed_tracker = speed_tracker
 
         # Precreates the structures used to store the displayed data during visualization runtime
-        self._timestamps = np.arange(start=0 - self._time_window, stop=0.025, step=0.025, dtype=np.float32)
+        self._timestamps = np.arange(
+            start=0 - self._time_window, stop=self._time_step / 1000, step=self._time_step / 1000, dtype=np.float32
+        )
         self._lick_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
         self._valve_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
         self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float32)
@@ -176,7 +188,7 @@ class BehaviorVisualizer:
 
         # Creates the figure with three subplots sharing the same x-axis
         self._figure, (self._lick_axis, self._valve_axis, self._speed_axis) = plt.subplots(
-            3, 1, figsize=(10, 8), dpi=10, sharex=True, gridspec_kw={"hspace": 0.3, "left": 0.15}
+            3, 1, figsize=(10, 8), sharex=True, gridspec_kw={"hspace": 0.3, "left": 0.15}
         )
 
         # Sets consistent y-label padding for all axes. This aligns y-axis names for all axes, making the figure more
@@ -284,13 +296,17 @@ class BehaviorVisualizer:
         data history.
 
         Notes:
-            The method does not have any time limiters and will update the figure each time it is called. For the most
-            accurate visualization, it is recommended to externally limit the calls to this method to ~ 10 Hz rate.
+            The method has an internal update frequency limiter. Therefore, to achieve optimal performance, call this
+            method as frequently as possible and rely on the internal limiter to force the specific update frequency.
         """
         # If the class is not initialized, carries out initialization
         if not self._initialized:
             self.initialize()
             return
+
+        if self._update_timer.elapsed < self._time_step:
+            return
+        self._update_timer.reset()
 
         # Replaces the oldest timestamp data with the current data.
         self._sample_data()
@@ -301,7 +317,7 @@ class BehaviorVisualizer:
         self._speed_line.set_data(self._timestamps, self._speed_data)
 
         # Renders the changes
-        self._figure.canvas.draw_idle()
+        self._figure.canvas.draw()
         self._figure.canvas.flush_events()
 
     def close(self) -> None:
@@ -348,73 +364,3 @@ class BehaviorVisualizer:
 
         # Speed is reported continuously, so we do not need to do any special processing here.
         self._speed_data[-1] = self._speed_tracker.read_data(index=0, convert_output=False)
-
-
-# Example usage
-if __name__ == "__main__":
-    console.enable()
-
-    console.echo("Starting BehaviorVisualizer simulation...")
-
-    # Create shared memory arrays for testing
-    lick = SharedMemoryArray.create_array(
-        name="fake_lick_data", prototype=np.zeros(shape=2, dtype=np.uint16), exist_ok=True
-    )
-    valve = SharedMemoryArray.create_array(
-        name="fake_valve_data", prototype=np.zeros(shape=2, dtype=np.float64), exist_ok=True
-    )
-    speed = SharedMemoryArray.create_array(
-        name="fake_speed_data", prototype=np.zeros(shape=1, dtype=np.float64), exist_ok=True
-    )
-
-    # Create and initialize the visualizer
-    visualizer = BehaviorVisualizer(lick_tracker=lick, valve_tracker=valve, speed_tracker=speed)
-    visualizer.initialize()
-
-    # Generate test data
-    samples = 2000
-
-    # Generate random data with some patterns
-    time_points = np.linspace(0, 20 * np.pi, samples)
-    licks = (np.sin(time_points / 2) > 0.7).astype(int)  # Occasional high spikes
-    valves = (np.sin(time_points / 5) > 0.8).astype(int)  # Occasional valve openings
-    speeds = 10 + 5 * np.sin(time_points / 10) + np.random.normal(0, 1, samples)  # Sinusoidal movement with noise
-
-    # Calculate cumulative volumes when valve is open
-    volumes = np.zeros_like(valves, dtype=float)
-    volume_per_activation = 2.5
-    for i in range(len(valves)):
-        if valves[i] == 1:
-            volumes[i] = volume_per_activation
-        if i > 0:
-            volumes[i] += volumes[i - 1]
-
-    # Main simulation loop - this would be your experiment/application loop
-    index = 0
-    while True:
-        # Updates visualization (non-blocking)
-        visualizer.update()
-
-        lick.write_data(index=0, data=licks[index])
-        valve.write_data(index=0, data=valves[index])
-        valve.write_data(index=1, data=volumes[index])
-        speed.write_data(index=0, data=speeds[index])
-        index += 1
-
-        # Print progress occasionally
-        if index % 200 == 0:
-            console.echo(f"Processed {index} samples", LogLevel.SUCCESS)
-
-        if index == samples:
-            break
-
-    print("Simulation complete")
-
-    visualizer.close()
-
-    lick.disconnect()
-    lick.destroy()
-    valve.disconnect()
-    valve.destroy()
-    speed.disconnect()
-    speed.destroy()
