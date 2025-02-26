@@ -3317,7 +3317,7 @@ def lick_training_logic(
     # Finds the maximum number of samples that fits within the maximum training time. This assumes that to consume 1
     # ml of water, the animal would likely need more time than the maximum allowed training time, so we need to slice
     # the sampled delay array to fit within the time boundary.
-    max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time, side="right")
+    max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time*60, side="right")
 
     # Slices the samples array to make the total training time be roughly 30 minutes. Converts each delay from seconds
     # to milliseconds and rounds to the nearest integer. This is done to make delays compatible with PrecisionTimer

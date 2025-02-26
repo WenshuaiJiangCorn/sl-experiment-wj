@@ -590,6 +590,7 @@ def lick_training(
         lick_tracker=lick_tracker,
         valve_tracker=valve_tracker,
         speed_tracker=speed_tracker
+
     )
 
     lick_training_logic(runtime=runtime, visualizer=visualizer, maximum_training_time=2)

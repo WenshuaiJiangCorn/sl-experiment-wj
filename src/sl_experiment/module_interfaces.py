@@ -1120,7 +1120,7 @@ class ValveInterface(ModuleInterface):
                 console.echo(f"Valve Closed")
 
             # Updates the current valve state in the storage array
-            self._reward_tracker.write_data(index=1, data=np.float64(0))
+            self._reward_tracker.write_data(index=0, data=np.float64(0))
 
             # Each time the valve transitions from open to closed state, records the period of time the valve was open
             # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
