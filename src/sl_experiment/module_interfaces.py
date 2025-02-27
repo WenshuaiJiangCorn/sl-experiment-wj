@@ -1137,7 +1137,7 @@ class ValveInterface(ModuleInterface):
                     self._scale_coefficient * np.power(open_duration, self._nonlinearity_exponent)
                 )
                 previous_volume = np.float64(self._reward_tracker.read_data(index=1, convert_output=False))
-                new_volume = previous_volume+delivered_volume
+                new_volume = previous_volume + delivered_volume
                 self._reward_tracker.write_data(index=1, data=new_volume)
         elif message.event == 54:
             console.echo(f"Valve Calibration: Complete")

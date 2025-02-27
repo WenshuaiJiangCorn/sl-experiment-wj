@@ -4,6 +4,7 @@ lab's Mesoscope-VR system and SessionData class that abstracts working with acqu
 import os
 import warnings
 from pathlib import Path
+import tempfile
 
 import numpy as np
 from numpy.typing import NDArray
@@ -44,6 +45,7 @@ from dataclasses import dataclass
 import polars as pl
 from typing import Any
 from tqdm import tqdm
+from pynput import keyboard
 
 
 @dataclass()
@@ -94,6 +96,7 @@ class _LickTrainingDescriptor(YamlConfig):
         Do not instantiate or use this class manually. It is designed to be written by the runtime management class
         during its stop() method runtime.
     """
+
     session_type: str = "lick_training"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
@@ -1454,6 +1457,66 @@ class _VideoSystems:
 
         # Saves as parquet with LZ4 compression
         df.write_parquet(file=output_file, compression="zstd", compression_level=22, use_pyarrow=True, statistics=True)
+
+
+class KeyboardListener:
+    """Monitors the keyboard input for the escape signal (ESC + 's' pressed at the same time).
+
+    This class is used during all training runtimes to allow the user to abort the runtime early. It is recommended to
+    use this class when designing custom experiment runtimes to provide similar functionality for all experiment
+    sessions.
+
+    Notes:
+        This monitor may pick up keyboard strokes directed at other applications during runtime. While our unique key
+        combination is likely to not be used elsewhere, exercise caution when using other applications alongside the
+        runtime code.
+
+    Attributes:
+        _exit_flag: Tracks whether the instance has detected the escape key sequence press.
+        _currently_pressed: Stores the keys that are currently being pressed.
+        _listener: The Listener instance used to monitor keyboard strokes.
+
+    """
+
+    def __init__(self):
+        self._exit_flag = False
+        self._currently_pressed = set()
+
+        # Set up listeners for both press and release
+        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._listener.daemon = True
+        self._listener.start()
+
+    def _on_press(self, key):
+        """Adds newly pressed keys to the storage set and determines whether the pressed key combination matches the
+        shutdown combination.
+
+        This method is used as the 'on_press' callback for the Listener instance.
+        """
+        # Updates the set with current data
+        self._currently_pressed.add(str(key))
+
+        # Checks if both ESC and 's' are in the currently pressed set and, if so, flips the exirt_flag.
+        if "Key.esc" in self._currently_pressed and "'s'" in self._currently_pressed:
+            self._exit_flag = True
+
+    def _on_release(self, key):
+        """Removes no longer pressed keys from the storage set.
+
+        This method is used as the 'on_release' callback for the Listener instance.
+        """
+        # Removes no longer pressed keys from the set
+        key_str = str(key)
+        if key_str in self._currently_pressed:
+            self._currently_pressed.remove(key_str)
+
+    @property
+    def exit_signal(self):
+        """Returns True if the listener has detected escape and 's' keys pressed together.
+
+        This indicates that the user has requested the application to exit.
+        """
+        return self._exit_flag
 
 
 class SessionData:
@@ -3394,9 +3457,6 @@ def lick_training_logic(
         training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
         functions are only required when training the animals without Unity.
     """
-    message = f"Initializing lick training runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Initializes the timer used to enforce reward delays
     delay_timer = PrecisionTimer("us")
 
@@ -3458,11 +3518,14 @@ def lick_training_logic(
     # Configures all system components to support lick training
     runtime.lick_train_state()
 
+    # Initializes the listener instance used to detect training abort signals sent via the keyboard.
+    listener = KeyboardListener
+
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
     for delay in tqdm(
         reward_delays,
-        desc="Running lick training",
+        desc="Running lick training, press 'Esc + s' to abort",
         unit="reward",
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}<{remaining}]",
     ):
@@ -3472,6 +3535,14 @@ def lick_training_logic(
             # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
             # interest and appear visually smooth to human observers.
             visualizer.update()
+
+            # If the listener detects the default abort sequence ('Esc and s'), terminates the runtime.
+            if listener.exit_signal:
+                message = (
+                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
+                    "procedure."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
 
         # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the next
         # reward delay
@@ -3492,3 +3563,193 @@ def lick_training_logic(
     # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
     # destinations.
     runtime.stop()
+
+
+def calibrate_valve_logic(
+    actor_port: str,
+    headbar_port: str,
+    lickport_port: str,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+):
+    """Encapsulates the logic used to fill, empty, check, and calibrate the water valve.
+
+    This runtime allows interfacing with the water valve outside of training and experiment runtime contexts. Usually,
+    this is done at the beginning and the end of each experimental / training day to ensure the valve operates smoothly
+    during runtimes.
+
+    Args:
+        actor_port: The USB port to which the Actor Ataraxis Micro Controller (AMC) is connected.
+        headbar_port: The USB port used by the headbar Zaber motor controllers (devices).
+        lickport_port: The USB port used by the lickport Zaber motor controllers (devices).
+        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
+            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
+            microliters.
+
+    Notes:
+        This runtime will position the Zaber motors to facilitate working with the valve.
+    """
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    message = f"Initializing calibration assets..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
+    with tempfile.TemporaryDirectory(prefix="sl_valve_") as output_path:
+        output_path = Path(output_path)
+
+        # Initializes the data logger. Due to how the MicroControllerInterface class is implemented, this is required
+        # even for runtimes that do not need to save data.
+        logger = DataLogger(
+            output_directory=output_path,
+            instance_name="temp",
+            exist_ok=True,
+            process_count=1,
+            thread_count=10,
+        )
+        logger.start()
+
+        message = f"DataLogger: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes HeadBar and LickPort binding classes
+        headbar = _HeadBar(headbar_port, output_path.joinpath("zaber_positions.yaml"))
+        lickport = _LickPort(lickport_port, output_path.joinpath("zaber_positions.yaml"))
+
+        message = f"Zaber controllers: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes the Actor MicroController with the valve module. Ignores all other modules at this time.
+        valve: ValveInterface = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+        controller: MicroControllerInterface = MicroControllerInterface(
+            controller_id=np.uint8(101),
+            microcontroller_serial_buffer_size=8192,
+            microcontroller_usb_port=actor_port,
+            data_logger=logger,
+            module_interfaces=(valve,),
+        )
+
+        message = f"Actor MicroController: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
+        # proceed with motor movements.
+        message = (
+            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
+            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
+            "mesoscope and / or HARM the animal."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
+        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
+        # with each other, so it is safe to move both assemblies at the same time.
+        headbar.prepare_motors(wait_until_idle=False)
+        lickport.prepare_motors(wait_until_idle=True)
+        headbar.wait_until_idle()
+
+        # Moves the motors in calibration position.
+        headbar.calibrate_position(wait_until_idle=False)
+        lickport.calibrate_position(wait_until_idle=True)
+        headbar.wait_until_idle()
+
+        message = f"HeadBar and LickPort motors: Positioned for calibration runtime."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Notifies the user about supported calibration commands
+        message = (
+            "Supported Calibration commands: open, close, reference, reward, "
+            "calibrate_15, calibrate_30, calibrate_45, calibrate__60."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+
+        while True:
+            command = input("Use 'q' to quit. Enter command: ")
+
+            if command == "open":
+                message = f"Opening valve."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.toggle(state=True)
+
+            if command == "close":
+                message = f"Closing valve."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.toggle(state=False)
+
+            if command == "reward":
+                message = f"Delivering 5 uL water reward."
+                console.echo(message=message, level=LogLevel.INFO)
+                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
+                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.send_pulse()
+
+            if command == "reference":
+                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure."
+                console.echo(message=message, level=LogLevel.INFO)
+                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
+                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.calibrate()
+
+            if command == "calibrate_15":
+                message = f"Running 15 ms pulse valve calibration."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(15000))  # 15 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_30":
+                message = f"Running 30 ms pulse valve calibration."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(30000))  # 30 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_45":
+                message = f"Running 45 ms pulse valve calibration."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(45000))  # 45 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_60":
+                message = f"Running 60 ms pulse valve calibration."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
+                valve.calibrate()
+
+            if command == "q":
+                message = f"Terminating valve calibration runtime."
+                console.echo(message=message, level=LogLevel.INFO)
+                break
+
+        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
+        message = (
+            "Preparing to reset the HeadBar and LickPort motors. Remove all objects sued during calibration, such as "
+            "water collection flasks, from the Mesoscope-VR cage."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
+        # Shuts down zaber bindings
+        headbar.park_position(wait_until_idle=False)
+        lickport.park_position(wait_until_idle=True)
+        headbar.wait_until_idle()
+        headbar.disconnect()
+        lickport.disconnect()
+
+        message = f"HeadBar and LickPort connections: terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Shuts down microcontroller interfaces
+        controller.stop()
+
+        message = f"Actor MicroController: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Stops the data logger
+        logger.stop()
+
+        message = f"DataLogger: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # The logs will be cleaned up by deleting the temporary directory when this runtime exits.
