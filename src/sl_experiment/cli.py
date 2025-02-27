@@ -7,8 +7,15 @@ from pathlib import Path
 from sl_experiment.experiment import SessionData
 
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
-from .experiment import _HeadBar, _LickPort, _MicroControllerInterfaces, _BehavioralTraining, _VideoSystems, _ZaberPositions, lick_training_logic
-from .visualizers import BehaviorVisualizer
+from .experiment import (
+    _HeadBar,
+    _LickPort,
+    _MicroControllerInterfaces,
+    _BehavioralTraining,
+    _VideoSystems,
+    _ZaberPositions,
+    lick_training_logic,
+)
 from ataraxis_base_utilities import console, LogLevel
 from ataraxis_data_structures import DataLogger
 
@@ -460,6 +467,42 @@ def mesoscope_vr_cli(
     help="The name of the animal for which to run the lick training session.",
 )
 @click.option(
+    "-ad",
+    "--average_delay",
+    type=int,
+    show_default=True,
+    default=12,
+    help="The average number of seconds the has to pass between two consecutive reward deliveries during training.",
+)
+@click.option(
+    "-md",
+    "--maximum_deviation",
+    type=int,
+    show_default=True,
+    default=6,
+    help=(
+        "The maximum number of seconds that can be used to increase or decrease the delay between two consecutive "
+        "reward deliveries during training. This is used to generate delays using a pseudorandom sampling, to remove "
+        "trends in reward delivery patterns.",
+    ),
+)
+@click.option(
+    "-mv",
+    "--maximum_volume",
+    type=float,
+    show_default=True,
+    default=1.0,
+    help="The maximum volume of water, in milliliters, that can be delivered during training.",
+)
+@click.option(
+    "-mt",
+    "--maximum_time",
+    type=int,
+    show_default=True,
+    default=40,
+    help="The maximum time to run the training, in minutes.",
+)
+@click.option(
     "-ap",
     "--actor_port",
     type=str,
@@ -551,9 +594,37 @@ def mesoscope_vr_cli(
         "--valve-calibration-data 15000 1.8556."
     ),
 )
+@click.option(
+    "-lr",
+    "--local_root_path",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    default="/media/Data/Experiments",
+    show_default=True,
+    help="The path to the root directory on the local machine (VRPC) that stores experiment project folders.",
+)
+@click.option(
+    "-sp",
+    "--server_root_path",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    default="/media/cybermouse/Extra Data/server/storage",
+    show_default=True,
+    help="The path to the root directory on the BioHPC lab server that stores experiment project folders.",
+)
+@click.option(
+    "-np",
+    "--nas_root_path",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    default="/home/cybermouse/nas/rawdata",
+    show_default=True,
+    help="The path to the root directory on the NAS that stores experiment project folders.",
+)
 def lick_training(
     animal: str,
     project: str,
+    average_delay: int,
+    maximum_deviation: int,
+    maximum_volume: int,
+    maximum_time: int,
     actor_port: str,
     sensor_port: str,
     encoder_port: str,
@@ -565,10 +636,34 @@ def lick_training(
     cti_path: str,
     screens_on: bool,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+    local_root_path,
+    server_root_path,
+    nas_root_path,
 ):
-    session_data = SessionData(animal_name=animal, project_name=project)
-    cti_path = Path(cti_path)
+    """Runs a single lick training session for the specified animal and project combination, using the input
+    parameters.
 
+    This CLI command allows running lick training sessions via the terminal. The only parameters that have to be
+    provided at each runtime are the animal and project name. Every other parameter can be overwritten, but has been
+    statically configured to work for our current Mesoscope-VR system configuration.
+    """
+    # Converts input paths to Pth instances.
+    cti_path = Path(cti_path)
+    local_root_path = Path(local_root_path)
+    server_root_path = Path(server_root_path)
+    nas_root_path = Path(nas_root_path)
+
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_name=animal,
+        project_name=project,
+        generate_mesoscope_paths=False,  # No need for mesoscope when running lick training.
+        local_root_directory=local_root_path,
+        server_root_directory=server_root_path,
+        nas_root_directory=nas_root_path,
+    )
+
+    # Initializes the main runtime interface class.
     runtime = _BehavioralTraining(
         session_data=session_data,
         actor_port=actor_port,
@@ -581,16 +676,14 @@ def lick_training(
         right_camera_index=right_camera,
         harvesters_cti_path=cti_path,
         screens_on=screens_on,
-        valve_calibration_data=valve_calibration_data
+        valve_calibration_data=valve_calibration_data,
     )
 
-    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker,
-        valve_tracker=valve_tracker,
-        speed_tracker=speed_tracker
-
+    # Runs the lick training session.
+    lick_training_logic(
+        runtime=runtime,
+        average_reward_delay=average_delay,
+        maximum_deviation_from_mean=maximum_deviation,
+        maximum_water_volume=maximum_volume,
+        maximum_training_time=maximum_time,
     )
-
-    lick_training_logic(runtime=runtime, visualizer=visualizer, maximum_training_time=2)

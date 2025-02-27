@@ -117,6 +117,11 @@ class EncoderInterface(ModuleInterface):
         self._previous_position: np.float64 = np.float64(0)
         self._current_position: np.float64 = np.float64(0)
 
+    def __del__(self) -> None:
+        """Ensures the speed_tracker is properly cleaned up when the class is garbage-collected."""
+        self._speed_tracker.disconnect()
+        self._speed_tracker.destroy()
+
     def initialize_remote_assets(self) -> None:
         """Initializes the MQTTCommunication class and connects to the MQTT broker.
 
@@ -321,7 +326,7 @@ class EncoderInterface(ModuleInterface):
     def speed_tracker(self) -> SharedMemoryArray:
         """Returns the SharedMemoryArray that stores the average running speed of the animal in centimeters per second.
 
-        The running speed is computed over a window of 100 milliseconds. It is stored under the index 0 of the tracker
+        The running speed is computed over a window of 100 milliseconds. It is stored under index 0 of the tracker
         and uses a float64 datatype.
         """
         return self._speed_tracker
@@ -490,7 +495,7 @@ class TTLInterface(ModuleInterface):
         if self._report_pulses:
             if message.event == 52:
                 self._pulse_tracker.write_data(index=0, data=np.uint8(1))
-            elif message.event == 52:
+            elif message.event == 53:
                 self._pulse_tracker.write_data(index=0, data=np.uint8(0))
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
@@ -1060,8 +1065,8 @@ class ValveInterface(ModuleInterface):
         # Stores the reward topic separately to make it accessible via property
         self._reward_topic: str = "Gimbl/Reward/"
 
-        # Precreates a shared memory array used to track and share valve state data. Index 1 is used to report the
-        # current valve state (open or closed). Index 1 tracks the total amount of water dispensed by the valve
+        # Precreates a shared memory array used to track and share valve state data. Index 0 is used to report the
+        # current valve state (open or closed). Index 1 tracks the total amount of water dispensed by the valve.
         self._reward_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_reward_tracker",
             prototype=np.empty(shape=2, dtype=np.float64),
@@ -1102,16 +1107,14 @@ class ValveInterface(ModuleInterface):
         # Extracts the previous valve state from the storage array
         previous_state = bool(self._reward_tracker.read_data(index=0, convert_output=True))
 
-        if message.event == 54:
-            console.echo(f"Valve Calibration: Complete")
-        elif message.event == 52:
+        if message.event == 52:
             if self._debug:
                 console.echo(f"Valve Opened")
 
             # Updates the current valve state in the storage array
             self._reward_tracker.write_data(index=0, data=np.float64(1))
 
-            # Resets the cycle timer each time the valve transitions from closed to open
+            # Resets the cycle timer each time the valve transitions from closed to open state.
             if not previous_state:
                 self._cycle_timer.reset()
 
@@ -1127,10 +1130,14 @@ class ValveInterface(ModuleInterface):
             # the tracker array.
             if previous_state:
                 open_duration = self._cycle_timer.elapsed
+
                 delivered_volume = np.float64(
                     self._scale_coefficient * np.power(open_duration, self._nonlinearity_exponent)
                 )
+
                 self._reward_tracker.write_data(index=1, data=delivered_volume)
+        elif message.event == 54:
+            console.echo(f"Valve Calibration: Complete")
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """When called, this method statically sends a reward delivery command to the ValveModule instance.

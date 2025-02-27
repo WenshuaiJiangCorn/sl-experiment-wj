@@ -127,6 +127,7 @@ class BehaviorVisualizer:
         _speed_data: A numpy array that stores the data used to generate the running speed plot.
         _previous_lick_state: Stores the lick state sampled during the previous update cycle.
         _previous_valve_state: Stores the valve state sampled during the previous update cycle.
+        _previous_valve_volume: Stores the total volume of water sampled during the previous update cycle.
         _lick_line: Stores the line class used to plot the lick sensor data.
         _valve_line: Stores the line class used to plot the solenoid valve data.
         _speed_line: Stores the line class used to plot the average running speed data.
@@ -162,6 +163,7 @@ class BehaviorVisualizer:
         self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float32)
         self._previous_lick_state = np.uint8(0)
         self._previous_valve_state = np.uint8(0)
+        self._previous_valve_volume = np.float64(0)
 
         # Line objects (to be created during initialization)
         self._lick_line = None
@@ -344,22 +346,28 @@ class BehaviorVisualizer:
         # Lick and valve states are communicated as squares (rising and falling edges). However, we want to display
         # them as rising edge marks only. To do so, we manually track rising edges and only set the specific timestamp
         # that detects the rising edge to 1.
-        new_lick = np.uint8(self._valve_tracker.read_data(index=0, convert_output=False))
-        new_valve = np.uint8(self._lick_tracker.read_data(index=0, convert_output=False))
-
-        # Only sets valve and lick data to 1 if the state communicates a rising edge change (from 0 to 1).
-        # Otherwise, if the change is not a rising edge, keeps the data state at 0 for lick and valve states
+        new_lick = np.uint8(self._lick_tracker.read_data(index=0, convert_output=False))
         if not self._previous_lick_state and new_lick:
-            self._valve_data[-1] = new_lick
-        else:
-            self._valve_data[-1] = np.uint8(0)
-        if not self._previous_valve_state and new_valve:
-            self._lick_data[-1] = new_valve
+            self._lick_data[-1] = new_lick
         else:
             self._lick_data[-1] = np.uint8(0)
-
-        # Updates the tracker states with new data
         self._previous_lick_state = new_lick
+
+        # For valve, also carries out the 'fallback' check for the total delivered volume. This is needed to catch very
+        # short valve pulses that fall between the update cycles of the visualizer.
+        new_volume = self._valve_tracker.read_data(index=1, convert_output=False)
+        new_valve = np.uint8(self._valve_tracker.read_data(index=0, convert_output=False))
+        if not self._previous_valve_state and new_valve:
+            self._valve_data[-1] = new_valve
+        elif new_volume != self._previous_valve_volume:
+            # If the valve value does not indicate a rising edge, but the delivered volume has increased between the
+            # previous and the current update, this suggests that the valve pulsed between update cycles. Sets the
+            # visualizer to display the valve pulse. It is very likely that the visualization will be at most 60 ms
+            # behind the real valve open time, which is acceptable for visualization purposes.
+            self._valve_data[-1] = np.uint8(1)
+        else:
+            self._valve_data[-1] = np.uint8(0)
+        self._previous_valve_volume = new_volume
         self._previous_valve_state = new_valve
 
         # Speed is reported continuously, so we do not need to do any special processing here.
