@@ -743,7 +743,7 @@ class _MicroControllerInterfaces:
         # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
         self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
-        self._lick: LickInterface = LickInterface(lick_threshold=1000, debug=debug)  # Lick sensor
+        self._lick: LickInterface = LickInterface(lick_threshold=600, debug=debug)  # Lick sensor
         self._torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
             maximum_voltage=2750,  # This was determined experimentally and matches the torque that overcomes break
@@ -3519,10 +3519,12 @@ def lick_training_logic(
     runtime.lick_train_state()
 
     # Initializes the listener instance used to detect training abort signals sent via the keyboard.
-    listener = KeyboardListener
+    listener = KeyboardListener()
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
+    # This tracker is used to terminate the training if manual abort command is sent via 'ESC+s'
+    terminate = False
     for delay in tqdm(
         reward_delays,
         desc="Running lick training, press 'Esc + s' to abort",
@@ -3538,11 +3540,17 @@ def lick_training_logic(
 
             # If the listener detects the default abort sequence ('Esc and s'), terminates the runtime.
             if listener.exit_signal:
-                message = (
-                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
-                    "procedure."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
+                terminate = True  # Sets the terminate flag
+                break
+
+        # If the user sent the abort command, terminates the training early
+        if terminate:
+            message = (
+                "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
+                "procedure."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            break
 
         # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the next
         # reward delay
@@ -3592,6 +3600,10 @@ def calibrate_valve_logic(
     if not console.enabled:
         console.enable()
 
+    # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
+    # things to console).
+    delay_timer = PrecisionTimer('s')
+
     message = f"Initializing calibration assets..."
     console.echo(message=message, level=LogLevel.INFO)
 
@@ -3629,6 +3641,12 @@ def calibrate_valve_logic(
             data_logger=logger,
             module_interfaces=(valve,),
         )
+        controller.start()
+        controller.unlock_controller()
+
+        # Delays for 2 seconds for the valve to initialize and send the state message. This avoids the visual clash
+        # with he zaber positioning dialog
+        delay_timer.delay_noblock(delay=1)
 
         message = f"Actor MicroController: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -3661,12 +3679,12 @@ def calibrate_valve_logic(
         # Notifies the user about supported calibration commands
         message = (
             "Supported Calibration commands: open, close, reference, reward, "
-            "calibrate_15, calibrate_30, calibrate_45, calibrate__60."
+            "calibrate_15, calibrate_30, calibrate_45, calibrate__60. Use 'q' command to terminate the runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
         while True:
-            command = input("Use 'q' to quit. Enter command: ")
+            command = input()  # Silent input to avoid visual spam.
 
             if command == "open":
                 message = f"Opening valve."
