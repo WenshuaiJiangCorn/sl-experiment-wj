@@ -1017,6 +1017,8 @@ class ValveInterface(ModuleInterface):
         _debug: Stores the debug flag.
         _reward_tracker: Stores the SharedMemoryArray that tracks the current valve status and the total volume of
             water dispensed by the valve.
+        _previous_state: Tracks the previous valve state as Open (True) or Closed (False). This is used to accurately
+            track delivered water volume.
         _cycle_timer: A PrecisionTimer instance initialized in the Communication process to track how long the valve
             stays open during cycling.
     """
@@ -1072,6 +1074,7 @@ class ValveInterface(ModuleInterface):
             prototype=np.empty(shape=2, dtype=np.float64),
             exist_ok=True,
         )
+        self._previous_state: bool = False
 
         # Placeholder
         self._cycle_timer: PrecisionTimer | None = None
@@ -1103,10 +1106,6 @@ class ValveInterface(ModuleInterface):
         Note:
             Make sure the console is enabled before calling this method.
         """
-
-        # Extracts the previous valve state from the storage array
-        previous_state = bool(self._reward_tracker.read_data(index=0, convert_output=True))
-
         if message.event == 52:
             if self._debug:
                 console.echo(f"Valve Opened")
@@ -1115,7 +1114,8 @@ class ValveInterface(ModuleInterface):
             self._reward_tracker.write_data(index=0, data=np.float64(1))
 
             # Resets the cycle timer each time the valve transitions from closed to open state.
-            if not previous_state:
+            if not self._previous_state:
+                self._previous_state = True
                 self._cycle_timer.reset()
 
         elif message.event == 53:
@@ -1128,14 +1128,17 @@ class ValveInterface(ModuleInterface):
             # Each time the valve transitions from open to closed state, records the period of time the valve was open
             # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
             # the tracker array.
-            if previous_state:
+            if self._previous_state:
+                self._previous_state = False
                 open_duration = self._cycle_timer.elapsed
 
+                # Accumulates delivered water volumes into the tracker.
                 delivered_volume = np.float64(
                     self._scale_coefficient * np.power(open_duration, self._nonlinearity_exponent)
                 )
-
-                self._reward_tracker.write_data(index=1, data=delivered_volume)
+                previous_volume = np.float64(self._reward_tracker.read_data(index=1, convert_output=False))
+                new_volume = previous_volume+delivered_volume
+                self._reward_tracker.write_data(index=1, data=new_volume)
         elif message.event == 54:
             console.echo(f"Valve Calibration: Complete")
 

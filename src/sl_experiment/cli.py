@@ -484,7 +484,7 @@ def mesoscope_vr_cli(
     help=(
         "The maximum number of seconds that can be used to increase or decrease the delay between two consecutive "
         "reward deliveries during training. This is used to generate delays using a pseudorandom sampling, to remove "
-        "trends in reward delivery patterns.",
+        "trends in reward delivery patterns."
     ),
 )
 @click.option(
@@ -598,7 +598,7 @@ def mesoscope_vr_cli(
 @click.option(
     "-lr",
     "--local_root_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
     default="/media/Data/Experiments",
     show_default=True,
     help="The path to the root directory on the local machine (VRPC) that stores experiment project folders.",
@@ -606,15 +606,15 @@ def mesoscope_vr_cli(
 @click.option(
     "-sp",
     "--server_root_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    default="/media/cybermouse/Extra Data/server/storage",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default="/media/cbsuwsun/storage/sun_data",
     show_default=True,
     help="The path to the root directory on the BioHPC lab server that stores experiment project folders.",
 )
 @click.option(
     "-np",
     "--nas_root_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
     default="/home/cybermouse/nas/rawdata",
     show_default=True,
     help="The path to the root directory on the NAS that stores experiment project folders.",

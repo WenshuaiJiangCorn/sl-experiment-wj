@@ -1524,7 +1524,7 @@ class SessionData:
         animal_name: str,
         generate_mesoscope_paths: bool = True,
         local_root_directory: Path = Path("/media/Data/Experiments"),
-        server_root_directory: Path = Path("/media/cybermouse/Extra Data"),
+        server_root_directory: Path = Path("/media/cbsuwsun/storage/sun_data"),
         nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
         mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata"),
     ) -> None:
@@ -3427,9 +3427,9 @@ def lick_training_logic(
     # the sampled delay array to fit within the time boundary.
     max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time * 60, side="right")
 
-    # Slices the samples array to make the total training time be roughly 30 minutes. Converts each delay from seconds
-    # to microseconds and rounds to the nearest integer. This is done to make delays compatible with PrecisionTimer
-    # class.
+    # Slices the samples array to make the total training time be roughly the maximum requested duration. Converts each
+    # delay from seconds to microseconds and rounds to the nearest integer. This is done to make delays compatible with
+    # PrecisionTimer class.
     reward_delays: NDArray[np.uint64] = np.round(samples[:max_samples_idx] * 1000000, decimals=0).astype(np.uint64)
 
     message = (
@@ -3479,6 +3479,12 @@ def lick_training_logic(
         delay_timer.reset()
 
     # Shutdown sequence:
+    message = (
+        f"Training runtime: Complete. Delaying for additional {lower_bound} seconds to ensure the animal "
+        f"has time to consume the final dispensed reward."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
+    delay_timer.delay_noblock(lower_bound * 1000000)  # Converts to microseconds before delaying
 
     # Closes the visualizer, as the runtime is now over
     visualizer.close()
