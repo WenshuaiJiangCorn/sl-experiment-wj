@@ -14,6 +14,7 @@ from .experiment import (
     _BehavioralTraining,
     _VideoSystems,
     _ZaberPositions,
+    _LickTrainingDescriptor,
     lick_training_logic,
 )
 from ataraxis_base_utilities import console, LogLevel
@@ -663,9 +664,17 @@ def lick_training(
         nas_root_directory=nas_root_path,
     )
 
+    # Pre-generates the SessionDescriptor class and populates it with training data
+    descriptor = _LickTrainingDescriptor(
+        average_reward_delay_s=average_delay,
+        maximum_deviation_from_average_s=maximum_deviation,
+        training_time_m=maximum_time,
+    )
+
     # Initializes the main runtime interface class.
     runtime = _BehavioralTraining(
         session_data=session_data,
+        descriptor=descriptor,
         actor_port=actor_port,
         sensor_port=sensor_port,
         encoder_port=encoder_port,
