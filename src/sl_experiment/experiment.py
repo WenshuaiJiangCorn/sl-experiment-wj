@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 from ataraxis_time import PrecisionTimer
+import copy
 
 from .module_interfaces import (
     TTLInterface,
@@ -1492,19 +1493,29 @@ class _VideoSystems:
 
 
 class KeyboardListener:
-    """Monitors the keyboard input for the escape signal (ESC + 's' pressed at the same time).
+    """Monitors the keyboard input for various runtime control signals and changes internal flags to communicate
+    detected signals.
 
-    This class is used during all training runtimes to allow the user to abort the runtime early. It is recommended to
-    use this class when designing custom experiment runtimes to provide similar functionality for all experiment
-    sessions.
+    This class is used during all training runtimes to allow the user to manually control some aspects of the
+    Mesoscope-VR system and runtime. For example, it is used to abort the training runtime early and manually deliver
+    rewards via the lick-tube.
+
+    This class looks for the following key combinations to set the following flags:
+        - ALT + SHIFT + 'q': Immediately aborts the training runtime.
+        - ALT + SHIFT + 'r': Delivers 5 uL of water via the LickTube.
 
     Notes:
+        While our training logic functions automatically make use of this class, it is NOT explicitly part of the
+        MesoscopeExperiment class runtime. We highly encourage incorporating this class into all experiment runtimes to
+        provide similar APi as done by our training runtimes.
+
         This monitor may pick up keyboard strokes directed at other applications during runtime. While our unique key
         combination is likely to not be used elsewhere, exercise caution when using other applications alongside the
         runtime code.
 
     Attributes:
-        _exit_flag: Tracks whether the instance has detected the escape key sequence press.
+        _exit_flag: Tracks whether the instance has detected the runtime abort key sequence press.
+        _reward_flag: Tracks whether the instance has detected the reward delivery key sequence press.
         _currently_pressed: Stores the keys that are currently being pressed.
         _listener: The Listener instance used to monitor keyboard strokes.
 
@@ -1512,6 +1523,7 @@ class KeyboardListener:
 
     def __init__(self):
         self._exit_flag = False
+        self._reward_flag = False
         self._currently_pressed = set()
 
         # Set up listeners for both press and release
@@ -1528,9 +1540,21 @@ class KeyboardListener:
         # Updates the set with current data
         self._currently_pressed.add(str(key))
 
-        # Checks if both ESC and 's' are in the currently pressed set and, if so, flips the exirt_flag.
-        if "Key.esc" in self._currently_pressed and "'s'" in self._currently_pressed:
+        # Checks if ALT, SHIFT, and 'q' are in the currently pressed set and, if so, flips the exit_flag.
+        if (
+            "Key.alt" in self._currently_pressed
+            and "Key.shift" in self._currently_pressed
+            and "'q'" in self._currently_pressed
+        ):
             self._exit_flag = True
+
+        # Checks if ALT, SHIFT, and 'r' are in the currently pressed set and, if so, flips the _reward_flag.
+        if (
+            "Key.alt" in self._currently_pressed
+            and "Key.shift" in self._currently_pressed
+            and "'r'" in self._currently_pressed
+        ):
+            self._reward_flag = True
 
     def _on_release(self, key):
         """Removes no longer pressed keys from the storage set.
@@ -1544,11 +1568,25 @@ class KeyboardListener:
 
     @property
     def exit_signal(self):
-        """Returns True if the listener has detected escape and 's' keys pressed together.
+        """Returns True if the listener has detected the runtime abort keys combination (ALT + SHIFT + q) being pressed.
 
-        This indicates that the user has requested the application to exit.
+        This indicates that the user has requested the runtime to gracefully abort.
         """
         return self._exit_flag
+
+    @property
+    def reward_signal(self):
+        """Returns True if the listener has detected the water reward delivery keys combination (ALT + SHIFT + r) being
+        pressed.
+
+        This indicates that the user has requested the system to deliver 5uL water reward.
+
+        Notes:
+            Each time this property is accessed, the flag is reset to 0.
+        """
+        signal = copy.copy(self._reward_flag)
+        self._reward_flag = False  # FLips the flag to False
+        return signal
 
 
 class SessionData:
@@ -2302,7 +2340,7 @@ class MesoscopeExperiment:
         # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
         # proceed with motor movements.
         message = (
-            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
+            "Preparing to move HeadBar into position. Remove the mesoscope objective, swivel out the VR screens, "
             "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
             "mesoscope and / or HARM the animal."
         )
@@ -2325,9 +2363,8 @@ class MesoscopeExperiment:
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
-            "Preparing to move the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. Run all mesoscope and HeadBar alignment procedures and ensure the system is ready for imaging. "
-            "swivel the VR screens into the imaging position once everything is ready."
+            "Preparing to move the LickPort into position. Mount the animal onto the VR rig and install the mesoscope "
+            "objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably run the task."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -2336,15 +2373,32 @@ class MesoscopeExperiment:
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
         # the lickport in a way that is easily accessible by the animal.
         self._lickport.restore_position()
-
         message = (
-            "If necessary, adjust LickPort position to be easily reachable by the animal. Take extra care when moving "
-            "the lickport towards the animal! This is the last manual checkpoint, entering 'y' after this message will "
-            "begin the experiment."
+            "If necessary, adjust LickPort position to be easily reachable by the animal and position the mesoscope "
+            "objective above the imaging field. Take extra care when moving the lickport towards the animal! Run any "
+            "mesoscope preparation procedures, such as motion correction, before proceeding further. This is the last "
+            "manual checkpoint, entering 'y' after this message will begin the experiment."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
+
+        # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
+        # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
+        # the calibrated zaber positions.
+        head_bar_positions = self._headbar.get_positions()
+        lickport_positions = self._lickport.get_positions()
+        zaber_positions = _ZaberPositions(
+            headbar_z=head_bar_positions[0],
+            headbar_pitch=head_bar_positions[1],
+            headbar_roll=head_bar_positions[2],
+            lickport_z=lickport_positions[0],
+            lickport_x=lickport_positions[1],
+            lickport_y=lickport_positions[2],
+        )
+        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        message = "HeadBar and LickPort positions: Saved."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Enables body cameras. Starts frame saving for all cameras
         self._cameras.start_body_cameras()
@@ -2448,6 +2502,14 @@ class MesoscopeExperiment:
         message = "Data Logger: stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
+        # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
+        # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
+        # that the reported dispensed_water_volume_ul is accurate.
+        delivered_water = self._microcontrollers.total_delivered_volume
+        # Overwrites the delivered water volume with the volume recorded over the runtime.
+        self._descriptor.dispensed_water_volume_ul = delivered_water
+        self._descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
         head_bar_positions = self._headbar.get_positions()
@@ -2464,6 +2526,15 @@ class MesoscopeExperiment:
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
         self._lickport.mount_position()
+
+        # Notifies the user about the volume of water dispensed during runtime, so that they can ensure the mouse
+        # get any leftover daily water limit.
+        message = (
+            f"During runtime, the system dispensed ~{delivered_water} uL of water to the animal. "
+            f"If the animal is on water restriction, make sure it receives any additional water, if the dispensed "
+            f"volume does not cover the daily water limit for that animal."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
 
         # Instructs the user to remove the objective and the animal before resetting all zaber motors.
         message = (
@@ -2485,6 +2556,21 @@ class MesoscopeExperiment:
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
+        # obvious to the user when it is safe to start preparing for the next session and leave the current one
+        # processing the data.
+        message = (
+            f"Data acquisition: Complete. Open the session descriptor file located at "
+            f"{self._session_data.session_descriptor_path} and update the notes session with the notes taken during "
+            f"runtime. This is the last manual checkpoint, entering 'y' after this message will begin data "
+            f"preprocessing and, after that, transmit it to the BioHPC server and the NAS storage. It is safe to start "
+            f"preparing for the next session after hitting 'y'."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
 
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
@@ -3164,8 +3250,7 @@ class _BehavioralTraining:
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
             "Preparing to move the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. Run all mesoscope and HeadBar alignment procedures and ensure the system is ready for imaging. "
-            "swivel the VR screens into the imaging position once everything is ready."
+            "objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably run the task."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -3183,6 +3268,23 @@ class _BehavioralTraining:
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
+
+        # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
+        # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
+        # the calibrated zaber positions.
+        head_bar_positions = self._headbar.get_positions()
+        lickport_positions = self._lickport.get_positions()
+        zaber_positions = _ZaberPositions(
+            headbar_z=head_bar_positions[0],
+            headbar_pitch=head_bar_positions[1],
+            headbar_roll=head_bar_positions[2],
+            lickport_z=lickport_positions[0],
+            lickport_x=lickport_positions[1],
+            lickport_y=lickport_positions[2],
+        )
+        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        message = "HeadBar and LickPort positions: Saved."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Enables body cameras. Starts frame saving for all cameras
         self._cameras.start_body_cameras()
@@ -3234,9 +3336,9 @@ class _BehavioralTraining:
         message = "Data Logger: stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Generates and dumps a SessionDescriptor.yaml file into the root raw_data session directory. This needs to be
-        # done after the microcontrollers and loggers have been stopped to ensure that the reported
-        # dispensed_water_volume_ul is accurate.
+        # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
+        # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
+        # that the reported dispensed_water_volume_ul is accurate.
         delivered_water = self._microcontrollers.total_delivered_volume
         if self._lick_training:
             # Overwrites the delivered water volume with the volume recorded over the runtime.
@@ -3260,11 +3362,19 @@ class _BehavioralTraining:
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
         self._lickport.mount_position()
 
+        # Notifies the user about the volume of water dispensed during runtime, so that they can ensure the mouse
+        # get any leftover daily water limit.
+        message = (
+            f"During runtime, the system dispensed ~{delivered_water} uL of water to the animal. "
+            f"If the animal is on water restriction, make sure it receives any additional water, if the dispensed "
+            f"volume does not cover the daily water limit for that animal."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+
         # Instructs the user to remove the objective and the animal before resetting all zaber motors.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Uninstall the mesoscope objective, remove the animal "
-            "from the VR rig and swivel the VR screens out. Failure to do so may DAMAGE the mesoscope objective and "
-            "HARM the animal."
+            "Preparing to reset the HeadBar and LickPort motors. Remove the animal from the VR rig and swivel the VR "
+            "screens out. Failure to do so may HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -3280,6 +3390,21 @@ class _BehavioralTraining:
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
+        # obvious to the user when it is safe to start preparing for the next session and leave the current one
+        # processing the data.
+        message = (
+            f"Data acquisition: Complete. Open the session descriptor file located at "
+            f"{self._session_data.session_descriptor_path} and update the notes session with the notes taken during "
+            f"runtime. This is the last manual checkpoint, entering 'y' after this message will begin data "
+            f"preprocessing and, after that, transmit it to the BioHPC server and the NAS storage. It is safe to start "
+            f"preparing for the next session after hitting 'y'."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
 
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
@@ -3315,12 +3440,6 @@ class _BehavioralTraining:
 
         message = "Data preprocessing: complete. BehavioralTraining runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
-        message = (
-            f"During runtime, the system dispensed ~{delivered_water} uL of water to the animal. "
-            f"If the animal is on water restriction, make sure it receives any additional water, if the dispensed "
-            f"volume does not cover the daily water limit for that animal."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
 
     def lick_train_state(self) -> None:
         """Configures the VR system for running the lick training.
@@ -3575,13 +3694,19 @@ def lick_training_logic(
     # Initializes the listener instance used to detect training abort signals sent via the keyboard.
     listener = KeyboardListener()
 
+    message = (
+        f"Initiating lick training procedure. Press 'ALT' + 'SHIFT' + 'q' to immediately abort the training at any "
+        f"time. Press 'ALT' + 'SHIFT' + 'r' to deliver 5 uL of water to the animal."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
-    # This tracker is used to terminate the training if manual abort command is sent via 'ESC+s'
+    # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
     for delay in tqdm(
         reward_delays,
-        desc="Running lick training, press 'Esc + s' to abort",
+        desc="Running lick training",
         unit="reward",
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}<{remaining}]",
     ):
@@ -3592,19 +3717,22 @@ def lick_training_logic(
             # interest and appear visually smooth to human observers.
             visualizer.update()
 
-            # If the listener detects the default abort sequence ('Esc and s'), terminates the runtime.
+            # If the listener detects the default abort sequence, terminates the runtime.
             if listener.exit_signal:
                 terminate = True  # Sets the terminate flag
-                break
+                break  # Breaks the while loop
+
+            # If the listener detects a reward delivery signal, delivers the reward to the animal
+            if listener.reward_signal:
+                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
         # If the user sent the abort command, terminates the training early
         if terminate:
             message = (
-                "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
-                "procedure."
+                "Lick training abort signal detected. Aborting the lick training with a graceful shutdown procedure."
             )
             console.echo(message=message, level=LogLevel.ERROR)
-            break
+            break  # Breaks the for loop
 
         # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the next
         # reward delay
@@ -3656,7 +3784,7 @@ def calibrate_valve_logic(
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
-    delay_timer = PrecisionTimer('s')
+    delay_timer = PrecisionTimer("s")
 
     message = f"Initializing calibration assets..."
     console.echo(message=message, level=LogLevel.INFO)
