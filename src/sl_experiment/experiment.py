@@ -120,7 +120,18 @@ class _LickTrainingDescriptor(YamlConfig):
 
 @dataclass()
 class _RunTrainingDescriptor(YamlConfig):
-    pass  # TODO placeholder
+    session_type: str = "run_training"
+    """
+    The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
+    "mesoscope_experiment". This field is hardcoded and should not be modified.
+    """
+    dispensed_water_volume_ul: float = 0.0
+    """Stores the total water volume, in microliters, dispensed during runtime."""
+    maximum_training_time_m: int = 40
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
 
 
 @dataclass()
