@@ -9,7 +9,6 @@ import tempfile
 import numpy as np
 from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
-from ataraxis_time import PrecisionTimer
 import copy
 
 from .module_interfaces import (
@@ -34,6 +33,7 @@ from ataraxis_video_system import (
     InputPixelFormats,
     OutputPixelFormats,
 )
+from ataraxis_time import PrecisionTimer
 
 from .zaber_bindings import ZaberConnection, ZaberAxis
 from .transfer_tools import transfer_directory
@@ -1501,8 +1501,8 @@ class KeyboardListener:
     rewards via the lick-tube.
 
     This class looks for the following key combinations to set the following flags:
-        - ALT + SHIFT + 'q': Immediately aborts the training runtime.
-        - ALT + SHIFT + 'r': Delivers 5 uL of water via the LickTube.
+        - ESC + 'q': Immediately aborts the training runtime.
+        - ESC + 'r': Delivers 5 uL of water via the LickTube.
 
     Notes:
         While our training logic functions automatically make use of this class, it is NOT explicitly part of the
@@ -1540,20 +1540,12 @@ class KeyboardListener:
         # Updates the set with current data
         self._currently_pressed.add(str(key))
 
-        # Checks if ALT, SHIFT, and 'q' are in the currently pressed set and, if so, flips the exit_flag.
-        if (
-            "Key.alt" in self._currently_pressed
-            and "Key.shift" in self._currently_pressed
-            and "'q'" in self._currently_pressed
-        ):
+        # Checks if ESC and 'q' are in the currently pressed set and, if so, flips the exit_flag.
+        if "Key.esc" in self._currently_pressed and "'q'" in self._currently_pressed:
             self._exit_flag = True
 
-        # Checks if ALT, SHIFT, and 'r' are in the currently pressed set and, if so, flips the _reward_flag.
-        if (
-            "Key.alt" in self._currently_pressed
-            and "Key.shift" in self._currently_pressed
-            and "'r'" in self._currently_pressed
-        ):
+        # Checks if ESC and 'r' are in the currently pressed set and, if so, flips the _reward_flag.
+        if "Key.esc" in self._currently_pressed and "'r'" in self._currently_pressed:
             self._reward_flag = True
 
     def _on_release(self, key):
@@ -1568,7 +1560,7 @@ class KeyboardListener:
 
     @property
     def exit_signal(self):
-        """Returns True if the listener has detected the runtime abort keys combination (ALT + SHIFT + q) being pressed.
+        """Returns True if the listener has detected the runtime abort keys combination (ESC + q) being pressed.
 
         This indicates that the user has requested the runtime to gracefully abort.
         """
@@ -1576,7 +1568,7 @@ class KeyboardListener:
 
     @property
     def reward_signal(self):
-        """Returns True if the listener has detected the water reward delivery keys combination (ALT + SHIFT + r) being
+        """Returns True if the listener has detected the water reward delivery keys combination (ESC + r) being
         pressed.
 
         This indicates that the user has requested the system to deliver 5uL water reward.
@@ -2371,11 +2363,11 @@ class MesoscopeExperiment:
             continue
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
-        # the lickport in a way that is easily accessible by the animal.
+        # the LickPort in a way that is easily accessible by the animal.
         self._lickport.restore_position()
         message = (
             "If necessary, adjust LickPort position to be easily reachable by the animal and position the mesoscope "
-            "objective above the imaging field. Take extra care when moving the lickport towards the animal! Run any "
+            "objective above the imaging field. Take extra care when moving the LickPort towards the animal! Run any "
             "mesoscope preparation procedures, such as motion correction, before proceeding further. This is the last "
             "manual checkpoint, entering 'y' after this message will begin the experiment."
         )
@@ -3226,9 +3218,8 @@ class _BehavioralTraining:
         # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
         # proceed with motor movements.
         message = (
-            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
-            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
-            "mesoscope and / or HARM the animal."
+            "Preparing to move HeadBar into position. Swivel out the VR screens, and make sure the animal is NOT "
+            "mounted on the rig. Failure to fulfill these steps may HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -3249,20 +3240,20 @@ class _BehavioralTraining:
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
-            "Preparing to move the LickPort motors. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably run the task."
+            "Preparing to move the LickPort into position. Mount the animal onto the VR rig. If necessary, adjust the "
+            "HeadBar position to make sure the animal can comfortably run the task."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
-        # the lickport in a way that is easily accessible by the animal.
+        # the LickPort in a way that is easily accessible by the animal.
         self._lickport.restore_position()
 
         message = (
             "If necessary, adjust LickPort position to be easily reachable by the animal. Take extra care when moving "
-            "the lickport towards the animal! This is the last manual checkpoint, entering 'y' after this message will "
+            "the LickPort towards the animal! This is the last manual checkpoint, entering 'y' after this message will "
             "begin the training."
         )
         console.echo(message=message, level=LogLevel.WARNING)
@@ -3396,11 +3387,10 @@ class _BehavioralTraining:
         # obvious to the user when it is safe to start preparing for the next session and leave the current one
         # processing the data.
         message = (
-            f"Data acquisition: Complete. Open the session descriptor file located at "
-            f"{self._session_data.session_descriptor_path} and update the notes session with the notes taken during "
-            f"runtime. This is the last manual checkpoint, entering 'y' after this message will begin data "
-            f"preprocessing and, after that, transmit it to the BioHPC server and the NAS storage. It is safe to start "
-            f"preparing for the next session after hitting 'y'."
+            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
+            f"update the notes session with the notes taken during runtime. This is the last manual checkpoint, "
+            f"entering 'y' after this message will begin data preprocessing and, after that, transmit it to the BioHPC "
+            f"server and the NAS storage. It is safe to start preparing for the next session after hitting 'y'."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -3695,8 +3685,8 @@ def lick_training_logic(
     listener = KeyboardListener()
 
     message = (
-        f"Initiating lick training procedure. Press 'ALT' + 'SHIFT' + 'q' to immediately abort the training at any "
-        f"time. Press 'ALT' + 'SHIFT' + 'r' to deliver 5 uL of water to the animal."
+        f"Initiating lick training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
+        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal."
     )
     console.echo(message=message, level=LogLevel.INFO)
 

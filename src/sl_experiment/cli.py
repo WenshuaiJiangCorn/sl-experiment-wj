@@ -267,7 +267,8 @@ def lick_training(
     descriptor = _LickTrainingDescriptor(
         average_reward_delay_s=average_delay,
         maximum_deviation_from_average_s=maximum_deviation,
-        training_time_m=maximum_time,
+        maximum_training_time_m=maximum_time,
+        maximum_water_volume_ml=maximum_volume,
     )
 
     # Initializes the main runtime interface class.
