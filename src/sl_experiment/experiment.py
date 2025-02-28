@@ -100,7 +100,7 @@ class _LickTrainingDescriptor(YamlConfig):
     session_type: str = "lick_training"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
-    "experiment". This field is hardcoded and should not be modified.
+    "mesoscope_experiment". This field is hardcoded and should not be modified.
     """
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
@@ -109,8 +109,29 @@ class _LickTrainingDescriptor(YamlConfig):
     maximum_deviation_from_average_s: int = 6
     """Stores the deviation value, in seconds, used to determine the upper and lower bounds for the reward delay 
     distribution."""
-    training_time_m: int = 40
-    """Stores the total training time, in minutes."""
+    maximum_water_volume_ml: float = 1.0
+    """Stores the maximum volume of water the system is allowed to dispensed during training."""
+    maximum_training_time_m: int = 40
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+
+
+@dataclass()
+class _RunTrainingDescriptor(YamlConfig):
+    pass  # TODO placeholder
+
+
+@dataclass()
+class _MesoscopeExperimentDescriptor(YamlConfig):
+    session_type: str = "mesoscope_experiment"
+    """
+    The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
+    "mesoscope_experiment". This field is hardcoded and should not be modified.
+    """
+    dispensed_water_volume_ul: float = 0.0
+    """Stores the total water volume, in microliters, dispensed during runtime."""
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
     notes made during runtime."""
@@ -1998,7 +2019,7 @@ class SessionData:
 class MesoscopeExperiment:
     """The base class for all mesoscope experiment runtimes.
 
-    This class provides methods for conducting experiments using the Mesoscope-VR system. This class abstracts most
+    This class provides methods for conducting experiments using the Mesoscope-VR system. It abstracts most
     low-level interactions with the VR system and the mesoscope via a simple high-level state API.
 
     This class also provides methods for limited preprocessing of the collected data. The preprocessing methods are
@@ -2018,16 +2039,18 @@ class MesoscopeExperiment:
         Use the 'sl-devices' cli command to discover the serial ports used by the Zaber motion controllers.
 
         This class statically reserves the id code '1' to label its log entries. Make sure no other Ataraxis class, such
-        as MicroControllerInterface or VideoSystem uses this id code.
+        as MicroControllerInterface or VideoSystem, uses this id code.
 
     Args:
         session_data: An initialized SessionData instance. This instance is used to transfer the data between VRPC,
             ScanImagePC, BioHPC server, and the NAS during runtime. Each instance is initialized for the specific
             project, animal, and session combination for which the data is acquired.
+        descriptor: A partially configured _LickTrainingDescriptor or _RunTrainingDescriptor instance. This instance is
+            used to store session-specific information in a human-readable format.
         cue_length_map: A dictionary that maps each integer-code associated with a wall cue used in the Virtual Reality
-            experiment environment to its length in real-world centimeters. In other words, it maps each cue to the
-            distance the mouse needs to travel to fully traverse the wall cue start to end.
-        screens_on: Communicates whether the VR screens are currently ON when this class is initialized.
+            experiment environment to its length in real-world centimeters. Ity is used to map each VR cue to the
+            distance the mouse needs to travel to fully traverse the wall cue region from start to end.
+        screens_on: Communicates whether the VR screens are currently ON at the time of class initialization.
         experiment_state: The integer code that represents the initial state of the experiment. Experiment state codes
             are used to mark different stages of each experiment (such as rest_1, run_1, rest_2, etc...). During
             analysis, these codes can be used to segment experimental data into sections.
@@ -2048,6 +2071,7 @@ class MesoscopeExperiment:
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
+        _descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
         _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
@@ -2056,7 +2080,6 @@ class MesoscopeExperiment:
             runtime.
         _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
         _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
-        _screen_on: Tracks whether the VR displays are currently ON.
         _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _state_map: Maps the integer state-codes used to represent VR system states to human-readable string-names.
@@ -2065,9 +2088,9 @@ class MesoscopeExperiment:
             reuse the same VR state.
         _timestamp_timer: A PrecisionTimer instance used to timestamp log entries generated by the class instance.
         _source_id: Stores the unique identifier code for this class instance. The identifier is used to mark log
-            entries sent by this class instance and has to be unique for all sources that log data at the same time,
+            entries made by this class instance and has to be unique across all sources that log data at the same time,
             such as MicroControllerInterfaces and VideoSystems.
-        _cue_map: Stores the dictionary that maps each integer-code associated with each Virtual Reality wall cue with
+        _cue_map: Stores the dictionary that maps integer-codes associated with each VR wall cue with
             its length in centimeters.
         _session_data: Stores the SessionData instance used to manage the acquired data.
 
@@ -2081,6 +2104,7 @@ class MesoscopeExperiment:
     def __init__(
         self,
         session_data: SessionData,
+        descriptor: _MesoscopeExperimentDescriptor,
         cue_length_map: dict[int, float],
         screens_on: bool = False,
         experiment_state: int = 0,
@@ -2109,6 +2133,7 @@ class MesoscopeExperiment:
 
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
+        self._descriptor: _MesoscopeExperimentDescriptor = descriptor
 
         # Input verification:
         if not isinstance(session_data, SessionData):
@@ -2118,16 +2143,14 @@ class MesoscopeExperiment:
                 f"{type(session_data).__name__}."
             )
             console.error(message=message, error=TypeError)
-        if cue_length_map is not None and not isinstance(cue_length_map, dict):
+        if not isinstance(cue_length_map, dict):
             message = (
-                f"Unable to initialize the MesoscopeExperiment class. Expected a dictionary or None instance for "
-                f"'cue_length_map' argument, but instead encountered {cue_length_map} of type "
-                f"{type(cue_length_map).__name__}."
+                f"Unable to initialize the MesoscopeExperiment class. Expected a dictionary for 'cue_length_map' "
+                f"argument, but instead encountered {cue_length_map} of type {type(cue_length_map).__name__}."
             )
             console.error(message=message, error=TypeError)
 
         # Defines other flags used during runtime:
-        self._screen_on: bool = screens_on  # Usually this would be false, but this is not guaranteed
         self._vr_state: int = 0  # Stores the current state of the VR system
         self._experiment_state: int = experiment_state  # Stores user-defined experiment state
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
@@ -2135,9 +2158,7 @@ class MesoscopeExperiment:
 
         # This dictionary is used to convert distance traveled by the animal into the corresponding sequence of
         # traversed cues (corridors).
-        self._cue_map: dict[int, float] = {}
-        if cue_length_map is not None:
-            self._cue_map = cue_length_map
+        self._cue_map: dict[int, float] = cue_length_map
 
         # Saves the SessionData instance to class attribute so that it can be used from class methods. Since SessionData
         # resolves session directory structure at initialization, the instance is ready to resolve all paths used by
@@ -2158,6 +2179,7 @@ class MesoscopeExperiment:
         # Initializes the binding class for all MicroController Interfaces.
         self._microcontrollers: _MicroControllerInterfaces = _MicroControllerInterfaces(
             data_logger=self._logger,
+            screens_on=screens_on,
             actor_port=actor_port,
             sensor_port=sensor_port,
             encoder_port=encoder_port,
@@ -2182,6 +2204,17 @@ class MesoscopeExperiment:
             harvesters_cti_path=harvesters_cti_path,
         )
 
+        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+        message = (
+            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
+            "running before proceeding further. If ZaberLauncher is not running, youi WILL NOT be able to manually "
+            "control the HeadBar and LickPort motor positions until you reset the runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self._headbar: _HeadBar = _HeadBar(
             headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
@@ -2194,8 +2227,8 @@ class MesoscopeExperiment:
         """Sets up all assets used during the experiment.
 
         This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. It also verifies the configuration of Unity game engine and the mesoscope and activates
-        mesoscope frame acquisition.
+        system processes. It also requests the cue sequence from Unity game engine and starts mesoscope frame
+        acquisition process.
 
         Notes:
             This method will not run unless the host PC has access to the necessary number of logical CPU cores
@@ -2882,7 +2915,7 @@ class _BehavioralTraining:
     """The base class for all behavioral training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
-    system. This class abstracts most low-level interactions with the VR system and the mesoscope via a simple
+    system. It abstracts most low-level interactions with the VR system and the mesoscope via a simple
     high-level state API.
 
     This class also provides methods for limited preprocessing of the collected data. The preprocessing methods are
@@ -2906,9 +2939,8 @@ class _BehavioralTraining:
             BioHPC server, and the NAS during runtime. Each instance is initialized for the specific project, animal,
             and session combination for which the data is acquired.
         descriptor: A partially configured _LickTrainingDescriptor or _RunTrainingDescriptor instance. This instance is
-            used to store session-specific information not available from other sources that may need to be referenced
-            by the experimenter after runtime.
-        screens_on: Communicates whether the VR screens are currently ON when this class is initialized.
+            used to store session-specific information in a human-readable format.
+        screens_on: Communicates whether the VR screens are currently ON at the time of class initialization.
         actor_port: The USB port used by the actor Microcontroller.
         sensor_port: The USB port used by the sensor Microcontroller.
         encoder_port: The USB port used by the encoder Microcontroller.
@@ -2923,7 +2955,7 @@ class _BehavioralTraining:
         harvesters_cti_path: The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.
 
     Attributes:
-        _started: Tracks whether the VR system and experiment runtime are currently running.
+        _started: Tracks whether the VR system and training runtime are currently running.
         _lick_training: Tracks the training state used by the instance, which is required for log parsing.
         _descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers and video
@@ -2944,7 +2976,7 @@ class _BehavioralTraining:
     def __init__(
         self,
         session_data: SessionData,
-        descriptor: _LickTrainingDescriptor,
+        descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor,
         screens_on: bool = False,
         actor_port: str = "/dev/ttyACM0",
         sensor_port: str = "/dev/ttyACM1",
@@ -2973,7 +3005,7 @@ class _BehavioralTraining:
         # Determines the type of training carried out by the instance. This is needed for log parsing and
         # SessionDescriptor generation.
         self._lick_training: bool = False
-        self._descriptor: _LickTrainingDescriptor = descriptor  # Stores the descriptor instance
+        self._descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor = descriptor
 
         # Input verification:
         if not isinstance(session_data, SessionData):
@@ -3023,6 +3055,17 @@ class _BehavioralTraining:
             harvesters_cti_path=harvesters_cti_path,
         )
 
+        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+        message = (
+            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
+            "running before proceeding further. If ZaberLauncher is not running, youi WILL NOT be able to manually "
+            "control the HeadBar and LickPort motor positions until you reset the runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        while input("Enter 'y' to continue: ") != "y":
+            continue
+
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self._headbar: _HeadBar = _HeadBar(
             headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
@@ -3043,9 +3086,9 @@ class _BehavioralTraining:
             machines that are unlikely to sustain the runtime requirements.
 
             As part of its runtime, this method will attempt to set Zaber motors for the HeadBar and LickPort to the
-            positions that would typically be used during the mesoscope experiment. Exercise caution and always monitor
-            the system when it is running this method, as unexpected motor behavior can damage the mesoscope or harm
-            the animal.
+            positions that would typically be used during the mesoscope experiment runtime. Exercise caution and always
+            monitor the system when it is running this method, as unexpected motor behavior can damage the mesoscope or
+            harm the animal.
 
             Unlike the experiment class start(), this method does not preset the hardware module states during runtime.
             Call the desired training state method to configure the hardware modules appropriately for the chosen
