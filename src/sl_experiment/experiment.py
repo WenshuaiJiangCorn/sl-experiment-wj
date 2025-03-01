@@ -3681,7 +3681,8 @@ def lick_training_logic(
     # Configures all system components to support lick training
     runtime.lick_train_state()
 
-    # Initializes the listener instance used to detect training abort signals sent via the keyboard.
+    # Initializes the listener instance used to detect training abort signals and manual reward trigger signals sent
+    # via the keyboard.
     listener = KeyboardListener()
 
     message = (
@@ -3690,19 +3691,22 @@ def lick_training_logic(
     )
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
-    delay_timer.reset()
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
+
+    # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
+    delay_timer.reset()
     for delay in tqdm(
         reward_delays,
         desc="Running lick training",
         unit="reward",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}<{remaining}]",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}<",
+        postfix=f"{np.round(cumulative_time[max_samples_idx - 1] / 60, decimals=0)}]"
     ):
         # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done during
         # the delay has to go here
         while delay_timer.elapsed < delay:
+
             # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
             # interest and appear visually smooth to human observers.
             visualizer.update()
@@ -3943,3 +3947,142 @@ def calibrate_valve_logic(
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # The logs will be cleaned up by deleting the temporary directory when this runtime exits.
+
+
+def run_train_logic(
+    runtime: _BehavioralTraining,
+    initial_speed_threshold: float = 0.1,
+    initial_duration_threshold: float = 0.1,
+    maximum_speed_threshold: float = 10.0,
+    maximum_duration_threshold: float = 10.0,
+    maximum_water_volume: float = 1.0,
+    maximum_training_time: int = 30,
+    speed_increase_step: float = 0.5,
+    duration_increase_step: float = 0.5,
+    increase_water_threshold: float = 0.1,
+) -> None:
+    """Encapsulates the logic used to train animals how to operate the lick port.
+
+    The lick training consists of delivering randomly spaced 5 uL water rewards via the Valve module to teach the
+    animal that water comes out of the lick port. Each reward is delivered at a pseudorandom delay after the previous
+    reward or training onset. Reward delay sequence is generated before training runtime by sampling a uniform
+    distribution centered at 'average_reward_delay' with lower and upper bounds defined by
+    'maximum_deviation_from_mean'. The training continues either until the valve delivers the 'maximum_water_volume' in
+    milliliters or until the 'maximum_training_time' in minutes is reached, whichever comes first.
+
+    Args:
+        runtime: The initialized _BehavioralTraining instance that manages all Mesoscope-VR components used by this
+            training runtime.
+        average_reward_delay: The average time, in seconds, that separates two reward deliveries. This is used to
+            generate the reward delay sequence as the center of the uniform distribution from which delays are sampled.
+        maximum_deviation_from_mean: The maximum deviation from the average reward delay, in seconds. This determines
+            the upper and lower boundaries for the data sampled from the uniform distribution centered at the
+            average_reward_delay.
+        maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
+        maximum_training_time: The maximum time, in minutes, to run the training.
+
+    Notes:
+        All delays fall in the range of average_reward_delay +- maximum_deviation_from_mean.
+
+        This function acts on top of the BehavioralTraining class and provides the overriding logic for the lick
+        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
+        functions are only required when training the animals without Unity.
+    """
+    # Initializes the timer that keeps the training running until the time threshold is reached
+    delay_timer = PrecisionTimer("s")
+
+    # Also initializes the timer used to track how long the animal maintains above-threshold running speed.
+    lap_timer = PrecisionTimer("ms")
+
+    # Uses runtime tracker extracted from the runtime instance to initialize the visualizer instance
+    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
+    visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
+
+    # Converts the training time from minutes to seconds to make it compatible with the timer precision.
+    training_time = maximum_training_time * 60
+
+    # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
+    # putting the animal on the VR rig.
+    runtime.start()
+
+    # Starts the visualizer process
+    visualizer.initialize()
+
+    # Configures all system components to support lick training
+    runtime.run_train_state()
+
+    # Initializes the listener instance used to detect training abort signals sent via the keyboard.
+    listener = KeyboardListener()
+
+    message = (
+        f"Initiating run training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
+        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Creates a tqdm progress bar for time tracking (total = maximum training time in seconds)
+    progress_bar = tqdm(
+        total=training_time,
+        desc="Run training progress",
+        unit="sec",
+        bar_format="{l_bar}{bar}| {n:.1f}/{total:.1f} sec [{elapsed}<{remaining}]"
+    )
+
+    # Defines tracker variables used below to determine when the animal is performing the training task satisfactorily.
+    previous_speed = 0.0
+
+    # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
+    delay_timer.reset()
+    last_update_time = 0  # Track when we last updated the progress bar
+
+    # Main training loop
+    while delay_timer.elapsed < training_time:
+
+        # Reads the running speed from the speed tracker at each iteration
+        current_speed = speed_tracker.read_data(index=0, convert_output=True)
+
+        # If the speed is above the initial speed threshold,
+        if current_speed > maximum_speed_threshold:
+            lap_time = lap_timer.elapsed
+
+            if previous_speed < maximum_speed_threshold:
+                lap_timer.reset()
+
+        # Updates the progress bar every second
+        current_time = int(delay_timer.elapsed)
+        if current_time > last_update_time:
+
+            # Updates the progress bar by the number of seconds that have passed
+            progress_bar.update(current_time - last_update_time)
+            last_update_time = current_time
+
+        # Updates the visualizer plot
+        visualizer.update()
+
+        # If the listener detects a reward delivery signal, delivers the reward to the animal
+        if listener.reward_signal:
+            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+        # If the user sent the abort command, terminates the training early
+        if listener.exit_signal:
+            message = (
+                "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            break
+
+    # Close the progress bar
+    progress_bar.close()
+
+    # Shutdown sequence:
+    message = (
+        f"Training runtime: Complete."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Closes the visualizer, as the runtime is now over
+    visualizer.close()
+
+    # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
+    # destinations.
+    runtime.stop()
