@@ -1,7 +1,11 @@
 import re
 from typing import Dict, List, Optional
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import (
+    time as dt_time,
+    datetime,
+    timezone,
+)
 from dataclasses import field, dataclass
 
 import numpy as np
@@ -10,23 +14,27 @@ from googleapiclient.discovery import build  # type: ignore
 from google.oauth2.service_account import Credentials
 
 
-def convert_date_to_utc(date_str: str) -> int:
-    if not date_str:
+def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
+    """
+    Converts a date and time string to a UTC timestamp.
+
+    Args:
+        date: The date string in the format "%m-%d-%y".
+        time: The time string in the format "%H:%M". If None, it is set to a default of "00:00"
+    """
+    if not date:
         return 0
 
-    date = datetime.strptime(date_str, "%m-%d-%y")
-    utc_timestamp = int(date.replace(tzinfo=timezone.utc).timestamp())
-    return utc_timestamp
+    date_obj = datetime.strptime(date, "%m-%d-%y").date()
 
+    if time:
+        time_obj = datetime.strptime(time, "%H:%M").time()
+    else:
+        time_obj = dt_time(0, 0)
 
-def convert_time_to_utc(time_str: Optional[str], date_str: Optional[str]) -> int:
-    if not time_str or not date_str:
-        return 0
-
-    date = datetime.strptime(date_str, "%m-%d-%y")
-    time = datetime.strptime(time_str, "%H:%M").time()
-    full_datetime = datetime.combine(date, time)
-    utc_timestamp = int(full_datetime.replace(tzinfo=timezone.utc).timestamp())
+    full_datetime = datetime.combine(date_obj, time_obj)
+    full_datetime = full_datetime.replace(tzinfo=timezone.utc)
+    utc_timestamp = int(full_datetime.timestamp())
 
     return utc_timestamp
 
@@ -56,7 +64,7 @@ class ProtocolData:
         status: Stores the current status of the mouse, indicating whether it is alive or deceased.
     """
 
-    id: str | None = None
+    id: int = 0
     date: np.uint64 = np.uint64(0)
     surgeon: str | None = None
     protocol: str | None = None
@@ -69,20 +77,19 @@ class ProtocolData:
     location_housed: str | None = None
     status: str | None = None
 
-    def __init__(self, headers: Optional[Dict[str, int]] = None, row: Optional[List[Optional[str]]] = None):
-        if headers and row:
-            self.id = row[headers.get("id", -1)]
-            self.date = convert_date_to_utc(row[headers.get("date", -1)])
-            self.surgeon = row[headers.get("surgeon", -1)]
-            self.protocol = row[headers.get("protocol", -1)]
-            self.cage = int(row[headers.get("cage_#", -1)])
-            self.ear_punch = row[headers.get("ear_punch", -1)]
-            self.sex = row[headers.get("sex", -1)]
-            self.genotype = row[headers.get("genotype", -1)]
-            self.dob = convert_date_to_utc(row[headers.get("dob", -1)])
-            self.weight = float(row[headers.get("weight_(g)", -1)])
-            self.location_housed = row[headers.get("location_housed", -1)]
-            self.status = row[headers.get("status", -1)]
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        self.id = int(row[headers.get("id", -1)])
+        self.date = _convert_date_time(date=row[headers.get("date", -1)], time=None)
+        self.surgeon = row[headers.get("surgeon", -1)]
+        self.protocol = row[headers.get("protocol", -1)]
+        self.cage = int(row[headers.get("cage #", -1)])
+        self.ear_punch = row[headers.get("ear punch", -1)]
+        self.sex = row[headers.get("sex", -1)]
+        self.genotype = row[headers.get("genotype", -1)]
+        self.dob = _convert_date_time(date=row[headers.get("dob", -1)], time=None)
+        self.weight = float(row[headers.get("weight (g)", -1)])
+        self.location_housed = row[headers.get("location housed", -1)]
+        self.status = row[headers.get("status", -1)]
 
 
 @dataclass
@@ -160,25 +167,24 @@ class ImplantData:
     implant2_location: Optional[str] = None
     implant2_coordinates: Optional[Coordinates] = None
 
-    def __init__(self, headers: Optional[Dict[str, int]] = None, row: Optional[List[Optional[str]]] = None):
-        if headers and row:
-            implants = ("implant1", "implant2")
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        implants = ("implant1", "implant2")
 
-            for implant in implants:
-                if implant in headers:
-                    setattr(self, implant, row[headers[implant]])
+        for implant in implants:
+            if implant in headers:
+                setattr(self, implant, row[headers[implant]])
 
-                if f"{implant}_location" in headers:
-                    setattr(self, f"{implant}_location", row[headers[f"{implant}_location"]])
+            if f"{implant}_location" in headers:
+                setattr(self, f"{implant}_location", row[headers[f"{implant}_location"]])
 
-                implant_coords_key = f"{implant}_coordinates"
-                if implant_coords_key in headers and row[headers[implant_coords_key]]:
-                    coords_str = row[headers[implant_coords_key]]
-                    if coords_str:
-                        parsed_coords = Coordinates.parse_coordinates(coords_str)
-                    else:
-                        parsed_coords = None
-                    setattr(self, implant_coords_key, parsed_coords)
+            implant_coords_key = f"{implant}_coordinates"
+            if implant_coords_key in headers and row[headers[implant_coords_key]]:
+                coords_str = row[headers[implant_coords_key]]
+                if coords_str:
+                    parsed_coords = Coordinates.parse_coordinates(coords_str)
+                else:
+                    parsed_coords = None
+                setattr(self, implant_coords_key, parsed_coords)
 
 
 @dataclass
@@ -207,24 +213,23 @@ class InjectionData:
     injection2_region: Optional[str] = None
     injection2_coordinates: Optional[Coordinates] = None
 
-    def __init__(self, headers: Optional[Dict[str, int]] = None, row: Optional[List[Optional[str]]] = None):
-        if headers and row:
-            injections = ("injection1", "injection2")
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        injections = ("injection1", "injection2")
 
-            for injection in injections:
-                if f"{injection}" in headers:
-                    setattr(self, injection, row[headers[f"{injection}"]])
+        for injection in injections:
+            if f"{injection}" in headers:
+                setattr(self, injection, row[headers[f"{injection}"]])
 
-                if f"{injection}_region" in headers:
-                    setattr(self, f"{injection}_region", row[headers[f"{injection}_region"]])
+            if f"{injection}_region" in headers:
+                setattr(self, f"{injection}_region", row[headers[f"{injection}_region"]])
 
-                if f"{injection}_coordinates" in headers and row[headers[f"{injection}_coordinates"]]:
-                    coords_str = row[headers[f"{injection}_coordinates"]]
-                    if coords_str:
-                        parsed_coords = Coordinates.parse_coordinates(coords_str)
-                    else:
-                        parsed_coords = None
-                    setattr(self, f"{injection}_coordinates", parsed_coords)
+            if f"{injection}_coordinates" in headers and row[headers[f"{injection}_coordinates"]]:
+                coords_str = row[headers[f"{injection}_coordinates"]]
+                if coords_str:
+                    parsed_coords = Coordinates.parse_coordinates(coords_str)
+                else:
+                    parsed_coords = None
+                setattr(self, f"{injection}_coordinates", parsed_coords)
 
 
 @dataclass
@@ -250,19 +255,22 @@ class Drug:
     buprenorphine: Optional[float] = None
     dexomethazone: Optional[float] = None
 
-    def __init__(self, headers: Optional[Dict[str, int]] = None, row: Optional[List[Optional[str]]] = None):
-        if headers and row:
-            drug_mapping = {
-                "lrs_(ml)": "lrs",
-                "ketoprofen_(ml)": "ketoprofen",
-                "buprenorphine_(ml)": "buprenorphine",
-                "dexomethazone_(ml)": "dexomethazone",
-            }
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        drug_mapping = {
+            "lrs (ml)": "lrs",
+            "ketoprofen (ml)": "ketoprofen",
+            "buprenorphine (ml)": "buprenorphine",
+            "dexomethazone (ml)": "dexomethazone",
+        }
 
-            for header_name, attr_name in drug_mapping.items():
-                if header_name in headers:
-                    value = row[headers[header_name]]
-                    setattr(self, attr_name, float(value) if value else None)
+        for header_name, attr_name in drug_mapping.items():
+            if header_name in headers:
+                value = row[headers[header_name]]
+
+                if value:
+                    setattr(self, attr_name, float(value))
+                else:
+                    setattr(self, attr_name, None)
 
 
 @dataclass
@@ -284,14 +292,12 @@ class BrainData:
     brain_location: str | None = None
     brain_status: str | None = None
 
-    def __init__(self, headers: Optional[Dict[str, int]] = None, row: Optional[List[Optional[str]]] = None):
-        if headers and row:
-            self.brain_location = row[headers["brain_location"]]
-            self.brain_status = row[headers["brain_status"]]
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]]):
+        self.brain_location = row[headers["brain location"]]
+        self.brain_status = row[headers["brain status"]]
 
 
-@dataclass
-class SurgeryData(YamlConfig):
+class SurgeryData:
     """
     This dataclass combines the processed hierarchies of data from the ProtocolData, ImplantData,
     InjectionData, Drug, and BrainData classes with additional information from the inter-
@@ -316,40 +322,29 @@ class SurgeryData(YamlConfig):
         brain_data: Stores an instance of the BrainData class.
     """
 
-    protocol_data: ProtocolData = field(default_factory=ProtocolData)
-    implant_data: ImplantData = field(default_factory=ImplantData)
-    injection_data: InjectionData = field(default_factory=InjectionData)
-    drug_data: Drug = field(default_factory=Drug)
-    iso_o2_ratio: Optional[str] = None
-    start: np.uint64 = np.uint64(0)
-    end: np.uint64 = np.uint64(0)
-    duration: str | None = None
-    surgery_notes: str | None = None
-    post_op_notes: str | None = None
-    sac_date: str | None = None
-    brain_data: BrainData = field(default_factory=BrainData)
-
-    def get_surgery_data(self, headers: Dict[str, int], row: List[Optional[str]]) -> "SurgeryData":
-        """
-        Returns an instance of the SurgeryData class with attributes populated from the row data.
-        """
-        return SurgeryData(
-            protocol_data=ProtocolData(headers=headers, row=row),
-            implant_data=ImplantData(headers=headers, row=row),
-            injection_data=InjectionData(headers=headers, row=row),
-            drug_data=Drug(headers=headers, row=row),
-            iso_o2_ratio=row[headers["iso_o2_ratio"]],
-            start=convert_time_to_utc(time_str=row[headers["start"]], date_str=row[headers["date"]]),
-            end=convert_time_to_utc(time_str=row[headers["end"]], date_str=row[headers["date"]]),
-            duration=row[headers["duration"]],
-            surgery_notes=row[headers["surgery_notes"]],
-            post_op_notes=row[headers["post_op_notes"]],
-            sac_date=row[headers["sac_date"]],
-            brain_data=BrainData(headers=headers, row=row),
-        )
+    def __init__(self, headers: Dict[str, int], row: List[Optional[str]], tab_name: str):
+        self.tab_name: str = tab_name
+        self.protocol_data = ProtocolData(headers=headers, row=row)
+        self.implant_data = ImplantData(headers=headers, row=row)
+        self.injection_data = InjectionData(headers=headers, row=row)
+        self.drug_data = Drug(headers=headers, row=row)
+        self.iso_o2_ratio: str = row[headers["iso:o2 ratio"]]
+        self.start: np.uint64 = _convert_date_time(date=row[headers["date"]], time=row[headers["start"]])
+        self.end: np.uint64 = _convert_date_time(date=row[headers["date"]], time=row[headers["end"]])
+        self.duration: np.uint64 = self.end - self.start
+        self.surgery_notes: str = row[headers["surgery notes"]]
+        self.post_op_notes: str = row[headers["post-op notes"]]
+        self.sac_date: np.uint64 = _convert_date_time(date=row[headers["sac date"]], time=None)
+        self.brain_data: BrainData = BrainData(headers=headers, row=row)
 
 
 class _SheetData:
+    """
+    This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
+    the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
+    and grant access to Google APIs for data parsing.
+    """
+
     def __init__(self, tab_name: str):
         self.sheet_id = "1fOM2SenU7Dcz6Y1fw_cd7g4eJRuxXdjgZUofOuMNo7k"  # Replace with actual sheet ID
         self.range = "A1:ZZ"
@@ -362,6 +357,11 @@ class _SheetData:
         self.tab_name = tab_name
 
     def _get_sheet_data(self) -> List[List[str]]:
+        """
+        Retrieves non-empty rows from the specified tab in the Google Sheet. This method ensures
+        that only populated rows are processed to handle variations in row counts across different tabs.
+        """
+
         creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
         service = build("sheets", "v4", credentials=creds)
 
@@ -372,6 +372,9 @@ class _SheetData:
         return [row for row in tab_data if row]
 
     def _replace_empty(self, row_data: List[List[str]]) -> List[List[Optional[str]]]:
+        """
+        Replaces empty cells and cells containing 'n/a', '--' or '---' with None.
+        """
         result: List[List[Optional[str]]] = []
 
         for row in row_data:
@@ -388,6 +391,10 @@ class _SheetData:
         return result
 
     def _parse(self) -> None:
+        """
+        Processes the raw data fetched from the Google Sheet to extract and modify the headers
+        to remove any invalid characters and whitespaces.
+        """
         raw_data = self._get_sheet_data()
         replaced_data = self._replace_empty(raw_data)
         first_row = replaced_data[0]
@@ -396,17 +403,17 @@ class _SheetData:
 
         for i, column in enumerate(first_row):
             column_str = str(column).lower()
-            column_str = column_str.replace(" ", "_").replace(":", "_").replace("-", "_")
-
             self.headers[column_str] = i
 
         self.data = replaced_data[1:]
 
     def _return_all(self) -> List[SurgeryData]:
+        """
+        Parses each row of sheet data into a SurgeryData instance and returns a list of these instances.
+        """
         surgeries = []
         for row in self.data:
-            surgery_data = SurgeryData().get_surgery_data(self.headers, row)
-            surgery_data.tab_name = self.tab_name
+            surgery_data = SurgeryData(headers=self.headers, row=row, tab_name=self.tab_name)
             surgeries.append(surgery_data)
         return surgeries
 
@@ -423,7 +430,7 @@ class FilteredSurgeries(YamlConfig):
     surgeries: List[SurgeryData] = field(default_factory=list)
 
 
-def extract_mouse(tab_name: str, mouse_id: str) -> FilteredSurgeries:
+def extract_mouse(tab_name: str, mouse_id: int) -> FilteredSurgeries:
     """
     Fetches data from the specified tab in the Google Sheet and filters it based on the mouse ID provided.
     """
@@ -440,5 +447,5 @@ def extract_mouse(tab_name: str, mouse_id: str) -> FilteredSurgeries:
 
 
 # Main
-filtered_surgeries = extract_mouse(tab_name="Sheet1", mouse_id="2")
+filtered_surgeries = extract_mouse(tab_name="Sheet1", mouse_id=2)
 filtered_surgeries.to_yaml(file_path=Path("mouse_data.yaml"))

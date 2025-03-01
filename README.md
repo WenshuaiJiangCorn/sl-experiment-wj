@@ -488,7 +488,14 @@ the Actions menu. If a key does not already exist, create a new key and download
 JSON file should be added to your project directory and will be used for authentication when making requests to the Google 
 Sheets API. 
 
-1. Sheet Configuration
+1. Google API Client Setup
+
+    The script for data parsing requires the google-api-python-client and google-auth libraries to interact with the Google 
+    Sheets API. Install all dependencies with the following command:
+    pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib. 
+
+
+2. Sheet Configuration
 
     To connect to your Google Sheet, the sheet ID, range, service account file and scope must be specified. The sheet ID 
     is the unique identifier found in the URL between /d/ and /edit. To parse data from the entire sheet, set the range
@@ -503,7 +510,7 @@ Sheets API.
     SERVICE_ACCOUNT_FILE = "path/to/your/service-account-key.json"
     SCOPES = ["Scope code"]
 
-2. Authentication using service account credentials and Retrieving Data
+3. Authentication using service account credentials and Retrieving Data
 
     creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  
     service = build("sheets", "v4", credentials=creds)
