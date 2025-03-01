@@ -1482,8 +1482,10 @@ class LickInterface(ModuleInterface):
             voltage in Volts.
         _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
-        _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the ADC value
-            associated with the status.
+        _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
+            of licks detected since class initialization.
+        _lick_count: Stores the total number of licks detected by the class instance running inside the Communication
+            process since initialization.
     """
 
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None:
@@ -1513,9 +1515,13 @@ class LickInterface(ModuleInterface):
         # Precreates a shared memory array used to track and share the current lick sensor status.
         self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_lick_tracker",
-            prototype=np.empty(shape=2, dtype=np.uint16),
+            prototype=np.empty(shape=2, dtype=np.uint64),
             exist_ok=True,
         )
+
+        # Similar to how Valve reward volume works, it is more reliable to track the lick count in Python and only
+        # write it to the SHM array to avoid dealing with multiprocessing locks.
+        self._lick_count: int = 0
 
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
@@ -1563,11 +1569,12 @@ class LickInterface(ModuleInterface):
             # which acts as a binary lick trigger.
             self._communication.send_data(topic=self._sensor_topic, payload=None)
 
-            # Updates the tracker array with new data
-            self._lick_tracker.write_data(index=(0, 2), data=np.array([1, detected_voltage], dtype=np.uint16))
+            # Increments the lick count and updates the tracker array with new data
+            self._lick_count += 1
+            self._lick_tracker.write_data(index=(0, 2), data=np.array([1, self._lick_count], dtype=np.uint64))
         else:
             # Updates the tracker array with new data
-            self._lick_tracker.write_data(index=(0, 2), data=np.array([0, detected_voltage], dtype=np.uint16))
+            self._lick_tracker.write_data(index=0, data=np.uint64(0))
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""

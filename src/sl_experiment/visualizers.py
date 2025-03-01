@@ -128,6 +128,7 @@ class BehaviorVisualizer:
         _previous_lick_state: Stores the lick state sampled during the previous update cycle.
         _previous_valve_state: Stores the valve state sampled during the previous update cycle.
         _previous_valve_volume: Stores the total volume of water sampled during the previous update cycle.
+        _previous_lick_count: Stores the total number of licks sampled during the previous update cycle.
         _lick_line: Stores the line class used to plot the lick sensor data.
         _valve_line: Stores the line class used to plot the solenoid valve data.
         _speed_line: Stores the line class used to plot the average running speed data.
@@ -164,6 +165,7 @@ class BehaviorVisualizer:
         self._previous_lick_state = np.uint8(0)
         self._previous_valve_state = np.uint8(0)
         self._previous_valve_volume = np.float64(0)
+        self._previous_lick_count = np.uint64(0)
 
         # Line objects (to be created during initialization)
         self._lick_line = None
@@ -346,9 +348,17 @@ class BehaviorVisualizer:
         # Lick and valve states are communicated as squares (rising and falling edges). However, we want to display
         # them as rising edge marks only. To do so, we manually track rising edges and only set the specific timestamp
         # that detects the rising edge to 1.
+
+        # For the lick tracking, we now also have the fallback of working with the total lick count. While we do not
+        # expect mice to lick fast enough for the visualizer to 'miss' licks, this is a safety feature that
+        # adds little processing time, but ensures licks are always detected and visualized.
+        new_count = self._lick_tracker.read_data(index=1, convert_output=False)
         new_lick = np.uint8(self._lick_tracker.read_data(index=0, convert_output=False))
         if not self._previous_lick_state and new_lick:
             self._lick_data[-1] = new_lick
+        elif new_count != self._previous_lick_count:
+            # This is similar to our valve check, see below for an explanation.
+            self._lick_data[-1] = np.uint8(1)
         else:
             self._lick_data[-1] = np.uint8(0)
         self._previous_lick_state = new_lick
