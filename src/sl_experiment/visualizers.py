@@ -362,6 +362,7 @@ class BehaviorVisualizer:
         else:
             self._lick_data[-1] = np.uint8(0)
         self._previous_lick_state = new_lick
+        self._previous_lick_count = new_count
 
         # For valve, also carries out the 'fallback' check for the total delivered volume. This is needed to catch very
         # short valve pulses that fall between the update cycles of the visualizer.

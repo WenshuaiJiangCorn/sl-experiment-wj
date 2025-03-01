@@ -3700,8 +3700,7 @@ def lick_training_logic(
         reward_delays,
         desc="Running lick training",
         unit="reward",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}<",
-        postfix=f"{np.round(cumulative_time[max_samples_idx - 1] / 60, decimals=0)}]"
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]"
     ):
         # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done during
         # the delay has to go here
