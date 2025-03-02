@@ -111,7 +111,7 @@ class _LickTrainingDescriptor(YamlConfig):
     """Stores the deviation value, in seconds, used to determine the upper and lower bounds for the reward delay 
     distribution."""
     maximum_water_volume_ml: float = 1.0
-    """Stores the maximum volume of water the system is allowed to dispensed during training."""
+    """Stores the maximum volume of water the system is allowed to dispense during training."""
     maximum_training_time_m: int = 40
     """Stores the maximum time, in minutes, the system is allowed to run the training for."""
     experimenter_notes: str = "Replace this with your notes."
@@ -128,6 +128,26 @@ class _RunTrainingDescriptor(YamlConfig):
     """
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
+    initial_running_speed_cm_s: float = 0.0
+    """Stores the initial running speed threshold, in centimeters per second, used during training."""
+    initial_speed_duration_s: float = 0.0
+    """Stores the initial above-threshold running duration, in seconds, used during training."""
+    increase_threshold_ml: float = 0.0
+    """Stores the volume of water delivered to the animal, in milliliters, that triggers the increase in the running 
+    speed and duration thresholds."""
+    increase_running_speed_cm_s: float = 0.0
+    """Stores the value, in centimeters per second, used by the system to increment the running speed threshold each 
+    time the animal receives 'increase_threshold' volume of water."""
+    increase_speed_duration_s: float = 0.0
+    """Stores the value, in seconds, used by the system to increment the duration threshold each time the animal 
+    receives 'increase_threshold' volume of water."""
+    maximum_running_speed_cm_s: float = 0.0
+    """Stores the maximum running speed threshold, in centimeters per second, the system is allowed to use during 
+    training."""
+    maximum_speed_duration_s: float = 0.0
+    """Stores the maximum above-threshold running duration, in seconds, the system is allowed to use during training."""
+    maximum_water_volume_ml: float = 1.0
+    """Stores the maximum volume of water the system is allowed to dispensed during training."""
     maximum_training_time_m: int = 40
     """Stores the maximum time, in minutes, the system is allowed to run the training for."""
     experimenter_notes: str = "Replace this with your notes."
@@ -2999,6 +3019,20 @@ class MesoscopeExperiment:
         # Camera timestamp processing is handled by a dedicated binding class method
         self._cameras.process_log_data(output_file=self._session_data.camera_timestamps_path)
 
+    @property
+    def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
+        """Returns the tracker SharedMemoryArrays for (in this order) the LickInterface, ValveInterface, and
+        EncoderInterface.
+
+        These arrays should be passed to the BehaviorVisualizer class to monitor the lick, valve and running speed data
+        in real time during the experiment session.
+        """
+        return (
+            self._microcontrollers.lick_tracker,
+            self._microcontrollers.valve_tracker,
+            self._microcontrollers.speed_tracker,
+        )
+
 
 class _BehavioralTraining:
     """The base class for all behavioral training runtimes.
@@ -3591,7 +3625,7 @@ def lick_training_logic(
     average_reward_delay: int = 12,
     maximum_deviation_from_mean: int = 6,
     maximum_water_volume: float = 1.0,
-    maximum_training_time: int = 30,
+    maximum_training_time: int = 20,
 ) -> None:
     """Encapsulates the logic used to train animals how to operate the lick port.
 
@@ -3700,12 +3734,11 @@ def lick_training_logic(
         reward_delays,
         desc="Running lick training",
         unit="reward",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]"
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
     ):
         # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done during
         # the delay has to go here
         while delay_timer.elapsed < delay:
-
             # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
             # interest and appear visually smooth to human observers.
             visualizer.update()
@@ -3952,48 +3985,78 @@ def run_train_logic(
     runtime: _BehavioralTraining,
     initial_speed_threshold: float = 0.1,
     initial_duration_threshold: float = 0.1,
+    speed_increase_step: float = 0.25,
+    duration_increase_step: float = 0.25,
+    increase_threshold: float = 0.1,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
-    maximum_training_time: int = 30,
-    speed_increase_step: float = 0.5,
-    duration_increase_step: float = 0.5,
-    increase_water_threshold: float = 0.1,
+    maximum_training_time: int = 40,
 ) -> None:
-    """Encapsulates the logic used to train animals how to operate the lick port.
+    """Encapsulates the logic used to train animals how to run on the VR wheel.
 
-    The lick training consists of delivering randomly spaced 5 uL water rewards via the Valve module to teach the
-    animal that water comes out of the lick port. Each reward is delivered at a pseudorandom delay after the previous
-    reward or training onset. Reward delay sequence is generated before training runtime by sampling a uniform
-    distribution centered at 'average_reward_delay' with lower and upper bounds defined by
-    'maximum_deviation_from_mean'. The training continues either until the valve delivers the 'maximum_water_volume' in
-    milliliters or until the 'maximum_training_time' in minutes is reached, whichever comes first.
+    The run training consists of making the animal run on the wheel with a desired speed, in centimeters per second,
+    maintained for the desired duration of seconds. This is used train the animal to exhibit good running speed and
+    endurance. Each time the animal satisfies the speed and duration threshold, it receives 5 uL of water reward, and
+    the speed and durations trackers reset for the next 'round'. If the animal performs well and receives many water
+    rewards, the speed and duration thresholds increase to make the task more challenging. This is used to progressively
+    train the animal to run better and to prevent the animal from completing the training too early.
+
+    Notes:
+        This function is highly configurable and can be adapted to a wide range of training scenarios. A central aim for
+        designing the function was to go away from the arbitrary, experimenter-determined reward brackets in favor of
+        a more principled approach to training.
+
+        This function acts on top of the BehavioralTraining class and provides the overriding logic for the run
+        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
+        functions are only required when training the animals without Unity.
 
     Args:
         runtime: The initialized _BehavioralTraining instance that manages all Mesoscope-VR components used by this
             training runtime.
-        average_reward_delay: The average time, in seconds, that separates two reward deliveries. This is used to
-            generate the reward delay sequence as the center of the uniform distribution from which delays are sampled.
-        maximum_deviation_from_mean: The maximum deviation from the average reward delay, in seconds. This determines
-            the upper and lower boundaries for the data sampled from the uniform distribution centered at the
-            average_reward_delay.
+        initial_speed_threshold: The initial speed threshold, in centimeters per second, that the animal must maintain
+            to receive water rewards.
+        initial_duration_threshold: The initial duration threshold, in seconds, that the animal must maintain
+            above-threshold running speed to receive water rewards.
+        speed_increase_step: The step size, in centimeters per second, to increase the speed threshold by each time the
+            animal receives 'increase_threshold' milliliters of water.
+        duration_increase_step: The step size, in seconds, to increase the duration threshold by each time the animal
+            receives 'increase_threshold' milliliters of water.
+        increase_threshold: The volume of water, in milliliters, the animal should receive for the speed and duration
+            threshold to be increased by one step. Note, the animal will at most get 'maximum_water_volume' of water,
+            so this parameter effectively controls how many increases will be made during runtime, assuming the maximum
+            training time is not reached.
+        maximum_speed_threshold: The maximum speed threshold, in centimeters per second, that the animal must maintain
+            to receive water rewards. Once this threshold is reached, it will not be increased further regardless of how
+            much water is delivered to the animal.
+        maximum_duration_threshold:
+            The maximum duration threshold, in seconds, that the animal must maintain above-threshold running speed to
+            receive water rewards. Once this threshold is reached, it will not be increased further regardless of
+            how much water is delivered to the animal.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
-
-    Notes:
-        All delays fall in the range of average_reward_delay +- maximum_deviation_from_mean.
-
-        This function acts on top of the BehavioralTraining class and provides the overriding logic for the lick
-        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
-        functions are only required when training the animals without Unity.
     """
     # Initializes the timer that keeps the training running until the time threshold is reached
-    delay_timer = PrecisionTimer("s")
+    runtime_timer = PrecisionTimer("s")
 
     # Also initializes the timer used to track how long the animal maintains above-threshold running speed.
-    lap_timer = PrecisionTimer("ms")
+    speed_timer = PrecisionTimer("ms")
 
-    # Uses runtime tracker extracted from the runtime instance to initialize the visualizer instance
+    # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
+    # optimize main loop runtime speed:
+    initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
+    initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
+    speed_step = np.float64(speed_increase_step)  # In centimeters per second
+    maximum_speed = np.float64(maximum_speed_threshold)  # In centimeters per second
+    maximum_duration = np.float64(maximum_duration_threshold * 1000)  # In milliseconds
+    duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
+    water_threshold = np.float64(increase_threshold * 1000)  # In microliters
+    maximum_water_volume = np.float64(maximum_water_volume * 1000)  # In microliters
+
+    # Precomputes the maximum possible increase steps count
+    max_increase_steps = int(np.floor(maximum_water_volume / water_threshold))
+
+    # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
     visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
 
@@ -4007,10 +4070,10 @@ def run_train_logic(
     # Starts the visualizer process
     visualizer.initialize()
 
-    # Configures all system components to support lick training
+    # Configures all system components to support run training
     runtime.run_train_state()
 
-    # Initializes the listener instance used to detect training abort signals sent via the keyboard.
+    # Initializes the listener instance used to enable keyboard-driven training runtime control.
     listener = KeyboardListener()
 
     message = (
@@ -4019,54 +4082,87 @@ def run_train_logic(
     )
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Creates a tqdm progress bar for time tracking (total = maximum training time in seconds)
+    # Creates a tqdm progress bar that tracks the overall training progress and communicates the current speed and
+    # duration threshold
     progress_bar = tqdm(
-        total=training_time,
+        total=max_increase_steps,
         desc="Run training progress",
-        unit="sec",
-        bar_format="{l_bar}{bar}| {n:.1f}/{total:.1f} sec [{elapsed}<{remaining}]"
+        unit="level",
+        bar_format="{l_bar}{bar}| Level {n}/{total} [{elapsed}<{remaining}]",
     )
 
-    # Defines tracker variables used below to determine when the animal is performing the training task satisfactorily.
-    previous_speed = 0.0
+    # Tracks the number of times the speed and duration thresholds have been increased. This is used to update the
+    # progress bar as the training runs.
+    last_increase_steps = 0
 
-    # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
-    delay_timer.reset()
-    last_update_time = 0  # Track when we last updated the progress bar
+    # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
+    # volume of water is delivered or the loop is aborted by the user.
+    runtime_timer.reset()
+    speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
+    while runtime_timer.elapsed < training_time:
+        # Updates the total volume of water dispensed during runtime at each loop iteration.
+        dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
 
-    # Main training loop
-    while delay_timer.elapsed < training_time:
+        # Determines how many times the speed and duration thresholds have been increased based on the difference
+        # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
+        # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
+        # harder to keep receiving water.
+        increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
+        speed_threshold: np.float64 = np.min(initial_speed + (increase_steps * speed_step), maximum_speed)
+        duration_threshold: np.float64 = np.min(initial_duration + (increase_steps * duration_step), maximum_duration)
 
-        # Reads the running speed from the speed tracker at each iteration
+        # Reads the animal's running speed from the speed tracker at each loop iteration
         current_speed = speed_tracker.read_data(index=0, convert_output=True)
 
-        # If the speed is above the initial speed threshold,
-        if current_speed > maximum_speed_threshold:
-            lap_time = lap_timer.elapsed
+        # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed for
+        # the required duration, delivers 5 uL of water.
+        # If the speed is above threshold, but the animal has not yet maintained the required duration, the loop will
+        # keep cycling and accumulating the timer count. This is done until the animal either reaches the required
+        # duration or drops below the speed threshold.
+        if current_speed > speed_threshold and speed_timer.elapsed > duration_threshold:
+            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
-            if previous_speed < maximum_speed_threshold:
-                lap_timer.reset()
+            # Also resets the timer. While mice typically stop to consume water rewards, which would reset the timer,
+            # this guards against animals that carry on running without consuming water rewards.
+            speed_timer.reset()
 
-        # Updates the progress bar every second
-        current_time = int(delay_timer.elapsed)
-        if current_time > last_update_time:
+        # If the current speed is below the speed threshold, resets the speed timer.
+        elif current_speed < speed_threshold:
+            speed_timer.reset()
 
-            # Updates the progress bar by the number of seconds that have passed
-            progress_bar.update(current_time - last_update_time)
-            last_update_time = current_time
+        # Updates the progress bar when the increase step level changes
+        if int(increase_steps) > last_increase_steps:
+            progress_bar.update(int(increase_steps) - last_increase_steps)
+            last_increase_steps = int(increase_steps)
+
+        # Updates the progress bar's postfix with current threshold values
+        progress_bar.set_postfix(
+            {
+                "Speed Threshold": f"{speed_threshold:.2f} cm/s",
+                "Duration Threshold": f"{duration_threshold / 1000:.2f} s",
+            }
+        )
 
         # Updates the visualizer plot
         visualizer.update()
 
-        # If the listener detects a reward delivery signal, delivers the reward to the animal
+        # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
+        # training early with a success message.
+        if dispensed_water_volume > maximum_water_volume:
+            message = (
+                f"Run training has delivered the maximum allowed volume of water ({maximum_water_volume} ml). Aborting "
+                f"the training process."
+            )
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            break
+
+        # If the listener detects a reward delivery signal, delivers the reward to the animal.
         if listener.reward_signal:
             runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
-        # If the user sent the abort command, terminates the training early
+        # If the user sent the abort command, terminates the training early with an error message.
         if listener.exit_signal:
-            message = (
-                "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
-            )
+            message = "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
             console.echo(message=message, level=LogLevel.ERROR)
             break
 
@@ -4074,9 +4170,78 @@ def run_train_logic(
     progress_bar.close()
 
     # Shutdown sequence:
-    message = (
-        f"Training runtime: Complete."
+    message = f"Training runtime: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Closes the visualizer, as the runtime is now over
+    visualizer.close()
+
+    # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
+    # destinations.
+    runtime.stop()
+
+
+def run_experiment_logic() -> None:
+    """Provides the reference implementation of experimental runtime that uses the Mesoscope-VR system.
+
+    This function is not intended to be used during real experiments. Instead, it demonstrates how to implement and
+    experiment and is used during testing and calibration of the Mesoscope-VR system. It uses hardcoded default runtime
+    parameters and should not be modified or called by end-users.
+    """
+
+    rest_duration = 2  # Duration of rest phase
+    run_duration = 5  # Duration of run phrase
+    total_duration = rest_duration + run_duration  # Total duration of the experiment
+    runtime_timer = PrecisionTimer('s')  # TImer to enforce phase durations
+
+    # Generates the runtime class and other assets
+    session_data = SessionData(
+        project_name="TestMice",
+        animal_name="666"
     )
+    descriptor = _MesoscopeExperimentDescriptor()
+    runtime = MesoscopeExperiment(
+        session_data=session_data,
+        descriptor=descriptor,
+        cue_length_map={0: 20, 1: 20, 2: 20, 3: 20, 4: 20}  # Ivan's task, version with 4 cues and 4 gray regions
+    )
+
+    # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
+    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
+    visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
+
+    # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
+    # putting the animal on the VR rig.
+    runtime.start()
+
+    # Starts the visualizer process
+    visualizer.initialize()
+
+    # Initializes the keyboard listener to support aborting test runtimes.
+    listener = KeyboardListener()
+
+    # Main runtime loop
+    once = True
+    runtime.change_experiment_state(1)
+    runtime_timer.reset()
+    console.echo(message="Delaying for the resting phase.", level=LogLevel.INFO)
+    while runtime_timer.elapsed < total_duration:
+        visualizer.update()  # Continuously updates the visualizer
+
+        if once and runtime_timer.elapsed > rest_duration:
+            once = False
+            console.echo(message="Delaying for the running phase.", level=LogLevel.INFO)
+            runtime.vr_run()
+            runtime.change_experiment_state(2)
+
+        # If the user sent the abort command, terminates the runtime early with an error message.
+        if listener.exit_signal:
+            message = "Experiment runtime: aborted due to user request."
+            console.echo(message=message, level=LogLevel.ERROR)
+            break
+
+    # Shutdown sequence:
+    message = f"Experiment runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Closes the visualizer, as the runtime is now over
