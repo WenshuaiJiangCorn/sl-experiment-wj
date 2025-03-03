@@ -54,13 +54,8 @@ class EncoderInterface(ModuleInterface):
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
         _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
-        _speed_tracker: Stores the SharedMemoryArray that stores the average running speed of the animal.
-        _speed_timer: Stores the PrecisionTimer instance when the class is in the Communication process. The timer is
-            used to calculate the average running speed from the received encoder data.
-        _previous_position: Stores the previous absolute position of the animal in centimeters relative to the runtime
-            onset. This value is updated to the _current_position value every 100 milliseconds.
-        _current_position: Stores the current absolute position of the animal in centimeters relative to the runtime
-            onset. This value is updated each time the encoder sends data to the PC.
+        _distance_tracker: Stores the SharedMemoryArray that stores the absolute distance traveled by the animal since
+            class initialization, in centimeters.
     """
 
     def __init__(
@@ -104,23 +99,18 @@ class EncoderInterface(ModuleInterface):
         # issues
         self._communication: MQTTCommunication | None = None
 
-        # Precreates a shared memory array used to track and share the running speed of the animal. This is primarily
-        # used for data visualization and during run training.
-        self._speed_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
-            name=f"{self._module_type}_{self._module_id}_speed_tracker",
-            prototype=np.empty(shape=1, dtype=np.float64),
+        # Precreates a shared memory array used to track and share the absolute distance, in centimeters, traveled by
+        # the animal since class initialization.
+        self._distance_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"{self._module_type}_{self._module_id}_distance_tracker",
+            prototype=np.zeros(shape=1, dtype=np.uint64),
             exist_ok=True,
         )
 
-        # Initializes additional assets used to calculate running speed
-        self._speed_timer: None | PrecisionTimer = None  # Placeholder
-        self._previous_position: np.float64 = np.float64(0)
-        self._current_position: np.float64 = np.float64(0)
-
     def __del__(self) -> None:
         """Ensures the speed_tracker is properly cleaned up when the class is garbage-collected."""
-        self._speed_tracker.disconnect()
-        self._speed_tracker.destroy()
+        self._distance_tracker.disconnect()
+        self._distance_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
         """Initializes the MQTTCommunication class and connects to the MQTT broker.
@@ -131,21 +121,21 @@ class EncoderInterface(ModuleInterface):
         # MQTT Client is used to send motion data to Unity over MQTT
         self._communication = MQTTCommunication()
         self._communication.connect()
-        self._speed_tracker.connect()
-        self._speed_timer = PrecisionTimer("ms")
+        self._distance_tracker.connect()
 
     def terminate_remote_assets(self) -> None:
         """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""
         self._communication.disconnect()
-        self._speed_tracker.disconnect()
+        self._distance_tracker.disconnect()
 
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
         """Processes incoming data in real time.
 
         Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
-        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console, so make sure the console is
-        enabled. Also calculates the average running speed of the animal using 100 ms smoothing window and sends it to
-        the central process via the _speed_tracker SharedMemoryArray.
+        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console.
+
+        Also, keeps track of the total distance traveled by the animal since class initialization, relative to the
+        initial position at runtime onset and updates the distance_tracker SharedMemoryArray.
 
         Notes:
             If debug mode is enabled, motion data is also converted to centimeters and printed via console.
@@ -169,28 +159,21 @@ class EncoderInterface(ModuleInterface):
             decimals=8,
         )
 
-        # Converts the motion into centimeters
+        # Converts the motion into centimeters. Does NOT include the sign as right now we do not care about the
+        # direction of motion with how we use this data.
         cm_motion = np.round(
-            a=np.float64(message.data_object) * self._cm_per_pulse * sign,
+            a=np.float64(message.data_object) * self._cm_per_pulse,
             decimals=8,
         )
 
-        # Aggregates all motion data into the _current_position attribute.
-        self._current_position += cm_motion
-
-        # Every 100 milliseconds, calculates the average running speed using the absolute difference between the current
-        # and previous positions of the animal and updates the _speed_tracker with the data.
-        elapsed_time = np.float64(self._speed_timer.elapsed)
-        self._speed_timer.reset()  # Resets to start timing the next window while processing the data
-        if elapsed_time > 100:
-            position_change = np.abs(self._current_position - self._previous_position, dtype=np.float64)
-            average_speed = np.float64(position_change / elapsed_time) * 1000  # In cm / s
-            self._speed_tracker.write_data(index=0, data=average_speed)
-            self._previous_position = self._current_position
+        # Continuously aggregates the travel data into the _distance attribute and updates the tracker array.
+        distance = self._distance_tracker.read_data(index=0, convert_output=False)
+        distance += cm_motion
+        self._distance_tracker.write_data(index=0, data=distance)
 
         # If the class is in the debug mode, prints the motion data via console
         if self._debug:
-            console.echo(message=f"Encoder moved {cm_motion} cm.")
+            console.echo(message=f"Encoder moved {cm_motion * sign} cm.")  # Includes the sign here
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -323,13 +306,13 @@ class EncoderInterface(ModuleInterface):
         return self._cm_per_pulse
 
     @property
-    def speed_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the average running speed of the animal in centimeters per second.
+    def distance_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray that stores the total distance, in centimeters, traveled by the animal since
+        runtime onset.
 
-        The running speed is computed over a window of 100 milliseconds. It is stored under index 0 of the tracker
-        and uses a float64 datatype.
+        The distance is stored under index 0 of the tracker and uses the uint64 datatype.
         """
-        return self._speed_tracker
+        return self._distance_tracker
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.
@@ -419,8 +402,6 @@ class TTLInterface(ModuleInterface):
         _pulse_tracker: When the class is initialized with the report_pulses flag, stores the SharedMemoryArray used
             to track how many pulses the class has recorded since initialization. Otherwise, this will be set to the
             None placeholder.
-        _pulse_count: Stores the number of pulses recorded by the class since initialization. This is used inside the
-            Communication process to properly update the _pulse_tracker array.
     """
 
     def __init__(self, module_id: np.uint8, report_pulses: bool = False, debug: bool = False) -> None:
@@ -456,11 +437,10 @@ class TTLInterface(ModuleInterface):
         # other processes. Critically, for the class that monitors mesoscope frame timestamps, this is used to determine
         # if the mesoscope trigger successfully starts frame acquisition.
         self._pulse_tracker: SharedMemoryArray | None = None
-        self._pulse_count: int = 0
         if report_pulses:
             self._pulse_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
                 name=f"{self._module_type}_{self._module_id}_pulse_tracker",
-                prototype=np.empty(shape=1, dtype=np.uint64),
+                prototype=np.zeros(shape=1, dtype=np.uint64),
                 exist_ok=True,
             )
 
@@ -501,9 +481,10 @@ class TTLInterface(ModuleInterface):
 
         # If the class is running in pulse tracking mode, each time the class receives a HIGH edge message, increments
         # the pulse tracker by one.
-        if self._report_pulses and message.event == 52:
-            self._pulse_count += 1
-            self._pulse_tracker.write_data(index=0, data=np.uint64(self._pulse_count))
+        if self._pulse_tracker is not None and message.event == 52:
+            count = self._pulse_tracker.read_data(index=0, convert_output=False)
+            count += 1
+            self._pulse_tracker.write_data(index=0, data=count)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -698,7 +679,7 @@ class TTLInterface(ModuleInterface):
         return frame_timestamps
 
     @property
-    def pulse_status(self) -> int:
+    def pulse_count(self) -> int:
         """Returns the total number of received TTL pulses recorded by the class since initialization."""
 
         # If pulse tracking is disabled, always returns 0 (no pulses were recorded).
@@ -986,7 +967,7 @@ class BreakInterface(ModuleInterface):
 class ValveInterface(ModuleInterface):
     """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
 
-    ValveModule allows interfacing with a solenoid valve to controllably dispense precise amounts of fluid. The module
+    ValveModule allows interfacing with a solenoid valve to controllably dispense precise volumes of fluid. The module
     is designed to send digital signals that trigger Field-Effect-Transistor (FET) gated relay hardware to deliver
     voltage that opens or closes the controlled valve. The module can be used to either permanently open or close the
     valve or to cycle opening and closing in a way that ensures a specific amount of fluid passes through the
@@ -1016,12 +997,13 @@ class ValveInterface(ModuleInterface):
         _calibration_cov
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
-        _reward_tracker: Stores the SharedMemoryArray that tracks the current valve status and the total volume of
-            water dispensed by the valve.
+        _reward_tracker: Stores the SharedMemoryArray that tracks how many times the valve was opened and the total
+            volume of water dispensed by the valve during runtime.
         _previous_state: Tracks the previous valve state as Open (True) or Closed (False). This is used to accurately
             track delivered water volume.
         _cycle_timer: A PrecisionTimer instance initialized in the Communication process to track how long the valve
-            stays open during cycling.
+            stays open during cycling. This used together with the _previous_state to determine the volume of water
+            delivered by the valve during runtime.
     """
 
     def __init__(
@@ -1072,12 +1054,10 @@ class ValveInterface(ModuleInterface):
         # current valve state (open or closed). Index 1 tracks the total amount of water dispensed by the valve.
         self._reward_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_reward_tracker",
-            prototype=np.empty(shape=2, dtype=np.float64),
+            prototype=np.zeros(shape=2, dtype=np.float64),
             exist_ok=True,
         )
         self._previous_state: bool = False
-
-        # Placeholder
         self._cycle_timer: PrecisionTimer | None = None
 
     def __del__(self) -> None:
@@ -1099,10 +1079,9 @@ class ValveInterface(ModuleInterface):
         """Processes incoming data.
 
         Valve calibration events (code 54) are sent to the terminal via console regardless of the debug flag. If the
-        class was initialized in the debug mode, Valve opening (code 52) and closing (code 52) codes are also sent to
-        the terminal. Also, updates the reward_tracker state (index 0) each time the valve sends a new state message
-        and for each Open and Close cycle updates the total volume of dispensed waters stored under index 1 of the
-        reward_tracker.
+        class was initialized in the debug mode, Valve opening (code 52) and closing (code 53) codes are also sent to
+        the terminal. Also, stores the total number of times the valve was opened under _reward_tracker index 0 and the
+        total volume of water delivered during runtime under _reward_tracker index 1.
 
         Note:
             Make sure the console is enabled before calling this method.
@@ -1111,8 +1090,10 @@ class ValveInterface(ModuleInterface):
             if self._debug:
                 console.echo(f"Valve Opened")
 
-            # Updates the current valve state in the storage array
-            self._reward_tracker.write_data(index=0, data=np.float64(1))
+            # Each time the valve is opened, increments the pulse counter by one and updates the reward tracker
+            count = self._reward_tracker.read_data(index=0, convert_output=False)
+            count += 1
+            self._reward_tracker.write_data(index=0, data=count)
 
             # Resets the cycle timer each time the valve transitions from closed to open state.
             if not self._previous_state:
@@ -1122,9 +1103,6 @@ class ValveInterface(ModuleInterface):
         elif message.event == 53:
             if self._debug:
                 console.echo(f"Valve Closed")
-
-            # Updates the current valve state in the storage array
-            self._reward_tracker.write_data(index=0, data=np.float64(0))
 
             # Each time the valve transitions from open to closed state, records the period of time the valve was open
             # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
@@ -1143,13 +1121,19 @@ class ValveInterface(ModuleInterface):
         elif message.event == 54:
             console.echo(f"Valve Calibration: Complete")
 
-    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
         """When called, this method statically sends a reward delivery command to the ValveModule instance.
 
         Notes:
             The method does NOT evaluate the input message or topic. It is written to always send reward trigger
             commands when called. If future Sun lab pipelines need this method to evaluate the input message, the logic
             of the method needs to be rewritten.
+
+            Returning the command message is more efficient than using the input_queue interface in this particular
+            case.
+
+        Returns:
+            The command message to be sent to the microcontroller.
         """
 
         # Currently, the only message that can be processed by this method is the reward trigger message from Unity.
@@ -1162,7 +1146,7 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(1),
             noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
         )
-        self._input_queue.put(command)  # type: ignore
+        return command
 
     def set_parameters(
         self,
@@ -1363,13 +1347,12 @@ class ValveInterface(ModuleInterface):
         return self._reward_tracker.read_data(index=1, convert_output=True)
 
     @property
-    def reward_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the current valve state and the total volume of water delivered
-        during the current runtime.
+    def valve_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray that stores the total number of valve pulses and the total volume of water
+        delivered during the current runtime.
 
-        The valve state is stored under index 0, while the total delivered volume is stored under index 1. Both values
-        are stored as a float64 datatype. The valve state is 1 when the valve is open and 0 otherwise. The total
-        delivered volume is given in microliters.
+        The number of valve pulses is stored under index 0, while the total delivered volume is stored under index 1.
+        Both values are stored as a float64 datatype. The total delivered volume is given in microliters.
         """
         return self._reward_tracker
 
@@ -1485,8 +1468,6 @@ class LickInterface(ModuleInterface):
         _debug: Stores the debug flag.
         _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
             of licks detected since class initialization.
-        _lick_count: Stores the total number of licks detected by the class instance running inside the Communication
-            process since initialization.
     """
 
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None:
@@ -1513,16 +1494,13 @@ class LickInterface(ModuleInterface):
         # issues
         self._communication: MQTTCommunication | None = None
 
-        # Precreates a shared memory array used to track and share the current lick sensor status.
+        # Precreates a shared memory array used to track and share the total number of licks recorded by the sensor
+        # since class initialization.
         self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_lick_tracker",
-            prototype=np.empty(shape=2, dtype=np.uint64),
+            prototype=np.zeros(shape=1, dtype=np.uint64),
             exist_ok=True,
         )
-
-        # Similar to how Valve reward volume works, it is more reliable to track the lick count in Python and only
-        # write it to the SHM array to avoid dealing with multiprocessing locks.
-        self._lick_count: int = 0
 
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
@@ -1548,8 +1526,8 @@ class LickInterface(ModuleInterface):
 
         Lick data (code 51) comes in as a change in the voltage level detected by the sensor pin. This value is then
         evaluated against the _lick_threshold and if the value exceeds the threshold, a binary lick trigger is sent to
-        Unity via MQTT. Additionally, the method sends both rising and falling lick detection triggers and their ADC
-        values to the central process so that the data can be used for closed-loop lick-valve control.
+        Unity via MQTT. Additionally, the method increments the total lick count stored in the _lick_tracker each time
+        an above-threshold voltage readout is received from the module.
 
         Notes:
             If the class runs in debug mode, this method sends all received lick sensor voltages to the
@@ -1571,11 +1549,9 @@ class LickInterface(ModuleInterface):
             self._communication.send_data(topic=self._sensor_topic, payload=None)
 
             # Increments the lick count and updates the tracker array with new data
-            self._lick_count += 1
-            self._lick_tracker.write_data(index=(0, 2), data=np.array([1, self._lick_count], dtype=np.uint64))
-        else:
-            # Updates the tracker array with new data
-            self._lick_tracker.write_data(index=0, data=np.uint64(0))
+            count = self._lick_tracker.read_data(index=0, convert_output=False)
+            count += 1
+            self._lick_tracker.write_data(index=0, data=count)
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -1683,22 +1659,12 @@ class LickInterface(ModuleInterface):
 
     @property
     def lick_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the current lick status and the corresponding ADC value detected
-        by the sensor.
+        """Returns the SharedMemoryArray that stores the total number of licks detected by the module since class
+        initialization.
 
-        The lick status is stored under index 0, while the ADC readout is stored under index 1. Both values are stored
-        as an uint16 datatype.
-
-        The lick status is 1 when the sensor detects a tongue contact and 0 otherwise. The ADC value is between 0,
-        representing no voltage flowing through the sensor (no tongue to complete the sensor circuit) and 4095,
-        representing maximum system voltage of 3.3 V flowing through the sensor.
+        The count is stored under index 0 of the array as an uint64 value.
         """
         return self._lick_tracker
-
-    @property
-    def lick_status(self) -> bool:
-        """Returns True if the sensor is currently detecting a lick and False otherwise."""
-        return bool(self._lick_tracker.read_data(index=0))
 
     def parse_logged_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
         """Extracts and prepares the data acquired by the module during runtime for further analysis.

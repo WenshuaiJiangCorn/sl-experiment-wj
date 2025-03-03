@@ -1190,9 +1190,9 @@ class _MicroControllerInterfaces:
         return self._reward.parse_logged_data()
 
     @property
-    def frame_acquisition_status(self) -> int:
-        """Returns true if the mesoscope is currently scanning (acquiring) a frame."""
-        return self._mesoscope_frame.pulse_status
+    def frame_count(self) -> int:
+        """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
+        return self._mesoscope_frame.pulse_count
 
     @property
     def total_delivered_volume(self) -> float:
@@ -1200,13 +1200,14 @@ class _MicroControllerInterfaces:
         return self._reward.delivered_volume
 
     @property
-    def speed_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the average speed of the animal during runtime.
+    def distance_tracker(self) -> SharedMemoryArray:
+        """Returns the SharedMemoryArray used to communicate the total distance traveled by the animal since since
+        runtime onset.
 
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
         """
-        return self._wheel_encoder.speed_tracker
+        return self._wheel_encoder.distance_tracker
 
     @property
     def lick_tracker(self) -> SharedMemoryArray:
@@ -1224,7 +1225,7 @@ class _MicroControllerInterfaces:
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         reward delivery plots.
         """
-        return self._reward.reward_tracker
+        return self._reward.valve_tracker
 
 
 class _VideoSystems:
@@ -2752,7 +2753,7 @@ class MesoscopeExperiment:
         while timeout_timer.elapsed < 2:
             # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
             # acquisition.
-            if self._microcontrollers.frame_acquisition_status:
+            if self._microcontrollers.frame_count:
                 return
 
         # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
@@ -3032,7 +3033,7 @@ class MesoscopeExperiment:
         return (
             self._microcontrollers.lick_tracker,
             self._microcontrollers.valve_tracker,
-            self._microcontrollers.speed_tracker,
+            self._microcontrollers.distance_tracker,
         )
 
 
@@ -3537,7 +3538,7 @@ class _BehavioralTraining:
         return (
             self._microcontrollers.lick_tracker,
             self._microcontrollers.valve_tracker,
-            self._microcontrollers.speed_tracker,
+            self._microcontrollers.distance_tracker,
         )
 
     def _process_log_data(self) -> None:
