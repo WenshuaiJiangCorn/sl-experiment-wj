@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 import copy
+import json
 
 from .module_interfaces import (
     TTLInterface,
@@ -795,7 +796,7 @@ class _MicroControllerInterfaces:
         # Module interfaces:
         # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
-        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
+        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), report_pulses=True, debug=debug)
         self._lick: LickInterface = LickInterface(lick_threshold=650, debug=debug)  # Lick sensor
         self._torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
@@ -1189,7 +1190,7 @@ class _MicroControllerInterfaces:
         return self._reward.parse_logged_data()
 
     @property
-    def frame_acquisition_status(self) -> bool:
+    def frame_acquisition_status(self) -> int:
         """Returns true if the mesoscope is currently scanning (acquiring) a frame."""
         return self._mesoscope_frame.pulse_status
 
@@ -2703,7 +2704,8 @@ class MesoscopeExperiment:
                 topic, payload = self._unity.get_data()
                 if topic == "CueSequence/":
                     # Extracts the sequence of cues that will be used during task runtime.
-                    sequence: NDArray[np.uint8] = np.frombuffer(buffer=payload, dtype=np.uint8)
+                    sequence = json.loads(payload.decode("utf-8"))["cue_sequence"]
+                    sequence: NDArray[np.uint8] = np.array(sequence, dtype=np.uint8)
                     return sequence
 
                 else:
@@ -4189,21 +4191,18 @@ def run_experiment_logic() -> None:
     parameters and should not be modified or called by end-users.
     """
 
-    rest_duration = 2  # Duration of rest phase
-    run_duration = 5  # Duration of run phrase
+    rest_duration = 0.5 * 60  # Duration of rest phase
+    run_duration = 5 * 60  # Duration of run phrase
     total_duration = rest_duration + run_duration  # Total duration of the experiment
-    runtime_timer = PrecisionTimer('s')  # TImer to enforce phase durations
+    runtime_timer = PrecisionTimer("s")  # TImer to enforce phase durations
 
     # Generates the runtime class and other assets
-    session_data = SessionData(
-        project_name="TestMice",
-        animal_name="666"
-    )
+    session_data = SessionData(project_name="TestMice", animal_name="666")
     descriptor = _MesoscopeExperimentDescriptor()
     runtime = MesoscopeExperiment(
         session_data=session_data,
         descriptor=descriptor,
-        cue_length_map={0: 20, 1: 20, 2: 20, 3: 20, 4: 20}  # Ivan's task, version with 4 cues and 4 gray regions
+        cue_length_map={0: 30, 1: 30, 2: 30, 3: 30, 4: 30},  # Ivan's task, version with 4 cues and 4 gray regions
     )
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance

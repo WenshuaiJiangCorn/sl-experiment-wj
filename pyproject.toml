@@ -158,7 +158,7 @@ sl-devices = "sl_experiment.cli:list_devices"
 sl-calibrate-valve = "sl_experiment.cli:calibrate_valve_cli"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
-
+sl-experiment = "sl_experiment.cli:run_experiment"
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]
 exclude = [".github", "recipe"]

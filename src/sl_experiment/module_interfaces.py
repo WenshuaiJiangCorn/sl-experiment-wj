@@ -417,8 +417,10 @@ class TTLInterface(ModuleInterface):
         _report_pulses: Stores the report pulses flag.
         _debug: Stores the debug flag.
         _pulse_tracker: When the class is initialized with the report_pulses flag, stores the SharedMemoryArray used
-            to transmit detected pulse status from the communication process back to the central process. Otherwise,
-            this will be set to the None placeholder.
+            to track how many pulses the class has recorded since initialization. Otherwise, this will be set to the
+            None placeholder.
+        _pulse_count: Stores the number of pulses recorded by the class since initialization. This is used inside the
+            Communication process to properly update the _pulse_tracker array.
     """
 
     def __init__(self, module_id: np.uint8, report_pulses: bool = False, debug: bool = False) -> None:
@@ -429,12 +431,17 @@ class TTLInterface(ModuleInterface):
         self._debug: bool = debug
         self._report_pulses: bool = report_pulses
 
-        # If the interface runs in the debug mode, configures the interface to monitor all incoming data codes.
-        # Otherwise, the interface does not need to do any real-time processing of incoming data, so sets data_codes to
-        # None.
+        # If the interface does not need to do any real-time processing of incoming data (not in debug or pulse
+        # monitoring mode), so sets data_codes to None.
         data_codes: set[np.uint8] | None = None
+        # If the interface runs in the debug mode, configures the interface to monitor all incoming data codes.
         if debug:
             data_codes = {np.uint8(52), np.uint8(53), np.uint8(55), np.uint8(56)}
+        # Alternatively, if the interface is configured to report pulses, adds the HIGH phase code to the list of
+        # monitored codes. We do not need to monitor other codes as pulse tracker simply counts how many pulses the
+        # class has encountered, which uses rising edge.
+        elif report_pulses:
+            data_codes = {np.uint8(52)}
 
         super().__init__(
             module_type=np.uint8(1),
@@ -445,15 +452,15 @@ class TTLInterface(ModuleInterface):
             error_codes=error_codes,
         )
 
-        # Precreates a shared memory array used to track and share the current received pulse status
-        # (detected / not detected) with other processes. This tracking method is faster than using multiprocessing
-        # queue, so it is preferred for time-critical application. Queue is easier to use, though, so we use it for
-        # non-time-critical applications.
+        # Precreates a shared memory array used to track and share the number of pulses encountered by the class with
+        # other processes. Critically, for the class that monitors mesoscope frame timestamps, this is used to determine
+        # if the mesoscope trigger successfully starts frame acquisition.
         self._pulse_tracker: SharedMemoryArray | None = None
+        self._pulse_count: int = 0
         if report_pulses:
             self._pulse_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
                 name=f"{self._module_type}_{self._module_id}_pulse_tracker",
-                prototype=np.empty(shape=1, dtype=np.uint8),
+                prototype=np.empty(shape=1, dtype=np.uint64),
                 exist_ok=True,
             )
 
@@ -475,8 +482,8 @@ class TTLInterface(ModuleInterface):
         """Processes incoming data when the class operates in debug or pulse reporting mode.
 
         During debug runtimes, this method dumps all received data into the terminal via the console class. During
-        pulse reporting runtimes, the class sets the _pulse_tracker to 1 when it detects a HIGH incoming TTL pulse and
-        to zero when it detects a LOW incoming TTL pulse.
+        pulse reporting runtimes, the class increments the _pulse_tracker array each time it encounters a HIGH TTL
+        signal edge sent by the mesoscope to timestamp acquiring (scanning) a new frame.
 
         Notes:
             If the interface runs in debug mode, make sure the console is enabled, as it is used to print received
@@ -492,11 +499,11 @@ class TTLInterface(ModuleInterface):
             if message.event == 56:
                 console.echo(f"TTLModule {self.module_id} emits LOW signal")
 
-        if self._report_pulses:
-            if message.event == 52:
-                self._pulse_tracker.write_data(index=0, data=np.uint8(1))
-            elif message.event == 53:
-                self._pulse_tracker.write_data(index=0, data=np.uint8(0))
+        # If the class is running in pulse tracking mode, each time the class receives a HIGH edge message, increments
+        # the pulse tracker by one.
+        if self._report_pulses and message.event == 52:
+            self._pulse_count += 1
+            self._pulse_tracker.write_data(index=0, data=np.uint64(self._pulse_count))
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -691,20 +698,14 @@ class TTLInterface(ModuleInterface):
         return frame_timestamps
 
     @property
-    def pulse_status(self) -> bool:
-        """Returns the current status of the incoming TTL pulse.
+    def pulse_status(self) -> int:
+        """Returns the total number of received TTL pulses recorded by the class since initialization."""
 
-        If the TTLModule receives the HIGH phase of the incoming TTL pulse, it returns True. Otherwise, returns False.
-        """
-
-        # If pulse tracking is disabled, always returns False.
+        # If pulse tracking is disabled, always returns 0 (no pulses were recorded).
         if self._pulse_tracker is None:
-            return False
+            return 0
 
-        if self._pulse_tracker.read_data(index=0) == 1:
-            return True
-        else:
-            return False
+        return int(self._pulse_tracker.read_data(index=0, convert_output=True))
 
 
 class BreakInterface(ModuleInterface):
