@@ -1190,7 +1190,7 @@ class _MicroControllerInterfaces:
         return self._reward.parse_logged_data()
 
     @property
-    def frame_count(self) -> int:
+    def mesoscope_frame_count(self) -> int:
         """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
         return self._mesoscope_frame.pulse_count
 
@@ -1201,8 +1201,8 @@ class _MicroControllerInterfaces:
 
     @property
     def distance_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the total distance traveled by the animal since since
-        runtime onset.
+        """Returns the SharedMemoryArray used to communicate the total distance traveled by the animal since runtime
+        onset.
 
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
@@ -2753,7 +2753,7 @@ class MesoscopeExperiment:
         while timeout_timer.elapsed < 2:
             # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
             # acquisition.
-            if self._microcontrollers.frame_count:
+            if self._microcontrollers.mesoscope_frame_count:
                 return
 
         # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
@@ -2887,14 +2887,14 @@ class MesoscopeExperiment:
             # If the message has a length of 2 bytes and the first element is 1, the message communicates the VR state
             # code.
             elif len(payload) == 2 and payload[0] == 1:
-                vr_state = np.uint8(payload[2])  # Extracts the VR state code from the second byte of the message.
+                vr_state = np.uint8(payload[1])  # Extracts the VR state code from the second byte of the message.
                 vr_states.append(vr_state)
                 vr_timestamps.append(timestamp)
 
             # Otherwise, if the starting code is 2, the message communicates the experiment state code.
             elif len(payload) == 2 and payload[0] == 2:
                 # Extracts the experiment state code from the second byte of the message.
-                experiment_state = np.uint8(payload[2])
+                experiment_state = np.uint8(payload[1])
                 experiment_states.append(experiment_state)
                 experiment_timestamps.append(timestamp)
 
@@ -3662,7 +3662,9 @@ def lick_training_logic(
 
     # Uses runtime tracker extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     message = f"Generating the pseudorandom reward delay sequence..."
     console.echo(message=message, level=LogLevel.INFO)
@@ -4061,7 +4063,9 @@ def run_train_logic(
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     # Converts the training time from minutes to seconds to make it compatible with the timer precision.
     training_time = maximum_training_time * 60
@@ -4208,7 +4212,9 @@ def run_experiment_logic() -> None:
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(lick_tracker=lick_tracker, valve_tracker=valve_tracker, speed_tracker=speed_tracker)
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.

@@ -100,35 +100,33 @@ class BehaviorVisualizer:
     supported metrics, even if some of them are not used during a particular session.
 
     Args:
-        lick_tracker: The SharedMemoryArray instance exposed by the LickInterface class that communicates the lick
-            sensor status in real time.
-        valve_tracker: The SharedMemoryArray instance exposed by the ValveInterface class that communicates the solenoid
-            valve state in real time.
-        speed_tracker: The SharedMemoryArray instance exposed by the EncoderInterface class that communicates the
-            running speed of the animal calculated over 100 ms window.
+        lick_tracker: The SharedMemoryArray instance exposed by the LickInterface class that communicates the number of
+            licks recorded by the class since runtime onset.
+        valve_tracker: The SharedMemoryArray instance exposed by the ValveInterface class that communicates the number
+            of times the valve has been opened since runtime onset.
+        distance_tracker: The SharedMemoryArray instance exposed by the EncoderInterface class that communicates the
+            total distance traveled by the animal since runtime onset, in centimeters.
 
     Attributes:
         _time_window: Specifies the time window, in seconds, to visualize during runtime. Currently, this is statically
             set to 20 seconds.
         _time_step: Specifies the interval, in milliseconds, at which to update the visualization plots. Currently, this
-            is statically set to 30 milliseconds. Due to the current configuration of the monitored hardware modules,
-            this value has to be below 35 milliseconds to guarantee that the visualization will not miss any data
-            events. This assumes that the central process is NOT doing any time-consuming operations that deadlock the
-            thread for longer than _time_step duration and does not account for rendering time.
+            is statically set to 30 milliseconds, which gives a good balance between update smoothness and rendering
+            time.
         _update_timer: The PrecisionTimer instance used to ensure that the figure is updated once every _time_step
             milliseconds.
         _lick_tracker: Stores the lick_tracker SharedMemoryArray.
         _valve_tracker: Stores the valve_tracker SharedMemoryArray.
-        _speed_tracker: Stores the speed_tracker SharedMemoryArray.
+        _distance_tracker: Stores the distance_tracker SharedMemoryArray.
         _timestamps: A numpy array that stores the timestamps of the displayed data during visualization runtime. The
             timestamps are generated at class initialization and are kept constant during runtime.
         _lick_data: A numpy array that stores the data used to generate the lick sensor state plot.
         _valve_data: A numpy array that stores the data used to generate the solenoid valve state plot.
         _speed_data: A numpy array that stores the data used to generate the running speed plot.
-        _previous_lick_state: Stores the lick state sampled during the previous update cycle.
-        _previous_valve_state: Stores the valve state sampled during the previous update cycle.
-        _previous_valve_volume: Stores the total volume of water sampled during the previous update cycle.
+        _previous_valve_count: Stores the total number of valve pulses sampled during the previous update cycle.
         _previous_lick_count: Stores the total number of licks sampled during the previous update cycle.
+        _previous_distance: Stores the total distance traveled by the animal sampled during the previous update cycle.
+        _speed_timer: Stores the PrecisionTimer instance used to convert traveled distance into running speed.
         _lick_line: Stores the line class used to plot the lick sensor data.
         _valve_line: Stores the line class used to plot the solenoid valve data.
         _speed_line: Stores the line class used to plot the average running speed data.
@@ -143,7 +141,7 @@ class BehaviorVisualizer:
         self,
         lick_tracker: SharedMemoryArray,
         valve_tracker: SharedMemoryArray,
-        speed_tracker: SharedMemoryArray,
+        distance_tracker: SharedMemoryArray,
     ) -> None:
         # Currently, the class is statically configured to visualize the sliding window of 20 seconds.
         self._time_window: int = 20
@@ -153,7 +151,7 @@ class BehaviorVisualizer:
         # Saves the input trackers to class attributes
         self._lick_tracker = lick_tracker
         self._valve_tracker = valve_tracker
-        self._speed_tracker = speed_tracker
+        self._distance_tracker = distance_tracker
 
         # Precreates the structures used to store the displayed data during visualization runtime
         self._timestamps = np.arange(
@@ -161,11 +159,13 @@ class BehaviorVisualizer:
         )
         self._lick_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
         self._valve_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
-        self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float32)
-        self._previous_lick_state = np.uint8(0)
-        self._previous_valve_state = np.uint8(0)
-        self._previous_valve_volume = np.float64(0)
+        self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float64)
+        self._previous_valve_count = np.float64(0)
         self._previous_lick_count = np.uint64(0)
+        self._previous_distance = np.float64(0)
+
+        # Initializes additional assets used to generate the running speed data from the distance tracking data.
+        self._speed_timer = PrecisionTimer("ms")
 
         # Line objects (to be created during initialization)
         self._lick_line = None
@@ -308,6 +308,7 @@ class BehaviorVisualizer:
             self.initialize()
             return
 
+        # Ensures the plot is not updated any faster than necessary to resolve the time-step used by the plot
         if self._update_timer.elapsed < self._time_step:
             return
         self._update_timer.reset()
@@ -325,7 +326,7 @@ class BehaviorVisualizer:
         self._figure.canvas.flush_events()
 
     def close(self) -> None:
-        """Closes teh visualized figure and cleans up the resources used by the class during runtime."""
+        """Closes the visualized figure and cleans up the resources used by the class during runtime."""
         if self._initialized:
             plt.close(self._figure)  # Closes the figure
 
@@ -345,41 +346,40 @@ class BehaviorVisualizer:
 
         # Replaces the last element (previously the first or 'oldest' value) with new data:
 
-        # Lick and valve states are communicated as squares (rising and falling edges). However, we want to display
-        # them as rising edge marks only. To do so, we manually track rising edges and only set the specific timestamp
-        # that detects the rising edge to 1.
-
-        # For the lick tracking, we now also have the fallback of working with the total lick count. While we do not
-        # expect mice to lick fast enough for the visualizer to 'miss' licks, this is a safety feature that
-        # adds little processing time, but ensures licks are always detected and visualized.
-        new_count = self._lick_tracker.read_data(index=1, convert_output=False)
-        new_lick = np.uint8(self._lick_tracker.read_data(index=0, convert_output=False))
-        if not self._previous_lick_state and new_lick:
-            self._lick_data[-1] = new_lick
-        elif new_count != self._previous_lick_count:
-            # This is similar to our valve check, see below for an explanation.
+        # Each time the overall lick count increments, displays a lick trigger. Lick counts are incremented at each
+        # rising edge of lick detection.
+        new_count = self._lick_tracker.read_data(index=0, convert_output=False)
+        if new_count != self._previous_lick_count:
             self._lick_data[-1] = np.uint8(1)
         else:
             self._lick_data[-1] = np.uint8(0)
-        self._previous_lick_state = new_lick
         self._previous_lick_count = new_count
 
-        # For valve, also carries out the 'fallback' check for the total delivered volume. This is needed to catch very
-        # short valve pulses that fall between the update cycles of the visualizer.
-        new_volume = self._valve_tracker.read_data(index=1, convert_output=False)
-        new_valve = np.uint8(self._valve_tracker.read_data(index=0, convert_output=False))
-        if not self._previous_valve_state and new_valve:
-            self._valve_data[-1] = new_valve
-        elif new_volume != self._previous_valve_volume:
-            # If the valve value does not indicate a rising edge, but the delivered volume has increased between the
-            # previous and the current update, this suggests that the valve pulsed between update cycles. Sets the
-            # visualizer to display the valve pulse. It is very likely that the visualization will be at most 60 ms
-            # behind the real valve open time, which is acceptable for visualization purposes.
+        # Carries out a similar computation for valve tracker. Valve pulse counter also increments on the rising edge
+        # of each valve open-close cycle.
+        new_valve_count = self._valve_tracker.read_data(index=0, convert_output=False)
+        if new_valve_count != self._previous_valve_count:
             self._valve_data[-1] = np.uint8(1)
         else:
             self._valve_data[-1] = np.uint8(0)
-        self._previous_valve_volume = new_volume
-        self._previous_valve_state = new_valve
+        self._previous_valve_count = new_valve_count
 
-        # Speed is reported continuously, so we do not need to do any special processing here.
-        self._speed_data[-1] = self._speed_tracker.read_data(index=0, convert_output=False)
+        # Finally, speed is computed slightly differently. This is because the update rate of this class exceeds the
+        # smoothing window size used to generate running speed:
+
+        # The speed is actually updated ~every 100 milliseconds. Until the update timeout is exhausted, at each update
+        # cycle the last speed point is overwritten with the previous update point. This would generate a sequence of
+        # 3-4 identical speed readouts, but this should not be very noticeable to the user.
+        if self._speed_timer.elapsed < 100:
+            self._speed_data[-1] = self._speed_data[-2]
+        else:
+            # Once the timeout passes, determines the total distance covered by the animal while the timeout was
+            # active and uses it to compute the running speed in cm/s
+            self._speed_timer.reset()
+            travelled_distance: np.float64 = self._distance_tracker.read_data(index=0, convert_output=False)
+            delta_distance = travelled_distance - self._previous_distance
+            running_speed = np.float64((delta_distance / 100) * 1000)  # Gets distance in cm / ms and converts to cm / s
+
+            # Inserts the newly computed datapoint into the data array and updates the previous distance tracker
+            self._speed_data[-1] = running_speed
+            self._previous_distance = travelled_distance
