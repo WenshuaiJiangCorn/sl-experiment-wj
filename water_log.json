@@ -1,0 +1,14 @@
+{
+    "type": "service_account",
+    "project_id": "water-log-452315",
+    "private_key_id": "85a9e8917f0a5606a24f2af9695c3d19e543f71f",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCd3UXD1dReBQFq\nKhP2bwjS9GVQvUkYYrvTjyHOYK5fnXuKoKp/zNo7a7lYR0CFMQvjlKpS1D2bJVsf\n9rT+z82OOtejn7o8swxGnjzhP08HdClQJYgsPHv6mX+OxCB+j+5EMuGyvFcN+LdX\n/B3El0OuzpowBoMDKyq1qkXmwbQa6//iBhIhLnN6inDKvqSwQhjKHUcRzwj7LNAE\nWgrxdRg0TzK6IGmF+xCfBzxEniVX8OO037uxst1/k5eK0+1nBjfZGHsvWAE5Xut/\nMqyaPhGDT0xniMrYd/FggpZifxd/nhMg4RFYbjxkmgHDIjbSisMmbhuGuIaTooSv\nwwFbwr45AgMBAAECggEAJCceWM7R05VYYViRGU0M64jqYf7zbDkCVF0xbArSrFWL\nyy/n1BxVNyoAuKGaulYE58Hubskp8auwroWIpllvNR0vMMr98vQ7Qbnv7dLalbWp\n12+8+4p/hyDbqFWsrmdmdOplK1J8Klg1Htp/c7wDlVc90vVO0C002wVLfGEMjuR0\nQzvAlqfZaDhWJ007CruoLgQzkN/5StUikXFNJPqi8Qv85ry6R2OrhQhdTed4p8/O\nsT9AGHh1d4kQmX81lJO5sx7b0O7o++dudtwJ5HgpazmvcX2JQUGX7g4C0DGu9Yzd\nKEOfpLtJCkjEWhCPRpr14I2uO3WVWpREX1yrJsKLPQKBgQDddIW28elj1/z5N02r\nDM1z5lJ4EDCVwsj1MA+uKxnYpzhHIyoxU32PJChexXBf//gBQZTR+Nhn8LDj6htw\n7zbujlZUb2SBLJz9a1QlIXEFtzTOCwvr5ZNqdgQuBLdsPGnFXV4+jq1IHWHD+nHC\nRI+8sDUiRrnYOQpjpz5NyUilvQKBgQC2fVjJoxGiTfOO1sU5pyl+YrWB9KAUlZoc\nEeOGpgd3jcGFvpUUzFwaDIC3BVIm3n6xxzD7Hb0XxrHQl+SOIBcf3Se71VUJQvGj\nzsW+6QvIWBpuV48JUAzvestrx0eyx9GsjMrk0/r+W4dswbo1zwSfzBSwalh2WGre\nr0kTQMfMLQKBgC2mxaHPALPKZKXjVql6PCg2RK3neHyG6PJSdAkNbYiSADH598qv\nUWTeqUvQG7hOhguMP2eBiuryXSS+r+V6CrLmuLkzNV7DmaFMLM5ytF/fQo1vDYgV\njWwW5AmwgzdWxN8gvjrbIrGJDQxfZnALvi3BjVKBjfIa4B9m7JsQcV9pAoGAYPcz\noViDezFeVCyseVjoRF6gwV/BW46uZ3Hd6uL3nr/072L4BigcXD7+ecFbCIo62a3U\nyengWuzZ+NNsv1Qv1V+GyFivqY8npHmvOyTLfPXLfYwK1dDyPqGJy0gFQerI752U\nBYjZmiP6ToCVuBe7BknDSIYJYUDT8GVFN/S49TUCgYEAiK7vVTekbyKBJxSQvPK/\nQsM+TIs+rsJL9vz0seeNOAVTTqiFCabDU1Hssb1JVw0W9PLjQ60lLy58azMvOlYp\n1988uWjkUetSsnWyBKWOi9kb9tv+8g0G2U3/znRymBRajmejZ6oL47I3ouLJl248\nOyrutKAvrDSjH/GZRZmrePs=\n-----END PRIVATE KEY-----\n",
+    "client_email": "water-log@water-log-452315.iam.gserviceaccount.com",
+    "client_id": "112006490425264620482",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/water-log%40water-log-452315.iam.gserviceaccount.com",
+    "universe_domain": "googleapis.com"
+  }
+  

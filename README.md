@@ -502,7 +502,7 @@ Sheets API.
     to A1:Z for up to 26 columns or A1:ZZ if exceeded. The tab name is optional and is only required if the sheet contains 
     multiple tabs. If no tab name is provided, the default is set as the first tab. The scope defines the application's 
     access level to the Google Sheets API. The full list of Google Sheets API scopes can be found here 
-    [https://developers.google.com/sheets/api/scopes].
+    [https://developers.google.com/identity/protocols/oauth2/scopes].
 
     sheet_id = "your-google-sheet-id"
     range = "range"

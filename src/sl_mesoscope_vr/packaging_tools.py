@@ -46,7 +46,9 @@ def _calculate_file_checksum(base_directory: Path, file_path: Path) -> tuple[str
     return relative_path, checksum.digest()
 
 
-def calculate_directory_checksum(directory: Path, num_processes: int | None = None, batch: bool = False, save_checksum: bool=True) -> str:
+def calculate_directory_checksum(
+    directory: Path, num_processes: int | None = None, batch: bool = False, save_checksum: bool = True
+) -> str:
     """Calculates xxHash3-128 checksum for the input directory, which includes the data of all contained files and
     the directory structure information.
 

@@ -55,7 +55,7 @@ class ProtocolData:
         surgeon: Stores the operating surgeon(s).
         protocol: Stores the protocol ID of the surgery.
         cage: Stores the cage number which the mouse is placed post-surgery.
-        ear_punch: Stores whether the mouse has an ear punch.
+        ear_punch: Stores whether the mouse has an ear punch in either ear. 
         sex: Stores the gender of the mouse.
         genotype: Stores the genotype of the mouse.
         dob: Stores the date of birth of the mouse

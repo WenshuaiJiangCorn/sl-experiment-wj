@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import tempfile
 
-from ataraxis_communication_interface.communication import MQTTCommunication
 from tqdm import tqdm
 import numpy as np
 from ataraxis_time import PrecisionTimer
@@ -14,15 +13,16 @@ from module_interfaces import (
     LickInterface,
     BreakInterface,
     ValveInterface,
+    ScreenInterface,
     TorqueInterface,
     EncoderInterface,
-    ScreenInterface,
 )
 from ataraxis_base_utilities import console, ensure_directory_exists
 from mesoscope_preprocessing import extract_frames_from_stack
 from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MicroControllerInterface
+from ataraxis_communication_interface.communication import MQTTCommunication
 
 
 class MesoscopeExperiment:
