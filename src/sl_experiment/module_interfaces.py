@@ -979,6 +979,11 @@ class ValveInterface(ModuleInterface):
 
         The valve will notify the PC about its initial state (Open or Closed) after setup.
 
+        Our valve is statically configured to deliver audible tones when it is pulsed. This is used exclusively by the
+        Pulse command, so the tone will not sound when the valve is activated during Calibration or Open commands. The
+        default pulse duration is 100 ms, and this is primarily used to provide the animal with an auditory cue for the
+        water reward.
+
     Args:
         valve_calibration_data: A tuple of tuples that contains the data required to map pulse duration to delivered
             fluid volume. Each sub-tuple should contain the integer that specifies the pulse duration in microseconds
@@ -994,7 +999,9 @@ class ValveInterface(ModuleInterface):
         _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that
             some valves may have a minimum open time or dispensed fluid volume, which is captured by the intercept.
             This improves the precision of fluid-volume-to-valve-open-time conversions.
-        _calibration_cov
+        _calibration_cov: Stores the covariance matrix that describes the quality of fitting the calibration data using
+            the power law. This is used to determine how well the valve performance is approximated by the power
+            law.
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
         _valve_tracker: Stores the SharedMemoryArray that tracks how many times the valve was opened and the total
@@ -1153,6 +1160,7 @@ class ValveInterface(ModuleInterface):
         pulse_duration: np.uint32 = np.uint32(35590),
         calibration_delay: np.uint32 = np.uint32(200000),
         calibration_count: np.uint16 = np.uint16(200),
+        tone_duration: np.uint32 = np.uint32(100000),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
@@ -1174,12 +1182,15 @@ class ValveInterface(ModuleInterface):
                 phase before starting the next calibration cycle.
             calibration_count: The number of times to pulse the valve during calibration. A number between 10 and 100 is
                 enough for most use cases.
+            tone_duration: The time, in microseconds, to sound the audible tone when the valve is pulsed. This is only
+                used if the hardware ValveModule instance was provided with the TonePin argument at instantiation. If
+                your use case involves emitting tones, make sure this value is higher than the pulse_duration value.
         """
         message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
-            parameter_data=(pulse_duration, calibration_delay, calibration_count),
+            parameter_data=(pulse_duration, calibration_delay, calibration_count, tone_duration),
         )
         self._input_queue.put(message)  # type: ignore
 
