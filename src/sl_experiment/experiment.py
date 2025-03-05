@@ -37,16 +37,7 @@ from pynput import keyboard
 
 @dataclass()
 class _LickTrainingDescriptor(YamlConfig):
-    """This class is used to save the description information specific to lick training sessions as a .yaml file.
-
-    Notes:
-        Primarily, descriptors are used to store session-specific information that may be challenging or impossible
-        to extract from the logged data in a format easily accessible by experimenters. This allows experimenters to
-        quickly check the session description data file and reference the information stored inside the file.
-
-        Do not instantiate or use this class manually. It is designed to be written by the runtime management class
-        during its stop() method runtime.
-    """
+    """This class is used to save the description information specific to lick training sessions as a .yaml file."""
 
     session_type: str = "lick_training"
     """
@@ -71,6 +62,7 @@ class _LickTrainingDescriptor(YamlConfig):
 
 @dataclass()
 class _RunTrainingDescriptor(YamlConfig):
+    """This class is used to save the description information specific to run training sessions as a .yaml file."""
     session_type: str = "run_training"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
@@ -78,6 +70,10 @@ class _RunTrainingDescriptor(YamlConfig):
     """
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
+    final_running_speed_cm_s: float = 0.0
+    """Stores the final running speed threshold that was active at the end of training."""
+    final_speed_duration_s: float = 0.0
+    """Stores the final running duration threshold that was active at the end of training."""
     initial_running_speed_cm_s: float = 0.0
     """Stores the initial running speed threshold, in centimeters per second, used during training."""
     initial_speed_duration_s: float = 0.0
@@ -107,6 +103,7 @@ class _RunTrainingDescriptor(YamlConfig):
 
 @dataclass()
 class _MesoscopeExperimentDescriptor(YamlConfig):
+    """This class is used to save the description information specific to experiment sessions as a .yaml file."""
     session_type: str = "mesoscope_experiment"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
@@ -119,6 +116,22 @@ class _MesoscopeExperimentDescriptor(YamlConfig):
     notes made during runtime."""
 
 
+@dataclass()
+class _ProcessingTracker(YamlConfig):
+    """This class is used to track which data acquisition and processing pipelines have been applied to the session
+    data.
+
+    This is primarily used together with scheduled data processing tasks to ensure the same data is not processed
+    multiple times. Additionally, it can be used to determine the current processing stage of the data.
+    """
+    data_acquisition: bool = True
+    data_preprocessing: bool = False
+    integrity_verification: bool = False
+    data_compression: bool = False
+    mesoscope_registration: bool = False
+    video_tracking: bool = False
+
+
 def _process_experiment_data(log_path: Path, output_directory: Path, cue_map: dict[int, float]) -> None:
     """Extracts the VR states, Experiment states, and the Virtual Reality cue sequence from the log generated
     by the instance during runtime and saves the extracted data as Polars DataFrame .feather files.
@@ -128,6 +141,10 @@ def _process_experiment_data(log_path: Path, output_directory: Path, cue_map: di
     has a distance colum which stores the distance the animal has to run, in cm, to reach each cue in the sequence. It
     is expected that during data processing, the distance data will be used to align the cues to the distance ran by
     the animal during the experiment.
+
+    Notes:
+        This function is used as the target for a multiprocessing executor used by the MesoscopeExperiment class during
+        stop() method.
     """
     # Loads the archive into RAM
     archive: NpzFile = np.load(file=log_path)
@@ -172,9 +189,9 @@ def _process_experiment_data(log_path: Path, output_directory: Path, cue_map: di
 
         payload = message[9:]  # Extracts the payload from the message
 
-        # If the message is longer than 10,000 bytes, it is a sequence of wall cues. It is very unlikely that we
+        # If the message is longer than 500 bytes, it is a sequence of wall cues. It is very unlikely that we
         # will log any other data with this length, so it is a safe heuristic to use.
-        if len(payload) > 10000:
+        if len(payload) > 500:
             cue_sequence = payload.view(np.uint8).copy()  # Keeps the original numpy uint8 format
 
         # If the message has a length of 2 bytes and the first element is 1, the message communicates the VR state
@@ -250,6 +267,8 @@ class KeyboardListener:
     Attributes:
         _exit_flag: Tracks whether the instance has detected the runtime abort key sequence press.
         _reward_flag: Tracks whether the instance has detected the reward delivery key sequence press.
+        _speed_flag: Tracks the current user-defined modifier applied to the running speed threshold.
+        _duration_flag: Tracks the current user-defined modifier applied to the running duration threshold.
         _currently_pressed: Stores the keys that are currently being pressed.
         _listener: The Listener instance used to monitor keyboard strokes.
 
@@ -258,6 +277,8 @@ class KeyboardListener:
     def __init__(self):
         self._exit_flag = False
         self._reward_flag = False
+        self._speed_flag = 0
+        self._duration_flag = 0
         self._currently_pressed = set()
 
         # Set up listeners for both press and release
@@ -274,13 +295,29 @@ class KeyboardListener:
         # Updates the set with current data
         self._currently_pressed.add(str(key))
 
-        # Checks if ESC and 'q' are in the currently pressed set and, if so, flips the exit_flag.
-        if "Key.esc" in self._currently_pressed and "'q'" in self._currently_pressed:
-            self._exit_flag = True
+        # Checks if ESC is pressed (required for all combinations)
+        if "Key.esc" in self._currently_pressed:
+            # Exit combination: ESC + q
+            if "'q'" in self._currently_pressed:
+                self._exit_flag = True
 
-        # Checks if ESC and 'r' are in the currently pressed set and, if so, flips the _reward_flag.
-        if "Key.esc" in self._currently_pressed and "'r'" in self._currently_pressed:
-            self._reward_flag = True
+            # Reward combination: ESC + r
+            if "'r'" in self._currently_pressed:
+                self._reward_flag = True
+
+            # Speed control: ESC + Up/Down arrows
+            if "Key.up" in self._currently_pressed:
+                self._speed_flag += 1
+
+            if "Key.down" in self._currently_pressed:
+                self._speed_flag -= 1
+
+            # Duration control: ESC + Left/Right arrows
+            if "Key.right" in self._currently_pressed:
+                self._duration_flag -= 1
+
+            if "Key.left" in self._currently_pressed:
+                self._duration_flag += 1
 
     def _on_release(self, key):
         """Removes no longer pressed keys from the storage set.
@@ -293,7 +330,7 @@ class KeyboardListener:
             self._currently_pressed.remove(key_str)
 
     @property
-    def exit_signal(self):
+    def exit_signal(self) -> bool:
         """Returns True if the listener has detected the runtime abort keys combination (ESC + q) being pressed.
 
         This indicates that the user has requested the runtime to gracefully abort.
@@ -301,7 +338,7 @@ class KeyboardListener:
         return self._exit_flag
 
     @property
-    def reward_signal(self):
+    def reward_signal(self) -> bool:
         """Returns True if the listener has detected the water reward delivery keys combination (ESC + r) being
         pressed.
 
@@ -313,6 +350,22 @@ class KeyboardListener:
         signal = copy.copy(self._reward_flag)
         self._reward_flag = False  # FLips the flag to False
         return signal
+
+    @property
+    def speed_modifier(self) -> int:
+        """Returns the current user-defined modifier to apply to the running speed threshold.
+
+        This is used during run training to manually update the running speed threshold.
+        """
+        return self._speed_flag
+
+    @property
+    def duration_threshold(self) -> int:
+        """Returns the current user-defined modifier to apply to the running epoch duration threshold.
+
+        This is used during run training to manually update the running epoch duration threshold.
+        """
+        return self._duration_flag
 
 
 class SessionData:
@@ -566,6 +619,16 @@ class SessionData:
         sessions to correct for the natural motion of the brain relative to the cranial window.
         """
         return self._mesoscope.joinpath("persistent_data", self._project_name, self._animal_name, "MotionEstimator.me")
+
+    @property
+    def data_processing_tracker_path(self) -> Path:
+        """Returns the path to the processing_checklist.yaml file of the managed session.
+
+        This path is used to generate the .yaml file that tracks the data processing stages that have been applied to
+        the data inside the session directory. Primarily, this is used by the pipelines that run on the BioHPC server
+        to prepare the session for multi-day processing and project dataset generation.
+        """
+        return self._local.joinpath("processing_checklist.yaml")
 
     def pull_mesoscope_data(
         self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
@@ -1273,6 +1336,13 @@ class MesoscopeExperiment:
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Generates the data processing checklist and saves it to disk. This is used to indicate that raw data
+        # acquisition was completed successfully, in case the preprocessing fails. Any session that does not have this
+        # checklist is NOT guaranteed to have data integrity.
+        checkist_path = self._session_data.data_processing_tracker_path
+        checklist = _ProcessingTracker()
+        checklist.to_yaml(file_path=checkist_path)
 
         # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
         # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
