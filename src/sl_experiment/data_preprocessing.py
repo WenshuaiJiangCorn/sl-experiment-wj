@@ -653,33 +653,28 @@ def process_module_data(
             specify the name for each module data column. Note, TTLModule instances only return the timestamp column, so
             they will not use this argument.
     """
+    # Extracts and preprocesses the data logged by the module during runtime. For all modules other than the TTLModule,
+    # the data is returned as a tuple of (timestamps, data). For TTLModule, the data is returned as an array of
+    # timestamps.
+    module_data: NDArray[np.uint64] | tuple[NDArray[np.uint64], NDArray[Any]]
+    module_data = module_interface.parse_logged_data()
 
-    try:
+    # If the module is a TTLModule, saves the array of timestamps as a Polars Series object in a Feather file with
+    # 'lz4' compression.
+    if isinstance(module_data, np.ndarray):
+        module_series = pl.Series(name="timestamps_us", values=module_data, dtype=pl.UInt64)
+        module_series.to_frame().write_ipc(file=output_path, compression="lz4")
+        return
 
-        # Extracts and preprocesses the data logged by the module during runtime. For all modules other than the TTLModule,
-        # the data is returned as a tuple of (timestamps, data). For TTLModule, the data is returned as an array of
-        # timestamps.
-        module_data: NDArray[np.uint64] | tuple[NDArray[np.uint64], NDArray[Any]]
-        module_data = module_interface.parse_logged_data()
+    # Otherwise, saves the timestamps and data arrays as a Polars DataFrame object in a Feather file with 'lz4'
+    # compression.
+    # Creates DataFrame with timestamps and values
+    module_dataframe = pl.DataFrame(
+        {
+            "timestamps_us": pl.Series(name="timestamps_us", values=module_data[0]),
+            values_name: pl.Series(name=values_name, values=module_data[1]),
+        }
+    )
 
-        # If the module is a TTLModule, saves the array of timestamps as a Polars Series object in a Feather file with
-        # 'lz4' compression.
-        if isinstance(module_data, NDArray[np.uint64]):
-            module_series = pl.Series(name="timestamps_us", values=module_data, dtype=pl.UInt64)
-            module_series.to_frame().write_ipc(file=output_path, compression="lz4")
-
-        # Otherwise, saves the timestamps and data arrays as a Polars DataFrame object in a Feather file with 'lz4'
-        # compression.
-        else:
-            # Creates DataFrame with timestamps and values
-            module_dataframe = pl.DataFrame(
-                {
-                    "timestamps_us": pl.Series(name="timestamps_us", values=module_data[0]),
-                    values_name: pl.Series(name=values_name, values=module_data[1]),
-                }
-            )
-
-            # Saves the DataFrame to Feather file with lz4 compression
-            module_dataframe.write_ipc(file=output_path, compression="lz4")
-    except Exception as e:
-        console.echo(f"Error! {e}")
+    # Saves the DataFrame to Feather file with lz4 compression
+    module_dataframe.write_ipc(file=output_path, compression="lz4")
