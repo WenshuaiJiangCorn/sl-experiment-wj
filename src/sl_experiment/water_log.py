@@ -44,7 +44,7 @@ class _SheetData:
     the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
     and grant access to Google APIs for data parsing.
     """
-        
+
     def __init__(self):
         self.sheet_id = "1AofPA9J2jqg8lORGfc-rKn5s8YCr6EpH9ZMsUoWzcHQ"
         self.range = "A1:Z"
@@ -61,11 +61,10 @@ class _SheetData:
         range_name = f"'{tab_name}'!{self.range}"
         result = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
         return result.get("values", [])
-    
 
     def _replace_empty(self, row_data: List[List[str]]) -> List[List[Optional[str]]]:
         """
-        Replaces empty cells and cells containing 'n/a', '--' or '---' with None. This funcation 
+        Replaces empty cells and cells containing 'n/a', '--' or '---' with None. This funcation
         also ensures that cells in the main grid are processed and that all rows  have equal length.
         """
         result: List[List[Optional[str]]] = []
@@ -90,7 +89,6 @@ class _SheetData:
                 row.append(None)
 
         return result
-    
 
     def _fetch_data_from_tab(self, tab_name: str) -> None:
         """
@@ -100,7 +98,6 @@ class _SheetData:
         processed_data = self._replace_empty(tab_data)
         self.data[tab_name] = processed_data
 
-
     def _get_tab_names(self) -> List[str]:
         """
         Retrieves the metadata including the names of all tabs in the Google Sheet.
@@ -108,14 +105,13 @@ class _SheetData:
         creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
         service = build("sheets", "v4", credentials=creds)
         sheet_metadata = service.spreadsheets().get(spreadsheetId=self.sheet_id).execute()
-        sheets = sheet_metadata.get('sheets', '')
-        return [sheet['properties']['title'] for sheet in sheets]
-    
+        sheets = sheet_metadata.get("sheets", "")
+        return [sheet["properties"]["title"] for sheet in sheets]
 
     def _write_to_sheet(self, tab_name: str, range_name: str, values: List[List[str]]) -> None:
         """
-        Updates a specified cell or range in a Google Sheets document with the given values using 
-        the provided tab name and range. 
+        Updates a specified cell or range in a Google Sheets document with the given values using
+        the provided tab name and range.
         """
 
         creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
@@ -140,19 +136,19 @@ class _SheetData:
 @dataclass
 class DailyLog(YamlConfig):
     """
-    This class stores the daily tracking data and water intake metrics for a mouse during 
+    This class stores the daily tracking data and water intake metrics for a mouse during
     the water restriction period.
-    
+
     Args:
         row: A list of values representing a single row of data from the Google Sheet.
         headers: A list mapping column names (headers) to their respective indices in the row.
 
     Attributes:
-        date_time: Stores the date and time water was provided to the mouse. 
-        weight: Stores the weight of the mouse. 
+        date_time: Stores the date and time water was provided to the mouse.
+        weight: Stores the weight of the mouse.
         baseline_percent: Stores the percentage relative to the mouse's original weight.
-        water_given: Stores the amount of water provided to water per day in mL. 
-        given_by: Stores the netID of the water provider. 
+        water_given: Stores the amount of water provided to water per day in mL.
+        given_by: Stores the netID of the water provider.
     """
 
     date_time: np.uint64 = np.uint64(0)
@@ -182,11 +178,11 @@ class MouseKey(YamlConfig):
     Attributes:
         mouse_id: Stores the mouseID. The mouseID corresponds to the ID on the surgery log.
         cage: Stores the cage number which the mouse is placed in.
-        ear_punch: Stores whether the mouse has an ear punch in either ear. 
+        ear_punch: Stores whether the mouse has an ear punch in either ear.
         sex: Stores the gender of the mouse.
         baseline_weight: Stores the original weight of the mouse.
         target_weight: Stores the weight goal for the mouse during water restriction.
-        daily_log: A dictionary storing instances of the DailyLog class, where each entry 
+        daily_log: A dictionary storing instances of the DailyLog class, where each entry
                    corresponds to a specific date and contains the water log data on the day.
     """
 
@@ -213,21 +209,21 @@ class ParseData:
     Parses data from a Google Sheet for a specific mouse.
 
     Args:
-        tab_name: Stores the name of the tab containing the key identification information 
+        tab_name: Stores the name of the tab containing the key identification information
                   for all mice.
         mouse_id: Stores the specific ID of the mouse to retrieve data from.
-        date: Stores the specific date of the water log entry to fetch. 
+        date: Stores the specific date of the water log entry to fetch.
 
-    Attributes: 
+    Attributes:
         mouse_classes: A dictionary that maps mouse IDs to their respective MouseKey subclasses.
         mouse_instances: A dictionary that maps mouse IDs to their initialized MouseKey instances containing
-                         the mouse's data and corresponding daily logs. 
+                         the mouse's data and corresponding daily logs.
     """
 
     def __init__(self, tab_name: str, mouse_id: int, date: str):
         self.tab_name = tab_name
         self.mouse_id = mouse_id
-        self.date = date 
+        self.date = date
         self.sheet_data = _SheetData()
         self.sheet_data._fetch_data_from_tab(tab_name)
         self.mouse_classes: Dict[str, Type[MouseKey]] = {}
@@ -235,10 +231,9 @@ class ParseData:
         self._create_mouse_subclasses()
         self._link_to_tab()
 
-
     def _extract_mouse_id(self, tab_data: List[List[str]], mouse_col_index: int) -> List[int]:
         """
-        Extracts unique mouse IDs from the main tab containing key identification information 
+        Extracts unique mouse IDs from the main tab containing key identification information
         for each mice.
         """
         mouse_ids = []
@@ -252,14 +247,13 @@ class ParseData:
                 except ValueError:
                     print(f"Invalid mouse ID: {row[mouse_col_index]}")
         return mouse_ids
-    
 
     def _create_mouse_subclasses(self) -> None:
         """
         Creates a subclass for the specified mouse and initializes its instance with data.
 
         This method checks if the given mouse ID exists in the sheet. If found, it creates
-        a subclass of MouseKey named Mouse_<mouse_id> and finds the corresponding row in the dataset 
+        a subclass of MouseKey named Mouse_<mouse_id> and finds the corresponding row in the dataset
         and initializes it.
         """
 
@@ -276,11 +270,10 @@ class ParseData:
                     self.mouse_instances[self.mouse_id] = MouseKey(row, headers)
                     break
 
-
     def _link_to_tab(self) -> None:
         """
         This method links the mouse ID to its corresponding tab and initializes DailyLog subclasses.
-        If the tab corresponding to the mouseID is found, it creates a DailyLog instance for 
+        If the tab corresponding to the mouseID is found, it creates a DailyLog instance for
         every date and stores it in the daily_log dictionary of the corresponding mouse instance.
         """
 
