@@ -437,30 +437,33 @@ class TTLInterface(ModuleInterface):
         # Precreates a shared memory array used to track and share the number of pulses encountered by the class with
         # other processes. Critically, for the class that monitors mesoscope frame timestamps, this is used to determine
         # if the mesoscope trigger successfully starts frame acquisition.
-        self._pulse_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
-            name=f"{self._module_type}_{self._module_id}_pulse_tracker",
-            prototype=np.zeros(shape=1, dtype=np.uint64),
-            exist_ok=True,
-        )
+        self._pulse_tracker: SharedMemoryArray | None = None
+        if self._report_pulses:
+            self._pulse_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+                name=f"{self._module_type}_{self._module_id}_pulse_tracker",
+                prototype=np.zeros(shape=1, dtype=np.uint64),
+                exist_ok=True,
+            )
 
     def __del__(self):
         """Destroys the _pulse_tracker memory buffer and releases the resources reserved by the array during class
         runtime."""
-        self._pulse_tracker.disconnect()
-        self._pulse_tracker.destroy()
+        if self._pulse_tracker is not None:
+            self._pulse_tracker.disconnect()
+            self._pulse_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
         """If the class is instructed to report detected HIGH incoming pulses, connects to the _pulse_tracker
         SharedMemoryArray.
         """
-        if self._report_pulses:
+        if self._pulse_tracker is not None:
             self._pulse_tracker.connect()
 
     def terminate_remote_assets(self) -> None:
         """If the class is instructed to report detected HIGH incoming pulses, disconnects from the _pulse_tracker
         SharedMemoryArray.
         """
-        if self._report_pulses:
+        if self._pulse_tracker is not None:
             self._pulse_tracker.disconnect()
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
@@ -486,7 +489,7 @@ class TTLInterface(ModuleInterface):
 
         # If the class is running in the pulse tracking mode, each time the class receives a HIGH edge message,
         # increments the pulse tracker by one.
-        if self._report_pulses and message.event == 52:
+        if self._pulse_tracker is not None and message.event == 52:
             count = self._pulse_tracker.read_data(index=0, convert_output=False)
             count += 1
             self._pulse_tracker.write_data(index=0, data=count)
