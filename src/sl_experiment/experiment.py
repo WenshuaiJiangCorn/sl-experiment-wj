@@ -2782,6 +2782,10 @@ def run_train_logic(
     previous_speed_threshold = np.float64(0)
     previous_duration_threshold = np.float64(0)
 
+    # Also pre-initializes the speed and duration trackers
+    speed_threshold: np.float64 = np.float64(0)
+    duration_threshold: np.float64 = np.float64(0)
+
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
     runtime_timer.reset()
@@ -2798,11 +2802,11 @@ def run_train_logic(
 
         # Note, the thresholds account for the user input by factoring in the speed and duration modifier obtained from
         # the keyboard listener.
-        speed_threshold: np.float64 = np.min(
+        speed_threshold = np.min(
             initial_speed + ((increase_steps + listener.speed_modifier) * speed_step), maximum_speed
         )
         speed_threshold = np.max(speed_threshold, 0)  # In case the speed threshold becomes negative, sets it to 0.
-        duration_threshold: np.float64 = np.min(
+        duration_threshold = np.min(
             initial_duration + ((increase_steps + listener.duration_modifier) * duration_step), maximum_duration
         )
         # In case the duration threshold becomes negative, sets it to 0.
@@ -2867,6 +2871,14 @@ def run_train_logic(
 
     # Close the progress bar
     progress_bar.close()
+
+    # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
+    # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
+    # the training.
+    # noinspection PyProtectedMember
+    runtime._descriptor.final_running_speed_cm_s = float(speed_threshold)
+    # noinspection PyProtectedMember
+    runtime._descriptor.final_speed_duration_s = float(duration_threshold)
 
     # Shutdown sequence:
     message = f"Training runtime: Complete."
