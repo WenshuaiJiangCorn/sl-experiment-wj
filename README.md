@@ -477,6 +477,47 @@ mc_interface.send_message(interface_1.pulse(repetition_delay=np.uint32(1000000),
 ```
 ___
 
+# Google Sheets API Integration
+
+To connect your Google Sheets, first log into the Google Cloud Console using the Gmail account of 
+the Google Sheet owner. Create a new project and navigate to APIs & Services > Library and enable the Google Sheets API 
+for the project. Under IAM & Admin > Service Accounts, create a service account. This will generate a service account 
+ID in the format of your-service-account@gserviceaccount.com. Share the Google Sheets you would like to access with this
+service account email and provide it with Editor access. Once the service account is created, select Manage Keys from 
+the Actions menu. If a key does not already exist, create a new key and download the private key in JSON format. This 
+JSON file should be added to your project directory and will be used for authentication when making requests to the Google 
+Sheets API. 
+
+1. Google API Client Setup
+
+    The script for data parsing requires the google-api-python-client and google-auth libraries to interact with the Google 
+    Sheets API. Install all dependencies with the following command:
+    pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib. 
+
+
+2. Sheet Configuration
+
+    To connect to your Google Sheet, the sheet ID, range, service account file and scope must be specified. The sheet ID 
+    is the unique identifier found in the URL between /d/ and /edit. To parse data from the entire sheet, set the range
+    to A1:Z for up to 26 columns or A1:ZZ if exceeded. The tab name is optional and is only required if the sheet contains 
+    multiple tabs. If no tab name is provided, the default is set as the first tab. The scope defines the application's 
+    access level to the Google Sheets API. The full list of Google Sheets API scopes can be found here 
+    [https://developers.google.com/identity/protocols/oauth2/scopes].
+
+    sheet_id = "your-google-sheet-id"
+    range = "range"
+    tab_name = "tab name"
+    SERVICE_ACCOUNT_FILE = "path/to/your/service-account-key.json"
+    SCOPES = ["Scope code"]
+
+3. Authentication using service account credentials and Retrieving Data
+
+    creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  
+    service = build("sheets", "v4", credentials=creds)
+    range_name = f"{self.tab_name}!{self.range}"
+    result = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
+___
+
 ## API Documentation
 
 See the [API documentation](https://ataraxis-communication-interface-api.netlify.app/) for the
