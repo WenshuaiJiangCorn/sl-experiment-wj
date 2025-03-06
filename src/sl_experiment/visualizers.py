@@ -135,6 +135,13 @@ class BehaviorVisualizer:
         _lick_axis: The axis object used to plot the lick sensor data during visualization runtime.
         _valve_axis: The axis object used to plot the solenoid valve data during visualization runtime.
         _speed_axis: The axis object used to plot the average running speed data during visualization runtime.
+        _speed_threshold_line: Stores the horizontal line class used to plot the running speed threshold used during
+            training sessions.
+        _duration_threshold_line: Stores the horizontal line class used to plot the running epoch duration used during
+            training sessions.
+        _running_speed: Stores the current running speed of the animal. Somewhat confusingly, since we already compute
+            the average running speed of the animal via the visualizer, it is easier to retrieve and use it from the
+            main training runtime. This value is used to share the current running speed with the training runtime.
     """
 
     def __init__(
@@ -163,6 +170,7 @@ class BehaviorVisualizer:
         self._previous_valve_count = np.float64(0)
         self._previous_lick_count = np.uint64(0)
         self._previous_distance = np.float64(0)
+        self._running_speed = np.float64(0)
 
         # Initializes additional assets used to generate the running speed data from the distance tracking data.
         self._speed_timer = PrecisionTimer("ms")
@@ -178,6 +186,10 @@ class BehaviorVisualizer:
         self._lick_axis = None
         self._valve_axis = None
         self._speed_axis = None
+
+        # Running speed threshold and duration threshold lines
+        self._speed_threshold_line = None
+        self._duration_threshold_line = None
 
     def initialize(self) -> None:
         """Initializes the visualization runtime.
@@ -291,6 +303,15 @@ class BehaviorVisualizer:
             self._timestamps, self._speed_data, color=_plt_palette("green"), linewidth=2, alpha=1.0, linestyle="solid"
         )
 
+        # Running speed and duration threshold. These are initially invisible and will not be shown unless the
+        # class is used to visualize run training progress.
+        self._speed_threshold_line = self._speed_axis.axhline(
+            y=0, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+        )
+        self._duration_threshold_line = self._speed_axis.axvline(
+            x=0, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+        )
+
     def update(self) -> None:
         """Updates the figure managed by the class to display new data.
 
@@ -325,6 +346,28 @@ class BehaviorVisualizer:
         self._figure.canvas.draw()
         self._figure.canvas.flush_events()
 
+    def update_speed_thresholds(
+        self, speed_threshold: float | np.float64, duration_threshold: float | np.float64
+    ) -> None:
+        """Updates the running speed and duration threshold lines to use the input anchor values.
+
+        This positions the threshold lines in the running speed plot to indicate the cut-offs for the running speed and
+        running epoch duration that elicit water rewards. This is used during run training to visualize the thresholds
+        the animal needs to meet to receive water rewards.
+
+        Args:
+            speed_threshold: The speed, in centimeter per second, the animal needs to maintain to get water rewards.
+            duration_threshold: The duration, in seconds, the animal has to maintain the above-threshold speed to get
+                water rewards.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])
+        self._duration_threshold_line.set_xdata([duration_threshold, duration_threshold])
+        self._speed_threshold_line.set_visible(True)
+        self._duration_threshold_line.set_visible(True)
+
     def close(self) -> None:
         """Closes the visualized figure and cleans up the resources used by the class during runtime."""
         if self._initialized:
@@ -348,12 +391,12 @@ class BehaviorVisualizer:
 
         # Each time the overall lick count increments, displays a lick trigger. Lick counts are incremented at each
         # rising edge of lick detection.
-        new_count = self._lick_tracker.read_data(index=0, convert_output=False)
-        if new_count != self._previous_lick_count:
+        new_lick_count = self._lick_tracker.read_data(index=0, convert_output=False)
+        if new_lick_count != self._previous_lick_count:
             self._lick_data[-1] = np.uint8(1)
         else:
             self._lick_data[-1] = np.uint8(0)
-        self._previous_lick_count = new_count
+        self._previous_lick_count = new_lick_count
 
         # Carries out a similar computation for valve tracker. Valve pulse counter also increments on the rising edge
         # of each valve open-close cycle.
@@ -365,11 +408,11 @@ class BehaviorVisualizer:
         self._previous_valve_count = new_valve_count
 
         # Finally, speed is computed slightly differently. This is because the update rate of this class exceeds the
-        # smoothing window size used to generate running speed:
+        # smoothing window size used to generate running speed values:
 
-        # The speed is actually updated ~every 100 milliseconds. Until the update timeout is exhausted, at each update
-        # cycle the last speed point is overwritten with the previous update point. This would generate a sequence of
-        # 3-4 identical speed readouts, but this should not be very noticeable to the user.
+        # The speed value is updated ~every 100 milliseconds. Until the update timeout is exhausted, at each graph
+        # update cycle the last speed point is overwritten with the previous speed point. This would generate a
+        # sequence of 3-4 identical speed readouts, but should not be very noticeable to the user.
         if self._speed_timer.elapsed < 100:
             self._speed_data[-1] = self._speed_data[-2]
         else:
@@ -383,3 +426,9 @@ class BehaviorVisualizer:
             # Inserts the newly computed datapoint into the data array and updates the previous distance tracker
             self._speed_data[-1] = running_speed
             self._previous_distance = travelled_distance
+            self._running_speed = running_speed  # Also stores the value for sharing with training runtime.
+
+    @property
+    def running_speed(self) -> np.float64:
+        """Returns the current running speed of the animal, calculated over the window of the last 100 milliseconds."""
+        return self._running_speed

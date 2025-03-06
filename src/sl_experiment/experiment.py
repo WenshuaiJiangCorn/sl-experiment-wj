@@ -63,6 +63,7 @@ class _LickTrainingDescriptor(YamlConfig):
 @dataclass()
 class _RunTrainingDescriptor(YamlConfig):
     """This class is used to save the description information specific to run training sessions as a .yaml file."""
+
     session_type: str = "run_training"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
@@ -104,6 +105,7 @@ class _RunTrainingDescriptor(YamlConfig):
 @dataclass()
 class _MesoscopeExperimentDescriptor(YamlConfig):
     """This class is used to save the description information specific to experiment sessions as a .yaml file."""
+
     session_type: str = "mesoscope_experiment"
     """
     The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
@@ -124,6 +126,7 @@ class _ProcessingTracker(YamlConfig):
     This is primarily used together with scheduled data processing tasks to ensure the same data is not processed
     multiple times. Additionally, it can be used to determine the current processing stage of the data.
     """
+
     data_acquisition: bool = True
     data_preprocessing: bool = False
     integrity_verification: bool = False
@@ -360,7 +363,7 @@ class KeyboardListener:
         return self._speed_flag
 
     @property
-    def duration_threshold(self) -> int:
+    def duration_modifier(self) -> int:
         """Returns the current user-defined modifier to apply to the running epoch duration threshold.
 
         This is used during run training to manually update the running epoch duration threshold.
@@ -2673,7 +2676,7 @@ def run_train_logic(
     The run training consists of making the animal run on the wheel with a desired speed, in centimeters per second,
     maintained for the desired duration of seconds. This is used train the animal to exhibit good running speed and
     endurance. Each time the animal satisfies the speed and duration threshold, it receives 5 uL of water reward, and
-    the speed and durations trackers reset for the next 'round'. If the animal performs well and receives many water
+    the speed and durations trackers reset for the next 'epoch'. If the animal performs well and receives many water
     rewards, the speed and duration thresholds increase to make the task more challenging. This is used to progressively
     train the animal to run better and to prevent the animal from completing the training too early.
 
@@ -2720,16 +2723,18 @@ def run_train_logic(
     # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
     # optimize main loop runtime speed:
     initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
-    initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
-    speed_step = np.float64(speed_increase_step)  # In centimeters per second
     maximum_speed = np.float64(maximum_speed_threshold)  # In centimeters per second
+    speed_step = np.float64(speed_increase_step)  # In centimeters per second
+
+    initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
     maximum_duration = np.float64(maximum_duration_threshold * 1000)  # In milliseconds
     duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
+
     water_threshold = np.float64(increase_threshold * 1000)  # In microliters
     maximum_water_volume = np.float64(maximum_water_volume * 1000)  # In microliters
 
-    # Precomputes the maximum possible increase steps count
-    max_increase_steps = int(np.floor(maximum_water_volume / water_threshold))
+    # Converts the training time from minutes to seconds to make it compatible with the timer precision.
+    training_time = maximum_training_time * 60
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
@@ -2737,15 +2742,15 @@ def run_train_logic(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
     )
 
-    # Converts the training time from minutes to seconds to make it compatible with the timer precision.
-    training_time = maximum_training_time * 60
-
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
 
     # Starts the visualizer process
     visualizer.initialize()
+
+    # Updates the threshold lines to use the initial speed and duration values
+    visualizer.update_speed_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
 
     # Configures all system components to support run training
     runtime.run_train_state()
@@ -2755,22 +2760,27 @@ def run_train_logic(
 
     message = (
         f"Initiating run training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
-        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal."
+        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Use 'ESC' + Up / Down arrows to modify the "
+        f"running speed threshold. Use 'ESC' + Left / Right arrows to modify the running duration threshold."
     )
     console.echo(message=message, level=LogLevel.INFO)
 
     # Creates a tqdm progress bar that tracks the overall training progress and communicates the current speed and
     # duration threshold
     progress_bar = tqdm(
-        total=max_increase_steps,
+        total=training_time,
         desc="Run training progress",
-        unit="level",
-        bar_format="{l_bar}{bar}| Level {n}/{total} [{elapsed}<{remaining}]",
+        unit="second",
     )
 
-    # Tracks the number of times the speed and duration thresholds have been increased. This is used to update the
-    # progress bar as the training runs.
-    last_increase_steps = 0
+    # Tracks the number of training seconds elapsed at each progress bar update. This is used to update the progress bar
+    # with each passing second of training.
+    previous_time = 0
+
+    # Tracks when speed and / or duration thresholds are updated. This is necessary to redraw the threshold lines in
+    # the visualizer plot
+    previous_speed_threshold = np.float64(0)
+    previous_duration_threshold = np.float64(0)
 
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
@@ -2785,18 +2795,36 @@ def run_train_logic(
         # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
         # harder to keep receiving water.
         increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
-        speed_threshold: np.float64 = np.min(initial_speed + (increase_steps * speed_step), maximum_speed)
-        duration_threshold: np.float64 = np.min(initial_duration + (increase_steps * duration_step), maximum_duration)
 
-        # Reads the animal's running speed from the speed tracker at each loop iteration
-        current_speed = speed_tracker.read_data(index=0, convert_output=True)
+        # Note, the thresholds account for the user input by factoring in the speed and duration modifier obtained from
+        # the keyboard listener.
+        speed_threshold: np.float64 = np.min(
+            initial_speed + ((increase_steps + listener.speed_modifier) * speed_step), maximum_speed
+        )
+        speed_threshold = np.max(speed_threshold, 0)  # In case the speed threshold becomes negative, sets it to 0.
+        duration_threshold: np.float64 = np.min(
+            initial_duration + ((increase_steps + listener.duration_modifier) * duration_step), maximum_duration
+        )
+        # In case the duration threshold becomes negative, sets it to 0.
+        duration_threshold = np.max(duration_threshold, 0)
+
+        # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
+        # threshold trackers with new data.
+        if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
+            previous_speed_threshold = speed_threshold
+            previous_duration_threshold = duration_threshold
+
+        # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to calculate
+        # the running speed of the animal over 100 millisecond windows. This accesses the result of this computation and
+        # uses it to determine whether the animal is performing above the threshold.
+        current_speed = visualizer.running_speed
 
         # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed for
-        # the required duration, delivers 5 uL of water.
-        # If the speed is above threshold, but the animal has not yet maintained the required duration, the loop will
-        # keep cycling and accumulating the timer count. This is done until the animal either reaches the required
-        # duration or drops below the speed threshold.
-        if current_speed > speed_threshold and speed_timer.elapsed > duration_threshold:
+        # the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has not yet
+        # maintained the required duration, the loop will keep cycling and accumulating the timer count. This is done
+        # until the animal either reaches the required duration or drops below the speed threshold.
+        if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
             runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
             # Also resets the timer. While mice typically stop to consume water rewards, which would reset the timer,
@@ -2807,18 +2835,12 @@ def run_train_logic(
         elif current_speed < speed_threshold:
             speed_timer.reset()
 
-        # Updates the progress bar when the increase step level changes
-        if int(increase_steps) > last_increase_steps:
-            progress_bar.update(int(increase_steps) - last_increase_steps)
-            last_increase_steps = int(increase_steps)
-
-        # Updates the progress bar's postfix with current threshold values
-        progress_bar.set_postfix(
-            {
-                "Speed Threshold": f"{speed_threshold:.2f} cm/s",
-                "Duration Threshold": f"{duration_threshold / 1000:.2f} s",
-            }
-        )
+        # Updates the progress bar with each elapsed second. Note, this is technically not safe in case multiple seconds
+        # pass between reaching this conditional, but we know empirically that the loop will run at millisecond
+        # intervals, so it is not a concern.
+        if runtime_timer.elapsed > previous_time:
+            previous_time = runtime_timer.elapsed  # Updates the previous time for the next progress bar update
+            progress_bar.update(1)
 
         # Updates the visualizer plot
         visualizer.update()
