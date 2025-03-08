@@ -804,3 +804,4 @@ def process_log_data(
         ) as pbar:
             for _ in as_completed(futures):
                 pbar.update(1)
+

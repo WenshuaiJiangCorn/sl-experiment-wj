@@ -306,10 +306,10 @@ class BehaviorVisualizer:
         # Running speed and duration threshold. These are initially invisible and will not be shown unless the
         # class is used to visualize run training progress.
         self._speed_threshold_line = self._speed_axis.axhline(
-            y=0, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+            y=0.1, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
         )
         self._duration_threshold_line = self._speed_axis.axvline(
-            x=0, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+            x=-0.1, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
         )
 
     def update(self) -> None:
@@ -364,7 +364,7 @@ class BehaviorVisualizer:
             self.initialize()
 
         self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])
-        self._duration_threshold_line.set_xdata([duration_threshold, duration_threshold])
+        self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])
         self._speed_threshold_line.set_visible(True)
         self._duration_threshold_line.set_visible(True)
 

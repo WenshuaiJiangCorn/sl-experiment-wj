@@ -1800,10 +1800,9 @@ class _BehavioralTraining:
         # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
         # that the reported dispensed_water_volume_ul is accurate.
         delivered_water = self._microcontrollers.total_delivered_volume
-        if self._lick_training:
-            # Overwrites the delivered water volume with the volume recorded over the runtime.
-            self._descriptor.dispensed_water_volume_ul = delivered_water
-            self._descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+        # Overwrites the delivered water volume with the volume recorded over the runtime.
+        self._descriptor.dispensed_water_volume_ul = delivered_water
+        self._descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
@@ -2362,10 +2361,10 @@ def calibrate_valve_logic(
 
 def run_train_logic(
     runtime: _BehavioralTraining,
-    initial_speed_threshold: float = 0.1,
-    initial_duration_threshold: float = 0.1,
-    speed_increase_step: float = 0.25,
-    duration_increase_step: float = 0.25,
+    initial_speed_threshold: float = 1,
+    initial_duration_threshold: float = 1,
+    speed_increase_step: float = 0.5,
+    duration_increase_step: float = 0.5,
     increase_threshold: float = 0.1,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
@@ -2503,20 +2502,21 @@ def run_train_logic(
 
         # Note, the thresholds account for the user input by factoring in the speed and duration modifier obtained from
         # the keyboard listener.
-        speed_threshold = np.min(
+        speed_threshold = np.minimum(
             initial_speed + ((increase_steps + listener.speed_modifier) * speed_step), maximum_speed
         )
-        speed_threshold = np.max(speed_threshold, 0)  # In case the speed threshold becomes negative, sets it to 0.
-        duration_threshold = np.min(
+        # Limit the threshold to 1 cm/s
+        speed_threshold = np.maximum(speed_threshold, 1)
+        duration_threshold = np.minimum(
             initial_duration + ((increase_steps + listener.duration_modifier) * duration_step), maximum_duration
         )
-        # In case the duration threshold becomes negative, sets it to 0.
-        duration_threshold = np.max(duration_threshold, 0)
+        # Limits the threshold to 500 milliseconds
+        duration_threshold = np.maximum(duration_threshold, 500)  # 0.5 seconds == 500 milliseconds
 
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.
         if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold/1000)  # Converts back to seconds
             previous_speed_threshold = speed_threshold
             previous_duration_threshold = duration_threshold
 

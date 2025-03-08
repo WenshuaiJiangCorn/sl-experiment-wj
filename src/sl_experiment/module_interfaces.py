@@ -20,8 +20,64 @@ from ataraxis_communication_interface import (
 )
 from scipy.optimize import curve_fit
 from ataraxis_time import PrecisionTimer
-
+from typing import Any
 import polars as pl
+
+
+def _interpolate_data(
+    timestamps: NDArray[np.uint64],
+    data: NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]],
+    seed_timestamps: NDArray[np.uint64],
+    is_discrete: bool,
+) -> NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]]:
+    """Interpolates data values for the provided seed timestamps.
+
+    Primarily, this service function is used to align dispensed water values and auditory tone states during ValveModule
+    data parsing.
+
+    Notes:
+        This function expects seed_timestamps and timestamps arrays to be monotonically increasing.
+
+        Discrete interpolated data will be returned as an array with the same datatype as the input data. Continuous
+        interpolated data will always use float_64 datatype.
+
+    Args:
+        timestamps: The one-dimensional numpy array that stores the timestamps for source datapoints.
+        data: The two-dimensional numpy array that stores the source datapoints.
+        seed_timestamps: The one-dimensional numpy array that stores the timestamps for which to interpolate the data
+            values.
+        is_discrete: A boolean flag that determines whether the data is discrete or continuous.
+
+    Returns:
+        A numpy NDArray with the same dimension as the seed_timestamps array that stores the interpolated data values.
+    """
+    # Discrete data
+    if is_discrete:
+        # Preallocates the output array
+        interpolated_data = np.empty(seed_timestamps.shape, dtype=data.dtype)
+
+        # Handles boundary conditions in bulk using boolean masks. All seed timestamps below the minimum source
+        # timestamp are statically set to data[0], and all seed timestamps above the maximum source timestamp are set
+        # to data[-1].
+        below_min = seed_timestamps < timestamps[0]
+        above_max = seed_timestamps > timestamps[-1]
+        within_bounds = ~(below_min | above_max)  # The portion of the seed that is within the source timestamp boundary
+
+        # Assigns out-of-bounds values in-bulk
+        interpolated_data[below_min] = data[0]
+        interpolated_data[above_max] = data[-1]
+
+        # Processes within-boundary timestamps by finding the last known certain value to the left of each seed
+        # timestamp and setting each seed timestamp to that value.
+        if np.any(within_bounds):
+            indices = np.searchsorted(timestamps, seed_timestamps[within_bounds], side="right") - 1
+            interpolated_data[within_bounds] = data[indices]
+
+        return interpolated_data
+
+    # Continuous data. Note, due to interpolation, continuous data is always returned using float_64 datatype.
+    else:
+        return np.interp(seed_timestamps, timestamps, data)
 
 
 class EncoderInterface(ModuleInterface):
@@ -1057,6 +1113,8 @@ class ValveInterface(ModuleInterface):
         self, valve_calibration_data: tuple[tuple[int | float, int | float], ...], debug: bool = False
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
+        # kOpen, kClosed, kCalibrated, kToneOn, kToneOff
+        #  data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56)}
         data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
         mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
 
@@ -1200,7 +1258,7 @@ class ValveInterface(ModuleInterface):
         pulse_duration: np.uint32 = np.uint32(35590),
         calibration_delay: np.uint32 = np.uint32(200000),
         calibration_count: np.uint16 = np.uint16(200),
-        tone_duration: np.uint32 = np.uint32(100000),
+        tone_duration: np.uint32 = np.uint32(300000),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
@@ -1413,6 +1471,10 @@ class ValveInterface(ModuleInterface):
     ) -> None:
         """Extracts and saves the data acquired by the break module during runtime as a .feather file.
 
+        Notes:
+            Unlike other processing methods, this method generates a .feather dataset with 3 columns: time, dispensed
+            water volume and the state of the tone buzzer.
+
         Args:
             log_path: The path to the .npz archive that stores the data logged by the module during runtime.
             output_directory: The path to the directory where to save the parsed data as a .feather file.
@@ -1425,7 +1487,9 @@ class ValveInterface(ModuleInterface):
         # Extracts data from the log file
         log_data = extract_logged_hardware_module_data(log_path=log_path, module_type=5, module_id=1)
 
-        # Here, we only look for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
+        # Here, we primarily look for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
+        # We also look for codes 55 (ToneON) and 56 (ToneOFF) however and these codes are parsed similar to the
+        # ttl state codes.
 
         # The way this module is implemented guarantees there is at least one code 53 message, but there may be no code
         # 52 messages.
@@ -1433,12 +1497,14 @@ class ValveInterface(ModuleInterface):
         closed_data = log_data[np.uint8(53)]
 
         # If there were no valve open events, no water was dispensed. In this case, uses the first code 53 timestamp
-        # to report zero-volume reward and ends the runtime early.
+        # to report zero-volume reward and ends the runtime early. If the valve was never opened, there were no
+        # tones, so this shorts both tone-parsing and valve-parsing
         if not open_data:
             module_dataframe = pl.DataFrame(
                 {
                     "time_us": np.array([closed_data[0]["timestamp"]], dtype=np.uint64),
                     "dispensed_water_volume_uL": np.array([0], dtype=np.float64),
+                    "tone_state": np.array([0], dtype=np.uint8),
                 }
             )
             module_dataframe.write_ipc(file=output_directory.joinpath("valve_data.feather"), compression="lz4")
@@ -1491,11 +1557,45 @@ class ValveInterface(ModuleInterface):
             decimals=8,
         )
 
+        # Now carries out similar processing for the Tone signals
+        # Same logic as with code 52 applies to code 55
+        tone_on_data = log_data.get(np.uint8(55), [])
+        tone_off_data = log_data.get(np.uint8(56))
+
+        tone_length = len(tone_on_data) + len(tone_off_data)
+        tone_timestamps: NDArray[np.uint64] = np.empty(tone_length, dtype=np.uint64)
+        tone_states: NDArray[np.uint8] = np.empty(tone_length, dtype=np.uint8)
+
+        # Extracts ON (Code 55) Tone codes. Statically assigns the value '1' to denote On signals.
+        tone_on_n = len(tone_on_data)
+        tone_timestamps[:tone_on_n] = [value["timestamp"] for value in tone_on_data]
+        tone_states[:tone_on_n] = np.uint8(1)  # All code 55 signals are On (High)
+
+        # Extracts Closed (Code 53) trigger codes.
+        tone_timestamps[tone_on_n:] = [value["timestamp"] for value in tone_off_data]
+        tone_states[tone_on_n:] = np.uint8(0)  # All code 56 signals are Off (Low)
+
+        # Sorts both arrays based on timestamps.
+        sort_indices = np.argsort(tone_timestamps)
+        tone_timestamps = timestamps[sort_indices]
+        tone_states = tone_states[sort_indices]
+
+        # Constructs a shared array that includes all reward and tone timestamps. This will be used to interpolate tone
+        # and timestamp values. Sorts the generated array to arrange all timestamps in monotonically ascending order
+        shared_stamps = np.concatenate(tone_timestamps, reward_timestamps)
+        sort_indices = np.argsort(shared_stamps)
+        shared_stamps = shared_stamps[sort_indices]
+
+        # Interpolates the reward volumes for each tone state and tone states for each reward volume.
+        out_reward = _interpolate_data(timestamps=reward_timestamps, data=volumes, seed_timestamps=shared_stamps, is_discrete=True)
+        out_tones = _interpolate_data(timestamps=tone_timestamps, data=tone_states, seed_timestamps=shared_stamps, is_discrete=True)
+
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
             {
                 "time_us": reward_timestamps,
-                "dispensed_water_volume_uL": volumes,
+                "dispensed_water_volume_uL": out_reward,
+                "tone_state": out_tones,
             }
         )
 

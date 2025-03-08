@@ -773,7 +773,10 @@ class _MicroControllerInterfaces:
         # Configures the water valve to deliver ~ 5 uL of water. Also configures the valve calibration method to run the
         # 'reference' calibration for 5 uL rewards used to verify the valve calibration before every experiment.
         self.valve.set_parameters(
-            pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
+            pulse_duration=np.uint32(35590),
+            calibration_delay=np.uint32(200000),
+            calibration_count=np.uint16(200),
+            tone_duration=np.uint32(300000),
         )
 
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
