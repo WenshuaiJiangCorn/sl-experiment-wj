@@ -13,6 +13,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import numpy as np
+from numpy.lib.npyio import NpzFile
 import tifffile
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
@@ -520,99 +521,6 @@ def process_mesoscope_directory(
     np.savez(frame_variant_metadata_path, **metadata_dict)
 
 
-def compare_ops_files(ops_1_path: Path, ops_2_path: Path) -> None:
-    """Prints the difference between the two input 'ops' JSON files.
-
-    This function is primarily used to debug our metadata extraction pipeline to ensure that the metadata extraction
-    produces the same ops.json as the helper matlab script provided by suite2p authors. It either prints the difference
-    between the files to the terminal or a static line informing the user that the files are identical.
-
-    Args:
-        ops_1_path: The path to the first 'ops' JSON file.
-        ops_2_path: The path to the second 'ops' JSON file.
-
-    """
-    # Loads both files into memory
-    with open(ops_1_path, "r", encoding="utf-8") as f1:
-        data1 = json.load(f1)
-    with open(ops_2_path, "r", encoding="utf-8") as f2:
-        data2 = json.load(f2)
-
-    # Converts back to JSON with sorted keys, so differences are consistent
-    json1 = json.dumps(data1, sort_keys=True, indent=2)
-    json2 = json.dumps(data2, sort_keys=True, indent=2)
-
-    # Compares line by line
-    diff = difflib.unified_diff(
-        json1.splitlines(), json2.splitlines(), fromfile=str(ops_1_path), tofile=str(ops_2_path), lineterm=""
-    )
-
-    # Prints the difference
-    printed = False
-    for line in diff:
-        printed = True
-        print(line)
-    if not printed:
-        print("No differences found! The ops JSON content is identical.")
-
-
-def interpolate_data(
-    timestamps: NDArray[np.uint64],
-    data: NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]],
-    seed_timestamps: NDArray[np.uint64],
-    is_discrete: bool,
-) -> NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]]:
-    """Interpolates data values for the provided seed timestamps.
-
-    This function is primarily used during behavioral data preprocessing to align all behavioral data to the mesoscope
-    frame acquisition timestamps. In turn, this aligns behavioral recordings to the brain activity data, simplifying
-    future data analysis.
-
-    Notes:
-        This function expects seed_timestamps and timestamps arrays to be monotonically increasing.
-
-        Discrete interpolated data will be returned as an array with the same datatype as the input data. Continuous
-        interpolated data will always use float_64 datatype.
-
-    Args:
-        timestamps: The one-dimensional numpy array that stores the timestamps for source datapoints.
-        data: The two-dimensional numpy array that stores the source datapoints.
-        seed_timestamps: The one-dimensional numpy array that stores the timestamps for which to interpolate the data
-            values.
-        is_discrete: A boolean flag that determines whether the data is discrete or continuous.
-
-    Returns:
-        A numpy NDArray with the same dimension as the seed_timestamps array that stores the interpolated data values.
-    """
-    # Discrete data
-    if is_discrete:
-        # Preallocates the output array
-        interpolated_data = np.empty(seed_timestamps.shape, dtype=data.dtype)
-
-        # Handles boundary conditions in bulk using boolean masks. All seed timestamps below the minimum source
-        # timestamp are statically set to data[0], and all seed timestamps above the maximum source timestamp are set
-        # to data[-1].
-        below_min = seed_timestamps < timestamps[0]
-        above_max = seed_timestamps > timestamps[-1]
-        within_bounds = ~(below_min | above_max)  # The portion of the seed that is within the source timestamp boundary
-
-        # Assigns out-of-bounds values in-bulk
-        interpolated_data[below_min] = data[0]
-        interpolated_data[above_max] = data[-1]
-
-        # Processes within-boundary timestamps by finding the last known certain value to the left of each seed
-        # timestamp and setting each seed timestamp to that value.
-        if np.any(within_bounds):
-            indices = np.searchsorted(timestamps, seed_timestamps[within_bounds], side="right") - 1
-            interpolated_data[within_bounds] = data[indices]
-
-        return interpolated_data
-
-    # Continuous data. Note, due to interpolation, continuous data is always returned using float_64 datatype.
-    else:
-        return np.interp(seed_timestamps, timestamps, data)
-
-
 def process_camera_timestamps(log_path: Path, output_path: Path) -> None:
     """Reads the log .npz archive specified by the log_path and extracts the camera frame timestamps
     as a Polars Series saved to the output_path as a Feather file.
@@ -782,3 +690,110 @@ def process_module_data(
     else:
         message = f"Unsupported module type: {module_type} encountered when parsing log file {log_path}."
         console.error(message, error=ValueError)
+
+
+def process_experiment_data(log_path: Path, output_directory: Path, cue_map: dict[int, float]) -> None:
+    """Extracts the VR states, Experiment states, and the Virtual Reality cue sequence from the log generated
+    by the MesoscopeExperiment instance during runtime and saves the extracted data as Polars DataFrame .feather files.
+
+    This extraction method functions similar to camera log extraction and hardware module log extraction methods. The
+    key difference is the wall cue sequence extraction, which does not have a timestamp column. Instead, it has a
+    distance colum which stores the distance the animal has to run, in centimeters, to reach each cue in the sequence.
+    It is expected that during data processing, the distance data will be used to align the cues to the distance ran by
+    the animal during the experiment.
+    """
+    # Loads the archive into RAM
+    archive: NpzFile = np.load(file=log_path)
+
+    # Precreates the variables used to store extracted data
+    vr_states = []
+    vr_timestamps = []
+    experiment_states = []
+    experiment_timestamps = []
+    cue_sequence: NDArray[np.uint8] = np.zeros(shape=0, dtype=np.uint8)
+
+    # Locates the logging onset timestamp. The onset is used to convert the timestamps for logged data into absolute
+    # UTC timestamps. Originally, all timestamps other than onset are stored as elapsed time in microseconds
+    # relative to the onset timestamp.
+    timestamp_offset = 0
+    onset_us = np.uint64(0)
+    timestamp: np.uint64
+    for number, item in enumerate(archive.files):
+        message: NDArray[np.uint8] = archive[item]  # Extracts message payload from the compressed .npy file
+
+        # Recovers the uint64 timestamp value from each message. The timestamp occupies 8 bytes of each logged
+        # message starting at index 1. If timestamp value is 0, the message contains the onset timestamp value
+        # stored as 8-byte payload. Index 0 stores the source ID (uint8 value)
+        if np.uint64(message[1:9].view(np.uint64)[0]) == 0:
+            # Extracts the byte-serialized UTC timestamp stored as microseconds since epoch onset.
+            onset_us = np.uint64(message[9:].view("<i8")[0].copy())
+
+            # Breaks the loop onc the onset is found. Generally, the onset is expected to be found very early into
+            # the loop
+            timestamp_offset = number  # Records the item number at which the onset value was found.
+            break
+
+    # Once the onset has been discovered, loops over all remaining messages and extracts data stored in these
+    # messages.
+    for item in archive.files[timestamp_offset + 1 :]:
+        message = archive[item]
+
+        # Extracts the elapsed microseconds since timestamp and uses it to calculate the global timestamp for the
+        # message, in microseconds since epoch onset.
+        elapsed_microseconds = np.uint64(message[1:9].view(np.uint64)[0].copy())
+        timestamp = onset_us + elapsed_microseconds
+
+        payload = message[9:]  # Extracts the payload from the message
+
+        # If the message is longer than 500 bytes, it is a sequence of wall cues. It is very unlikely that we
+        # will log any other data with this length, so it is a safe heuristic to use.
+        if len(payload) > 500:
+            cue_sequence = payload.view(np.uint8).copy()  # Keeps the original numpy uint8 format
+
+        # If the message has a length of 2 bytes and the first element is 1, the message communicates the VR state
+        # code.
+        elif len(payload) == 2 and payload[0] == 1:
+            vr_state = np.uint8(payload[1])  # Extracts the VR state code from the second byte of the message.
+            vr_states.append(vr_state)
+            vr_timestamps.append(timestamp)
+
+        # Otherwise, if the starting code is 2, the message communicates the experiment state code.
+        elif len(payload) == 2 and payload[0] == 2:
+            # Extracts the experiment state code from the second byte of the message.
+            experiment_state = np.uint8(payload[1])
+            experiment_states.append(experiment_state)
+            experiment_timestamps.append(timestamp)
+
+    # Closes the archive to free up memory
+    archive.close()
+
+    # Uses the cue_map dictionary to compute the length of each cue in the sequence. Then computes the cumulative
+    # distance the animal needs to travel to reach each cue in the sequence. The first cue is associated with distance
+    # of 0 (the animal starts at this cue), the distance to each following cue is the sum of all previous cue lengths.
+    distance_sequence = np.zeros(len(cue_sequence), dtype=np.float64)
+    distance_sequence[1:] = np.cumsum([cue_map[int(code)] for code in cue_sequence[:-1]], dtype=np.float64)
+
+    # Converts extracted data into Polar Feather files:
+    vr_dataframe = pl.DataFrame(
+        {
+            "time_us": pl.Series(name="timestamps_us", values=vr_timestamps),
+            "vr_state": pl.Series(name="vr_state", values=vr_states),
+        }
+    )
+    exp_dataframe = pl.DataFrame(
+        {
+            "time_us": pl.Series(name="timestamps_us", values=experiment_timestamps),
+            "experiment_state": pl.Series(name="experiment_state", values=experiment_states),
+        }
+    )
+    cue_dataframe = pl.DataFrame(
+        {
+            "vr_cue": pl.Series(name="vr_cue", values=cue_sequence),
+            "distance_cm": pl.Series(name="distance_cm", values=distance_sequence),
+        }
+    )
+
+    # Saves the DataFrames to Feather file with lz4 compression
+    vr_dataframe.write_ipc(output_directory.joinpath("vr_data.feather"), compression="lz4")
+    exp_dataframe.write_ipc(output_directory.joinpath("experiment_data.feather"), compression="lz4")
+    cue_dataframe.write_ipc(output_directory.joinpath("cue_data.feather"), compression="lz4")
