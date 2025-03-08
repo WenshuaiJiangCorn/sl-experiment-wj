@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 from ataraxis_base_utilities import console
 from ataraxis_video_system import extract_logged_video_system_data
 from ataraxis_data_structures import DataLogger
-from module_interfaces import (
+from .module_interfaces import (
     TTLInterface,
     LickInterface,
     BreakInterface,
@@ -707,7 +707,7 @@ def process_log_data(
                 )
 
             # Face Camera timestamps
-            if file.stem == "52_log":
+            if file.stem == "51_log":
                 futures.add(
                     executor.submit(
                         _process_camera_timestamps,
