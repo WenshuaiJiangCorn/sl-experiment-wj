@@ -454,13 +454,13 @@ class SessionData:
         return self._local.joinpath("session_descriptor.yaml")
 
     @property
-    def behavioral_data_path(self) -> Path:
+    def behavior_data_path(self) -> Path:
         """Returns the path to the behavioral_data directory of the managed session.
 
         This path is used during module data processing to extract the data acquired by various hardware modules from
         .npz log archives and save it as feather files.
         """
-        directory_path = self._local.joinpath("behavioral_data")
+        directory_path = self._local.joinpath("behavior_data")
 
         # Since this is a directory, we need to ensure it exists before this path is returned to caller
         ensure_directory_exists(directory_path)
@@ -488,16 +488,6 @@ class SessionData:
         sessions to correct for the natural motion of the brain relative to the cranial window.
         """
         return self._mesoscope.joinpath("persistent_data", self._project_name, self._animal_name, "MotionEstimator.me")
-
-    @property
-    def data_processing_tracker_path(self) -> Path:
-        """Returns the path to the processing_checklist.yaml file of the managed session.
-
-        This path is used to generate the .yaml file that tracks the data processing stages that have been applied to
-        the data inside the session directory. Primarily, this is used by the pipelines that run on the BioHPC server
-        to prepare the session for multi-day processing and project dataset generation.
-        """
-        return self._local.joinpath("processing_checklist.yaml")
 
     def pull_mesoscope_data(
         self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
@@ -667,13 +657,6 @@ class SessionData:
             (self._nas.joinpath("raw_data"), "NAS"),
             (self._server.joinpath("raw_data"), "Server"),
         )
-
-        # Updates the zaber_positions.yaml file stored inside the persistent directory for the project+animal
-        # combination with the zaber_positions.yaml file from the current session. This ensures that the zaber_positions
-        # file is always set to the latest snapshot of zaber motor positions.
-        if self.zaber_positions_path.exists():
-            self.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
-            shutil.copy2(self.zaber_positions_path, self.previous_zaber_positions_path)  # Persists the current file
 
         # Resolves the destination paths based on the provided short destination names
         destinations = [(dest[0], dest[1]) for dest in destinations]
@@ -1045,6 +1028,9 @@ class MesoscopeExperiment:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
+        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Saves the newly generated file both to the persistent folder adn to the session folder
+        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1171,6 +1157,9 @@ class MesoscopeExperiment:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
+        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Saves the newly generated file both to the persistent folder adn to the session folder
+        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
@@ -1235,7 +1224,7 @@ class MesoscopeExperiment:
         # further camera frame processing.
         process_log_data(
             log_directory=self._logger.output_directory,
-            behavior_data_directory=self._session_data.behavioral_data_path,
+            behavior_data_directory=self._session_data.behavior_data_path,
             camera_frame_directory=self._session_data.camera_frames_path,
             cue_map=self._cue_map,
             cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
@@ -1750,6 +1739,9 @@ class _BehavioralTraining:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
+        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Saves the newly generated file both to the persistent folder adn to the session folder
+        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1825,6 +1817,9 @@ class _BehavioralTraining:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
+        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Saves the newly generated file both to the persistent folder adn to the session folder
+        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
@@ -1888,7 +1883,7 @@ class _BehavioralTraining:
         if self._lick_training:
             process_log_data(
                 log_directory=self._logger.output_directory,
-                behavior_data_directory=self._session_data.behavioral_data_path,
+                behavior_data_directory=self._session_data.behavior_data_path,
                 camera_frame_directory=self._session_data.camera_frames_path,
                 lick_threshold=self._microcontrollers.lick.lick_threshold,
                 scale_coefficient=self._microcontrollers.valve.scale_coefficient,
@@ -1899,7 +1894,7 @@ class _BehavioralTraining:
         else:
             process_log_data(
                 log_directory=self._logger.output_directory,
-                behavior_data_directory=self._session_data.behavioral_data_path,
+                behavior_data_directory=self._session_data.behavior_data_path,
                 camera_frame_directory=self._session_data.camera_frames_path,
                 cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
                 lick_threshold=self._microcontrollers.lick.lick_threshold,
