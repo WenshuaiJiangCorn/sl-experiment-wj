@@ -18,18 +18,13 @@ from ataraxis_time import PrecisionTimer
 
 from .transfer_tools import transfer_directory
 from .packaging_tools import calculate_directory_checksum
-from .data_preprocessing import (
-    process_mesoscope_directory,
-    process_camera_timestamps,
-    process_module_data,
-)
+from .data_preprocessing import process_mesoscope_directory, process_log_data
 from .visualizers import BehaviorVisualizer
 from .module_interfaces import ValveInterface
 from .binding_classes import _MicroControllerInterfaces, _HeadBar, _LickPort, _VideoSystems, _ZaberPositions
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import shutil
 from dataclasses import dataclass
-import polars as pl
 from tqdm import tqdm
 from pynput import keyboard
 
@@ -1238,7 +1233,21 @@ class MesoscopeExperiment:
         # Parses behavioral data from the compressed logs and uses it to generate the behavioral_dataset.parquet file.
         # Also, extracts camera frame timestamps for each camera and saves them as a separate .parquet file to optimize
         # further camera frame processing.
-        self._process_log_data()
+        process_log_data(
+            log_directory=self._logger.output_directory,
+            behavior_data_directory=self._session_data.behavioral_data_path,
+            camera_frame_directory=self._session_data.camera_frames_path,
+            cue_map=self._cue_map,
+            cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
+            maximum_break_strength=self._microcontrollers.wheel_break.maximum_break_strength,
+            minimum_break_strength=self._microcontrollers.wheel_break.minimum_break_strength,
+            lick_threshold=self._microcontrollers.lick.lick_threshold,
+            scale_coefficient=self._microcontrollers.valve.scale_coefficient,
+            nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+            torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
+            initially_on=self._microcontrollers.screens.initially_on,
+            has_ttl=True,
+        )
 
         # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
         self._session_data.pull_mesoscope_data()
@@ -1452,112 +1461,6 @@ class MesoscopeExperiment:
             serialized_data=np.array([2, new_state], dtype=np.uint8),
         )
         self._logger.input_queue.put(log_package)
-
-    def _process_log_data(self) -> None:
-        """Extracts the data logged during runtime from .npz archive files and uses it to generate multiple .feather
-        files inside the behavioral_data and camera_frames session subfolders.
-
-        This method prepares the data for the main processing pipelines executed on the BioHPC server.
-        """
-        # Submits the processing tasks to be executed in-parallel
-        with ProcessPoolExecutor() as executor:
-            futures = set()
-
-            # MicroController module data
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._lick,
-                    self._session_data.behavioral_data_path.joinpath("lick_data.feather"),
-                    "lick_active",
-                )
-            )
-            # noinspection PyProtectedMember
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._reward,
-                    self._session_data.behavioral_data_path.joinpath("valve_data.feather"),
-                    "dispensed_water_μL",
-                )
-            )
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._torque,
-                    self._session_data.behavioral_data_path.joinpath("torque_data.feather"),
-                    "torque_N_cm",
-                )
-            )
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._encoder,
-                    self._session_data.behavioral_data_path.joinpath("encoder_data.feather"),
-                    "distance_cm",
-                )
-            )
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._screens,
-                    self._session_data.behavioral_data_path.joinpath("screens_data.feather"),
-                    "screens_active",
-                )
-            )
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._break,
-                    self._session_data.behavioral_data_path.joinpath("break_data.feather"),
-                    "break_active",
-                )
-            )
-
-            # Camera logs
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.face_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("face_camera_timestamps.feather"),
-                )
-            )
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.left_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("left_camera_timestamps.feather"),
-                )
-            )
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.right_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("right_camera_timestamps.feather"),
-                )
-            )
-
-            # MesoscopeExperiment log
-            log_path = self._logger.output_directory.joinpath(f"{self._source_id}_log.npz")
-            futures.add(
-                executor.submit(
-                    _process_experiment_data, log_path, self._session_data.behavioral_data_path, self._cue_map
-                )
-            )
-
-            # Shows progress with tqdm when not in batch mode
-            with tqdm(
-                total=len(futures),
-                desc=f"Processing log files",
-                unit="file",
-            ) as pbar:
-                for _ in as_completed(futures):
-                    pbar.update(1)
 
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
@@ -1980,8 +1883,30 @@ class _BehavioralTraining:
             remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
         )
 
-        # Parses behavioral data from the compressed logs into independent Apache Arrow Feather files.
-        self._process_log_data()
+        # Parses behavioral data from the compressed logs into independent Apache Arrow Feather files. Note,
+        # lick training does not use the encoder and run training does not use the torque sensor.
+        if self._lick_training:
+            process_log_data(
+                log_directory=self._logger.output_directory,
+                behavior_data_directory=self._session_data.behavioral_data_path,
+                camera_frame_directory=self._session_data.camera_frames_path,
+                lick_threshold=self._microcontrollers.lick.lick_threshold,
+                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
+                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
+                has_ttl=False,
+            )
+        else:
+            process_log_data(
+                log_directory=self._logger.output_directory,
+                behavior_data_directory=self._session_data.behavioral_data_path,
+                camera_frame_directory=self._session_data.camera_frames_path,
+                cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
+                lick_threshold=self._microcontrollers.lick.lick_threshold,
+                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
+                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                has_ttl=False,
+            )
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
         os.renames(
@@ -2075,89 +2000,6 @@ class _BehavioralTraining:
             self._microcontrollers.valve_tracker,
             self._microcontrollers.distance_tracker,
         )
-
-    def _process_log_data(self) -> None:
-        """Extracts the data logged during runtime from .npz archive files and uses it to generate multiple .feather
-        files inside the behavioral_data and camera_frames session subfolders.
-
-        This method prepares the data for the main processing pipelines executed on the BioHPC server.
-        """
-        # Submits the processing tasks to be executed in-parallel
-        with ProcessPoolExecutor() as executor:
-            futures = set()
-
-            # Lick sensor data and Valve data are processed for all training runtimes.
-            # noinspection PyProtectedMember,PyTypeChecker
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._lick,
-                    self._session_data.behavioral_data_path.joinpath("lick_data.feather"),
-                    "lick_active",
-                )
-            )
-            # noinspection PyProtectedMember
-            futures.add(
-                executor.submit(
-                    process_module_data,
-                    self._microcontrollers._reward,
-                    self._session_data.behavioral_data_path.joinpath("valve_data.feather"),
-                    "dispensed_water_μL",
-                )
-            )
-            # Depending on the training type, also processes either torque or encoder data.
-            if self._lick_training:
-                # noinspection PyProtectedMember,PyTypeChecker
-                futures.add(
-                    executor.submit(
-                        process_module_data,
-                        self._microcontrollers._torque,
-                        self._session_data.behavioral_data_path.joinpath("torque_data.feather"),
-                        "torque_N_cm",
-                    )
-                )
-            else:
-                # noinspection PyProtectedMember,PyTypeChecker
-                futures.add(
-                    executor.submit(
-                        process_module_data,
-                        self._microcontrollers._encoder,
-                        self._session_data.behavioral_data_path.joinpath("encoder_data.feather"),
-                        "distance_cm",
-                    )
-                )
-
-            # Also processes camera logs as part of the same parallel runtime.
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.face_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("face_camera_timestamps.feather"),
-                )
-            )
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.left_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("left_camera_timestamps.feather"),
-                )
-            )
-            futures.add(
-                executor.submit(
-                    process_camera_timestamps,
-                    self._cameras.right_camera_log_path,
-                    self._session_data.camera_frames_path.joinpath("right_camera_timestamps.feather"),
-                )
-            )
-
-            # Shows progress with tqdm when not in batch mode
-            with tqdm(
-                total=len(futures),
-                desc=f"Processing log files",
-                unit="file",
-            ) as pbar:
-                for _ in as_completed(futures):
-                    pbar.update(1)
 
 
 def lick_training_logic(

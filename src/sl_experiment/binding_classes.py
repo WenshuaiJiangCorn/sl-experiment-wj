@@ -25,7 +25,6 @@ from ataraxis_data_structures import YamlConfig, SharedMemoryArray, DataLogger
 from ataraxis_communication_interface import MicroControllerInterface
 from dataclasses import dataclass
 import numpy as np
-from numpy.typing import NDArray
 from pathlib import Path
 
 
@@ -604,17 +603,17 @@ class _MicroControllerInterfaces:
         _started: Tracks whether the VR system and experiment runtime are currently running.
         _previous_volume: Tracks the volume of water dispensed during previous deliver_reward() calls.
         _screen_state: Tracks the current VR screen state.
-        _mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
-        _mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
-        _break: The interface that controls the electromagnetic break attached to the running wheel.
-        _reward: The interface that controls the solenoid water valve that delivers water to the animal.
-        _screens: The interface that controls the power state of the VR display screens.
+        mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
+        mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
+        wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
+        valve: The interface that controls the solenoid water valve that delivers water to the animal.
+        screens: The interface that controls the power state of the VR display screens.
         _actor: The main interface for the 'Actor' Ataraxis Micro Controller (AMC) device.
-        _mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the mesoscope.
-        _lick: The interface that monitors animal's interactions with the lick sensor (detects licks).
-        _torque: The interface that monitors the torque applied by the animal to the running wheel.
+        mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the mesoscope.
+        lick: The interface that monitors animal's interactions with the lick sensor (detects licks).
+        torque: The interface that monitors the torque applied by the animal to the running wheel.
         _sensor: The main interface for the 'Sensor' Ataraxis Micro Controller (AMC) device.
-        _wheel_encoder: The interface that monitors the rotation of the running wheel and converts it into the distance
+        wheel_encoder: The interface that monitors the rotation of the running wheel and converts it into the distance
             traveled by the animal.
         _encoder: The main interface for the 'Encoder' Ataraxis Micro Controller (AMC) device.
 
@@ -664,16 +663,16 @@ class _MicroControllerInterfaces:
         # TTL trigger, etc.
 
         # Module interfaces:
-        self._mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
-        self._mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2), debug=debug)
-        self._break = BreakInterface(
+        self.mesoscope_start: TTLInterface = TTLInterface(module_id=np.uint8(1), debug=debug)
+        self.mesoscope_stop: TTLInterface = TTLInterface(module_id=np.uint8(2), debug=debug)
+        self.wheel_break = BreakInterface(
             minimum_break_strength=43.2047,  # 0.6 in oz
             maximum_break_strength=1152.1246,  # 16 in oz
             object_diameter=15.0333,  # 15 cm diameter + 0.0333 to account for the wrap
             debug=debug,
         )
-        self._reward = ValveInterface(valve_calibration_data=valve_calibration_data, debug=debug)
-        self._screens = ScreenInterface(initially_on=screens_on, debug=debug)
+        self.valve = ValveInterface(valve_calibration_data=valve_calibration_data, debug=debug)
+        self.screens = ScreenInterface(initially_on=screens_on, debug=debug)
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
@@ -681,7 +680,7 @@ class _MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=actor_port,
             data_logger=data_logger,
-            module_interfaces=(self._mesoscope_start, self._mesoscope_stop, self._break, self._reward, self._screens),
+            module_interfaces=(self.mesoscope_start, self.mesoscope_stop, self.wheel_break, self.valve, self.screens),
         )
 
         # SENSOR. Sensor AMC controls the hardware that collects data at regular intervals. This includes lick sensors,
@@ -691,9 +690,9 @@ class _MicroControllerInterfaces:
         # Module interfaces:
         # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
-        self._mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), report_pulses=True, debug=debug)
-        self._lick: LickInterface = LickInterface(lick_threshold=650, debug=debug)  # Lick sensor
-        self._torque: TorqueInterface = TorqueInterface(
+        self.mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), report_pulses=True, debug=debug)
+        self.lick: LickInterface = LickInterface(lick_threshold=650, debug=debug)  # Lick sensor
+        self.torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
             maximum_voltage=2750,  # This was determined experimentally and matches the torque that overcomes break
             sensor_capacity=720.0779,  # 10 in oz
@@ -707,7 +706,7 @@ class _MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=sensor_port,
             data_logger=data_logger,
-            module_interfaces=(self._mesoscope_frame, self._lick, self._torque),
+            module_interfaces=(self.mesoscope_frame, self.lick, self.torque),
         )
 
         # ENCODER. Encoder AMC is specifically designed to interface with a rotary encoder connected to the running
@@ -715,7 +714,7 @@ class _MicroControllerInterfaces:
         # to a separate microcontroller to ensure adequate throughput.
 
         # Module interfaces:
-        self._wheel_encoder: EncoderInterface = EncoderInterface(
+        self.wheel_encoder: EncoderInterface = EncoderInterface(
             encoder_ppr=8192, object_diameter=15.0333, cm_per_unity_unit=10.0, debug=debug
         )
 
@@ -725,7 +724,7 @@ class _MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port=encoder_port,
             data_logger=data_logger,
-            module_interfaces=(self._wheel_encoder,),
+            module_interfaces=(self.wheel_encoder,),
         )
 
     def start(self) -> None:
@@ -762,29 +761,29 @@ class _MicroControllerInterfaces:
         self._encoder.start()
 
         # Configures the encoder to only report forward motion (CW) if the motion exceeds ~ 1 mm of distance.
-        self._wheel_encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=15)
+        self.wheel_encoder.set_parameters(report_cw=False, report_ccw=True, delta_threshold=15)
 
         # Configures mesoscope start and stop triggers to use 10 ms pulses
-        self._mesoscope_start.set_parameters(pulse_duration=np.uint32(10000))
-        self._mesoscope_stop.set_parameters(pulse_duration=np.uint32(10000))
+        self.mesoscope_start.set_parameters(pulse_duration=np.uint32(10000))
+        self.mesoscope_stop.set_parameters(pulse_duration=np.uint32(10000))
 
         # Configures screen trigger to use 500 ms pulses
-        self._screens.set_parameters(pulse_duration=np.uint32(500000))
+        self.screens.set_parameters(pulse_duration=np.uint32(500000))
 
         # Configures the water valve to deliver ~ 5 uL of water. Also configures the valve calibration method to run the
         # 'reference' calibration for 5 uL rewards used to verify the valve calibration before every experiment.
-        self._reward.set_parameters(
+        self.valve.set_parameters(
             pulse_duration=np.uint32(35590), calibration_delay=np.uint32(200000), calibration_count=np.uint16(200)
         )
 
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
-        self._lick.set_parameters(
+        self.lick.set_parameters(
             signal_threshold=np.uint16(400), delta_threshold=np.uint16(400), averaging_pool_size=np.uint8(10)
         )
 
         # Configures the torque sensor to filter out noise and sub-threshold 'slack' torque signals.
-        self._torque.set_parameters(
+        self.torque.set_parameters(
             report_ccw=True,
             report_cw=True,
             signal_threshold=np.uint16(100),
@@ -831,39 +830,39 @@ class _MicroControllerInterfaces:
         This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
         at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
         """
-        self._wheel_encoder.reset_pulse_count()
-        self._wheel_encoder.check_state(repetition_delay=np.uint32(500))
+        self.wheel_encoder.reset_pulse_count()
+        self.wheel_encoder.check_state(repetition_delay=np.uint32(500))
 
     def disable_encoder_monitoring(self) -> None:
         """Stops monitoring the wheel encoder."""
-        self._wheel_encoder.reset_command_queue()
+        self.wheel_encoder.reset_command_queue()
 
     def start_mesoscope(self) -> None:
         """Sends the acquisition start TTL pulse to the mesoscope."""
-        self._mesoscope_start.send_pulse()
+        self.mesoscope_start.send_pulse()
 
     def stop_mesoscope(self) -> None:
         """Sends the acquisition stop TTL pulse to the mesoscope."""
-        self._mesoscope_stop.send_pulse()
+        self.mesoscope_stop.send_pulse()
 
     def enable_break(self) -> None:
         """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
-        self._break.toggle(state=True)
+        self.wheel_break.toggle(state=True)
 
     def disable_break(self) -> None:
         """Disengages the wheel break, enabling the animal to run on the wheel."""
-        self._break.toggle(state=False)
+        self.wheel_break.toggle(state=False)
 
     def enable_vr_screens(self) -> None:
         """Sets the VR screens to be ON."""
         if not self._screen_state:  # If screens are OFF
-            self._screens.toggle()  # Sets them ON
+            self.screens.toggle()  # Sets them ON
             self._screen_state = True
 
     def disable_vr_screens(self) -> None:
         """Sets the VR screens to be OFF."""
         if self._screen_state:  # If screens are ON
-            self._screens.toggle()  # Sets them OFF
+            self.screens.toggle()  # Sets them OFF
             self._screen_state = False
 
     def enable_mesoscope_frame_monitoring(self) -> None:
@@ -874,11 +873,11 @@ class _MicroControllerInterfaces:
         ~100ms. This is followed by ~5ms LOW phase during which the Galvos are executing the flyback procedure. This
         command checks the state of the TTL pin at the 1 kHZ rate, which is enough to accurately report both phases.
         """
-        self._mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
+        self.mesoscope_frame.check_state(repetition_delay=np.uint32(1000))
 
     def disable_mesoscope_frame_monitoring(self) -> None:
         """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
-        self._mesoscope_frame.reset_command_queue()
+        self.mesoscope_frame.reset_command_queue()
 
     def enable_lick_monitoring(self) -> None:
         """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
@@ -887,11 +886,11 @@ class _MicroControllerInterfaces:
         reliable proxy for tongue-to-sensor contact. Most lick events span at least 100 ms of time and, therefore, the
         rate of 1 kHZ is adequate for resolving all expected single-lick events.
         """
-        self._lick.check_state(repetition_delay=np.uint32(1000))
+        self.lick.check_state(repetition_delay=np.uint32(1000))
 
     def disable_lick_monitoring(self) -> None:
         """Stops monitoring the conductive lick sensor."""
-        self._lick.reset_command_queue()
+        self.lick.reset_command_queue()
 
     def enable_torque_monitoring(self) -> None:
         """Enables monitoring the torque sensor at ~ 1 kHZ rate.
@@ -901,11 +900,11 @@ class _MicroControllerInterfaces:
         reliably distinguishes large torques from small torques and accurately tracks animal motion activity when the
         wheel break is engaged.
         """
-        self._torque.check_state(repetition_delay=np.uint32(1000))
+        self.torque.check_state(repetition_delay=np.uint32(1000))
 
     def disable_torque_monitoring(self) -> None:
         """Stops monitoring the torque sensor."""
-        self._torque.reset_command_queue()
+        self.torque.reset_command_queue()
 
     def open_valve(self) -> None:
         """Opens the water reward solenoid valve.
@@ -913,11 +912,11 @@ class _MicroControllerInterfaces:
         This method is primarily used to prime the water line with water before the first experiment or training session
         of the day.
         """
-        self._reward.toggle(state=True)
+        self.valve.toggle(state=True)
 
     def close_valve(self) -> None:
         """Closes the water reward solenoid valve."""
-        self._reward.toggle(state=False)
+        self.valve.toggle(state=False)
 
     def deliver_reward(self, volume: float = 5.0) -> None:
         """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
@@ -936,12 +935,12 @@ class _MicroControllerInterfaces:
         if volume != self._previous_volume:
             # Note, calibration parameters are not used by the command below, but we explicitly set them here for
             # consistency
-            self._reward.set_parameters(
-                pulse_duration=self._reward.get_duration_from_volume(volume),
+            self.valve.set_parameters(
+                pulse_duration=self.valve.get_duration_from_volume(volume),
                 calibration_delay=np.uint32(200000),
                 calibration_count=np.uint16(200),
             )
-        self._reward.send_pulse()
+        self.valve.send_pulse()
 
     def reference_valve(self) -> None:
         """Runs the reference valve calibration procedure.
@@ -966,12 +965,12 @@ class _MicroControllerInterfaces:
             over multiple days fluctuates significantly, it is advised to recalibrate the valve using the
             calibrate_valve() method.
         """
-        self._reward.set_parameters(
-            pulse_duration=np.uint32(self._reward.get_duration_from_volume(target_volume=5.0)),
+        self.valve.set_parameters(
+            pulse_duration=np.uint32(self.valve.get_duration_from_volume(target_volume=5.0)),
             calibration_delay=np.uint32(200000),
             calibration_count=np.uint16(200),
         )  # 5 ul x 200 times
-        self._reward.calibrate()
+        self.valve.calibrate()
 
     def calibrate_valve(self, pulse_duration: int = 15) -> None:
         """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
@@ -999,100 +998,20 @@ class _MicroControllerInterfaces:
             pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
         """
         pulse_us = pulse_duration * 1000  # Convert milliseconds to microseconds
-        self._reward.set_parameters(
+        self.valve.set_parameters(
             pulse_duration=np.uint32(pulse_us), calibration_delay=np.uint32(200000), calibration_count=np.uint16(500)
         )
-        self._reward.calibrate()
-
-    def get_mesoscope_frame_data(self) -> NDArray[np.uint64]:
-        """Returns the array that stores the data extracted from the compressed Mesoscope Frame TTLModule log file.
-
-        The array stores the timestamps for each frame acquired by the mesoscope. The timestamps mark the beginning of
-        each frame scanning cycle and are returned as the number of microseconds since the UTC epoch onset.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._mesoscope_frame.parse_logged_data()
-
-    def get_encoder_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
-        """Returns two arrays that jointly store the data extracted from the compressed EncoderModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the cumulative distance, in centimeters, the animal has traveled since the onset of the session, at each
-        timestamp.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._wheel_encoder.parse_logged_data()
-
-    def get_torque_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
-        """Returns two arrays that jointly store the data extracted from the compressed TorqueModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the torque value, in Newton centimeters, applied by the animal to the wheel at each timestamp. Positive
-        values denote CCW torques and negative values denote CW torques.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._torque.parse_logged_data()
-
-    def get_lick_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
-        """Returns two arrays that jointly store the data extracted from the compressed LickModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the binary lick detection state (1 for tongue touching the sensor, 0 for tongue not touching the sensor)
-        at each timestamp.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._lick.parse_logged_data()
-
-    def get_screen_data(self) -> tuple[NDArray[np.uint64], NDArray[np.uint8]]:
-        """Returns two arrays that jointly store the data extracted from the compressed ScreenModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the binary screen state (1 for screens being enabled, 0 for screens being disabled) at each timestamp.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._screens.parse_logged_data()
-
-    def get_break_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
-        """Returns two arrays that jointly store the data extracted from the compressed BreakModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the torque applied by the break to the wheel, in Newton centimeters, at each timestamp.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._break.parse_logged_data()
-
-    def get_valve_data(self) -> tuple[NDArray[np.uint64], NDArray[np.float64]]:
-        """Returns two arrays that jointly store the data extracted from the compressed ValveModule log file.
-
-        The first array stores the timestamps as the number of microseconds since the UTC epoch onset. The second array
-        stores the cumulative volume of water, in microliters, delivered at each timestamp relative to experiment onset.
-
-        Notes:
-            Do not call this method before the DataLogger has compressed all logged data.
-        """
-        return self._reward.parse_logged_data()
+        self.valve.calibrate()
 
     @property
     def mesoscope_frame_count(self) -> int:
         """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
-        return self._mesoscope_frame.pulse_count
+        return self.mesoscope_frame.pulse_count
 
     @property
     def total_delivered_volume(self) -> float:
         """Returns the total volume of water, in microliters, dispensed by the valve since runtime onset."""
-        return self._reward.delivered_volume
+        return self.valve.delivered_volume
 
     @property
     def distance_tracker(self) -> SharedMemoryArray:
@@ -1102,7 +1021,7 @@ class _MicroControllerInterfaces:
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
         """
-        return self._wheel_encoder.distance_tracker
+        return self.wheel_encoder.distance_tracker
 
     @property
     def lick_tracker(self) -> SharedMemoryArray:
@@ -1111,7 +1030,7 @@ class _MicroControllerInterfaces:
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         lick detection plots.
         """
-        return self._lick.lick_tracker
+        return self.lick.lick_tracker
 
     @property
     def valve_tracker(self) -> SharedMemoryArray:
@@ -1120,7 +1039,7 @@ class _MicroControllerInterfaces:
         This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
         reward delivery plots.
         """
-        return self._reward.valve_tracker
+        return self.valve.valve_tracker
 
 
 class _VideoSystems:
