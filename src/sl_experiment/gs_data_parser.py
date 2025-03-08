@@ -19,13 +19,20 @@ def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
     Converts a date and time string to a UTC timestamp.
 
     Args:
-        date: The date string in the format "%m-%d-%y".
-        time: The time string in the format "%H:%M". If None, it is set to a default of "00:00"
+        date: The date string in the format "%m-%d-%y" or "%m-%d-%Y".
+        time: The time string in the format "%H:%M". If None, it is set to a default of "00:00".
     """
     if not date:
         return 0
-
-    date_obj = datetime.strptime(date, "%m-%d-%y").date()
+    
+    for date_format in ["%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"]:
+        try:
+            date_obj = datetime.strptime(date, date_format).date()
+            break
+        except ValueError:
+            continue
+    else:
+        raise ValueError(f"Invalid date format: {date}")
 
     if time:
         time_obj = datetime.strptime(time, "%H:%M").time()
@@ -35,7 +42,7 @@ def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
     full_datetime = datetime.combine(date_obj, time_obj)
     full_datetime = full_datetime.replace(tzinfo=timezone.utc)
     utc_timestamp = int(full_datetime.timestamp())
-
+    
     return utc_timestamp
 
 
