@@ -132,6 +132,9 @@ noconda = [
 
     # Types:
     "types-tqdm>=4,<5",
+    "types-tabulate>=0,<1",
+    "scipy-stubs>=1,<2",
+    "types-pynput>=1,<2",
 
     # Documentation
     "sphinx-rtd-dark-mode>=1,<2",

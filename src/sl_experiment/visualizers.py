@@ -2,14 +2,18 @@
 
 import numpy as np
 import matplotlib
+from numpy.typing import NDArray
 
 matplotlib.use("QtAgg")  # Uses QT backend for performance and compatibility with Linux
 
-from matplotlib.ticker import MaxNLocator
+from ataraxis_time import PrecisionTimer
+from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, FixedLocator, FixedFormatter
 from ataraxis_base_utilities import console
 from ataraxis_data_structures import SharedMemoryArray
-from ataraxis_time import PrecisionTimer
 
 # Updates plotting dictionaries to preferentially use Arial text style and specific sizes for different text elements
 # in plots:
@@ -131,7 +135,6 @@ class BehaviorVisualizer:
         _valve_line: Stores the line class used to plot the solenoid valve data.
         _speed_line: Stores the line class used to plot the average running speed data.
         _figure: Stores the matplotlib figure instance used to display the plots.
-        _initialized: Tracks whether the figure managed by the class has been initialized.
         _lick_axis: The axis object used to plot the lick sensor data during visualization runtime.
         _valve_axis: The axis object used to plot the solenoid valve data during visualization runtime.
         _speed_axis: The axis object used to plot the average running speed data during visualization runtime.
@@ -156,51 +159,39 @@ class BehaviorVisualizer:
         self._update_timer = PrecisionTimer("ms")
 
         # Saves the input trackers to class attributes
-        self._lick_tracker = lick_tracker
-        self._valve_tracker = valve_tracker
-        self._distance_tracker = distance_tracker
+        self._lick_tracker: SharedMemoryArray = lick_tracker
+        self._valve_tracker: SharedMemoryArray = valve_tracker
+        self._distance_tracker: SharedMemoryArray = distance_tracker
 
         # Precreates the structures used to store the displayed data during visualization runtime
-        self._timestamps = np.arange(
+        self._timestamps: NDArray[np.float32] = np.arange(
             start=0 - self._time_window, stop=self._time_step / 1000, step=self._time_step / 1000, dtype=np.float32
         )
-        self._lick_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
-        self._valve_data = np.zeros_like(a=self._timestamps, dtype=np.uint8)
-        self._speed_data = np.zeros_like(a=self._timestamps, dtype=np.float64)
-        self._previous_valve_count = np.float64(0)
-        self._previous_lick_count = np.uint64(0)
-        self._previous_distance = np.float64(0)
-        self._running_speed = np.float64(0)
+        self._lick_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._valve_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._speed_data: NDArray[np.float64] = np.zeros_like(a=self._timestamps, dtype=np.float64)
+        self._previous_valve_count: np.float64 = np.float64(0)
+        self._previous_lick_count: np.uint64 = np.uint64(0)
+        self._previous_distance: np.float64 = np.float64(0)
+        self._running_speed: np.float64 = np.float64(0)
 
         # Initializes additional assets used to generate the running speed data from the distance tracking data.
-        self._speed_timer = PrecisionTimer("ms")
+        self._speed_timer: PrecisionTimer = PrecisionTimer("ms")
 
         # Line objects (to be created during initialization)
-        self._lick_line = None
-        self._valve_line = None
-        self._speed_line = None
+        self._lick_line: Line2D
+        self._valve_line: Line2D
+        self._speed_line: Line2D
 
         # Figure objects
-        self._initialized = False
-        self._figure = None
-        self._lick_axis = None
-        self._valve_axis = None
-        self._speed_axis = None
+        self._figure: Figure
+        self._lick_axis: Axes
+        self._valve_axis: Axes
+        self._speed_axis: Axes
 
         # Running speed threshold and duration threshold lines
-        self._speed_threshold_line = None
-        self._duration_threshold_line = None
-
-    def initialize(self) -> None:
-        """Initializes the visualization runtime.
-
-        This method generates and renders the plot figure. During runtime, most of the plot will be kept constant, which
-        saves rendering time. In turn, this allows the visualizer to work with higher data sampling rates.
-        """
-
-        # Prevents this method from running for an already initialized class
-        if self._initialized:
-            return
+        self._speed_threshold_line: Line2D
+        self._duration_threshold_line: Line2D
 
         # Creates the figure with three subplots sharing the same x-axis
         self._figure, (self._lick_axis, self._valve_axis, self._speed_axis) = plt.subplots(
@@ -215,41 +206,21 @@ class BehaviorVisualizer:
 
         # Set up axes properties. This is only done once, during class initialization, and the elements made by
         # this method stay unchanged throughout the entire class runtime.
-        self._setup_axes()
-
-        # Creates the plot artists. Plot artists are updated each time update() method is called to re-render the
-        # line using new data.
-        self._setup_plot_artists()
-
-        # Generates the figure object and updates it to show the initial (zero-initialized) data state.
-        plt.show(block=False)
-        self._figure.canvas.draw()
-        self._figure.canvas.flush_events()
-
-        # Sets the initialization flag
-        self._initialized = True
-
-    def _setup_axes(self) -> None:
-        """Configures all axes.
-
-        This method is called during initialize() runtime to generate the properties for all plots. These properties
-        are kept constant throughout the class runtime.
-        """
         # Lick axis
         self._lick_axis.set_title("Lick Sensor State", fontdict=_fontdict_title)
         self._lick_axis.set_ylim(-0.05, 1.05)
         self._lick_axis.set_ylabel("Lick State", fontdict=_fontdict_axis_label)
         self._lick_axis.set_xlabel("")
-        self._lick_axis.yaxis.set_major_locator(plt.FixedLocator([0, 1]))
-        self._lick_axis.yaxis.set_major_formatter(plt.FixedFormatter(["No Lick", "Lick"]))
+        self._lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
 
         # Valve axis
         self._valve_axis.set_title("Reward Valve State", fontdict=_fontdict_title)
         self._valve_axis.set_ylim(-0.05, 1.05)
         self._valve_axis.set_ylabel("Valve State", fontdict=_fontdict_axis_label)
         self._valve_axis.set_xlabel("")
-        self._valve_axis.yaxis.set_major_locator(plt.FixedLocator([0, 1]))
-        self._valve_axis.yaxis.set_major_formatter(plt.FixedFormatter(["Closed", "Open"]))
+        self._valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))
 
         # Speed axis
         self._speed_axis.set_title("Average Running Speed", fontdict=_fontdict_title)
@@ -269,13 +240,8 @@ class BehaviorVisualizer:
         # Aligns all y-labels
         self._figure.align_ylabels([self._lick_axis, self._valve_axis, self._speed_axis])
 
-    def _setup_plot_artists(self) -> None:
-        """Creates the artists (plot lines) for the data.
-
-        The artists are used during update() method runtime to re-render the lines using updated data. This minimizes
-        rendering to the elements that actually change during runtime, keeping other figure elements static.
-        """
-
+        # Creates the plot artists. Plot artists are updated each time update() method is called to re-render the
+        # line using new data.
         # Lick plot
         (self._lick_line,) = self._lick_axis.plot(
             self._timestamps,
@@ -312,6 +278,15 @@ class BehaviorVisualizer:
             x=-0.1, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
         )
 
+        # Generates the figure object and updates it to show the initial (zero-initialized) data state.
+        plt.show(block=False)
+        self._figure.canvas.draw()
+        self._figure.canvas.flush_events()
+
+    def __del__(self) -> None:
+        """Ensures all resources are released when the figure object is garbage-collected."""
+        self.close()
+
     def update(self) -> None:
         """Updates the figure managed by the class to display new data.
 
@@ -324,11 +299,6 @@ class BehaviorVisualizer:
             The method has an internal update frequency limiter. Therefore, to achieve optimal performance, call this
             method as frequently as possible and rely on the internal limiter to force the specific update frequency.
         """
-        # If the class is not initialized, carries out initialization
-        if not self._initialized:
-            self.initialize()
-            return
-
         # Ensures the plot is not updated any faster than necessary to resolve the time-step used by the plot
         if self._update_timer.elapsed < self._time_step:
             return
@@ -346,9 +316,7 @@ class BehaviorVisualizer:
         self._figure.canvas.draw()
         self._figure.canvas.flush_events()
 
-    def update_speed_thresholds(
-        self, speed_threshold: float | np.float64, duration_threshold: float | np.float64
-    ) -> None:
+    def update_speed_thresholds(self, speed_threshold: float, duration_threshold: float) -> None:
         """Updates the running speed and duration threshold lines to use the input anchor values.
 
         This positions the threshold lines in the running speed plot to indicate the cut-offs for the running speed and
@@ -360,9 +328,6 @@ class BehaviorVisualizer:
             duration_threshold: The duration, in seconds, the animal has to maintain the above-threshold speed to get
                 water rewards.
         """
-        if not self._initialized:
-            self.initialize()
-
         self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])
         self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])
         self._speed_threshold_line.set_visible(True)
@@ -370,15 +335,7 @@ class BehaviorVisualizer:
 
     def close(self) -> None:
         """Closes the visualized figure and cleans up the resources used by the class during runtime."""
-        if self._initialized:
-            plt.close(self._figure)  # Closes the figure
-
-            # Resets internal object references
-            self._figure = None
-            self._lick_axis = None
-            self._valve_axis = None
-            self._speed_axis = None
-            self._initialized = False
+        plt.close(self._figure)  # Closes the figure
 
     def _sample_data(self) -> None:
         """Samples new data from tracker SharedMemoryArray instances and update the class memory."""

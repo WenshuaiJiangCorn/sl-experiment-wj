@@ -2,31 +2,32 @@
 lab's Mesoscope-VR system and SessionData class that abstracts working with acquired experimental data."""
 
 import os
-import warnings
-from pathlib import Path
-import tempfile
-
-import numpy as np
-from numpy.typing import NDArray
 import copy
 import json
-from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
+import shutil
+from typing import Any
+from pathlib import Path
+import tempfile
+import warnings
+from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from tqdm import tqdm
+import numpy as np
+from pynput import keyboard
+from numpy.typing import NDArray
+from ataraxis_time import PrecisionTimer
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, LogPackage, YamlConfig, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
-from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
-from ataraxis_time import PrecisionTimer
+from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from .transfer_tools import transfer_directory
-from .packaging_tools import calculate_directory_checksum
-from .data_preprocessing import process_mesoscope_directory, process_log_data
 from .visualizers import BehaviorVisualizer
+from .transfer_tools import transfer_directory
+from .binding_classes import _HeadBar, _LickPort, _VideoSystems, _ZaberPositions, _MicroControllerInterfaces
+from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import ValveInterface
-from .binding_classes import _MicroControllerInterfaces, _HeadBar, _LickPort, _VideoSystems, _ZaberPositions
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import shutil
-from dataclasses import dataclass
-from tqdm import tqdm
-from pynput import keyboard
+from .data_preprocessing import process_log_data, process_mesoscope_directory
 
 
 @dataclass()
@@ -143,19 +144,19 @@ class KeyboardListener:
 
     """
 
-    def __init__(self):
-        self._exit_flag = False
-        self._reward_flag = False
-        self._speed_flag = 0
-        self._duration_flag = 0
-        self._currently_pressed = set()
+    def __init__(self) -> None:
+        self._exit_flag: bool = False
+        self._reward_flag: bool = False
+        self._speed_flag: int = 0
+        self._duration_flag: int = 0
+        self._currently_pressed: set[str] = set()
 
         # Set up listeners for both press and release
-        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._listener: keyboard.Listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._listener.daemon = True
         self._listener.start()
 
-    def _on_press(self, key):
+    def _on_press(self, key: Any) -> None:
         """Adds newly pressed keys to the storage set and determines whether the pressed key combination matches the
         shutdown combination.
 
@@ -188,7 +189,7 @@ class KeyboardListener:
             if "Key.left" in self._currently_pressed:
                 self._duration_flag += 1
 
-    def _on_release(self, key):
+    def _on_release(self, key: Any) -> None:
         """Removes no longer pressed keys from the storage set.
 
         This method is used as the 'on_release' callback for the Listener instance.
@@ -324,7 +325,7 @@ class SessionData:
         self._animal_name: str = animal_name
 
         # Acquires the UTC timestamp to use as the session name
-        session_name = get_timestamp(time_separator="-")
+        session_name: str = str(get_timestamp(time_separator="-"))
 
         # Constructs the session directory path and generates the directory
         raw_session_path = self._local.joinpath(session_name)
@@ -523,17 +524,18 @@ class SessionData:
         destination = self.raw_data_path  # The path to the raw_data subdirectory of the current session
 
         # Extracts the names of files stored in the source folder
-        files = tuple([path for path in source.glob("*")])
+        files: tuple[Path, ...] = tuple([path for path in source.glob("*")])
+        file_names: tuple[str, ...] = tuple([file.name for file in files])
 
         # Ensures the folder contains motion estimator data files
-        if "MotionEstimator.me" not in files:
+        if "MotionEstimator.me" not in file_names:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The 'mesoscope_frames' "
                 f"ScanImage PC directory does not contain the MotionEstimator.me file, which is required for further "
                 f"frame data processing."
             )
             console.error(message=message, error=RuntimeError)
-        if "zstack.mat" not in files:
+        if "zstack.mat" not in file_names:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The 'mesoscope_frames' "
                 f"ScanImage PC directory does not contain the zstack.mat file, which is required for further "
@@ -652,14 +654,11 @@ class SessionData:
         # Resolves source and destination paths
         source = self.raw_data_path
 
-        # Destinations include short destination names used for progress reporting
+        # Resolves a tuple of destination paths
         destinations = (
-            (self._nas.joinpath("raw_data"), "NAS"),
-            (self._server.joinpath("raw_data"), "Server"),
+            self._nas.joinpath("raw_data"),
+            self._server.joinpath("raw_data"),
         )
-
-        # Resolves the destination paths based on the provided short destination names
-        destinations = [(dest[0], dest[1]) for dest in destinations]
 
         # Computes the xxHash3-128 checksum for the source folder
         calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
@@ -671,11 +670,11 @@ class SessionData:
                     executor.submit(
                         transfer_directory,
                         source=source,
-                        destination=dest[0],
+                        destination=destination,
                         num_threads=num_threads,
                         verify_integrity=verify_transfer_integrity,
-                    ): dest
-                    for dest in destinations
+                    ): destination
+                    for destination in destinations
                 }
                 for future in as_completed(futures):
                     # Propagates any exceptions from the transfers
@@ -687,7 +686,7 @@ class SessionData:
             for destination in destinations:
                 transfer_directory(
                     source=source,
-                    destination=destination[0],
+                    destination=destination,
                     num_threads=num_threads,
                     verify_integrity=verify_transfer_integrity,
                 )
@@ -930,7 +929,8 @@ class MesoscopeExperiment:
         # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
         # configuration (3 producers, 3 consumer), 1 core for the central process calling this method. 11 cores
         # total.
-        if not os.cpu_count() >= 11:
+        cpu_count = os.cpu_count()
+        if cpu_count is None or not cpu_count >= 11:
             message = (
                 f"Unable to start the MesoscopeExperiment runtime. The host PC must have at least 11 logical CPU "
                 f"cores available for this class to work as expected, but only {os.cpu_count()} cores are "
@@ -956,7 +956,7 @@ class MesoscopeExperiment:
         # Logs the onset timestamp. All further timestamps will be treated as integer time deltas (in microseconds)
         # relative to the onset timestamp. Note, ID of 1 is used to mark the main experiment system.
         package = LogPackage(
-            source_id=self._source_id, time_stamp=np.uint8(0), serialized_data=onset
+            source_id=self._source_id, time_stamp=np.uint64(0), serialized_data=onset
         )  # Packages the id, timestamp, and data.
         self._logger.input_queue.put(package)
 
@@ -1339,11 +1339,12 @@ class MesoscopeExperiment:
             if self._unity.has_data:
                 topic: str
                 payload: bytes
-                topic, payload = self._unity.get_data()
+                topic, payload = self._unity.get_data()  # type: ignore
                 if topic == "CueSequence/":
                     # Extracts the sequence of cues that will be used during task runtime.
-                    sequence = json.loads(payload.decode("utf-8"))["cue_sequence"]
-                    sequence: NDArray[np.uint8] = np.array(sequence, dtype=np.uint8)
+                    sequence: NDArray[np.uint8] = np.array(
+                        json.loads(payload.decode("utf-8"))["cue_sequence"], dtype=np.uint8
+                    )
                     return sequence
 
                 else:
@@ -1512,7 +1513,7 @@ class _BehavioralTraining:
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
         _lick_training: Tracks the training state used by the instance, which is required for log parsing.
-        _descriptor: Stores the session descriptor instance.
+        descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers and video
             cameras.
         _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
@@ -1560,7 +1561,7 @@ class _BehavioralTraining:
         # Determines the type of training carried out by the instance. This is needed for log parsing and
         # SessionDescriptor generation.
         self._lick_training: bool = False
-        self._descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor = descriptor
+        self.descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor = descriptor
 
         # Input verification:
         if not isinstance(session_data, SessionData):
@@ -1659,7 +1660,8 @@ class _BehavioralTraining:
         # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
         # configuration (3 producers, 3 consumer), 1 core for the central process calling this method. 11 cores
         # total.
-        if not os.cpu_count() >= 11:
+        cpu_count = os.cpu_count()
+        if cpu_count is None or not cpu_count >= 11:
             message = (
                 f"Unable to start the BehavioralTraining runtime. The host PC must have at least 11 logical CPU "
                 f"cores available for this class to work as expected, but only {os.cpu_count()} cores are "
@@ -1801,8 +1803,8 @@ class _BehavioralTraining:
         # that the reported dispensed_water_volume_ul is accurate.
         delivered_water = self._microcontrollers.total_delivered_volume
         # Overwrites the delivered water volume with the volume recorded over the runtime.
-        self._descriptor.dispensed_water_volume_ul = delivered_water
-        self._descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+        self.descriptor.dispensed_water_volume_ul = delivered_water
+        self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
@@ -2081,14 +2083,11 @@ def lick_training_logic(
     if len(reward_delays) == len(cumulative_time):
         # Actual session time is the accumulated delay converted from seconds to minutes at the last index.
         # noinspection PyProtectedMember
-        runtime._descriptor.training_time_m = np.ceil(cumulative_time[-1] / 60)
+        runtime.descriptor.maximum_training_time_m = np.ceil(cumulative_time[-1] / 60)
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
-
-    # Starts the visualizer process
-    visualizer.initialize()
 
     # Configures all system components to support lick training
     runtime.lick_train_state()
@@ -2164,7 +2163,7 @@ def calibrate_valve_logic(
     headbar_port: str,
     lickport_port: str,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-):
+) -> None:
     """Encapsulates the logic used to fill, empty, check, and calibrate the water valve.
 
     This runtime allows interfacing with the water valve outside of training and experiment runtime contexts. Usually,
@@ -2194,8 +2193,8 @@ def calibrate_valve_logic(
     console.echo(message=message, level=LogLevel.INFO)
 
     # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
-    with tempfile.TemporaryDirectory(prefix="sl_valve_") as output_path:
-        output_path = Path(output_path)
+    with tempfile.TemporaryDirectory(prefix="sl_valve_") as output_dir:
+        output_path: Path = Path(output_dir)
 
         # Initializes the data logger. Due to how the MicroControllerInterface class is implemented, this is required
         # even for runtimes that do not need to save data.
@@ -2431,7 +2430,7 @@ def run_train_logic(
     duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
 
     water_threshold = np.float64(increase_threshold * 1000)  # In microliters
-    maximum_water_volume = np.float64(maximum_water_volume * 1000)  # In microliters
+    maximum_volume = np.float64(maximum_water_volume * 1000)  # In microliters
 
     # Converts the training time from minutes to seconds to make it compatible with the timer precision.
     training_time = maximum_training_time * 60
@@ -2446,11 +2445,8 @@ def run_train_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
-    # Starts the visualizer process
-    visualizer.initialize()
-
     # Updates the threshold lines to use the initial speed and duration values
-    visualizer.update_speed_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
+    visualizer.update_speed_thresholds(speed_threshold=float(initial_speed), duration_threshold=float(initial_duration))
 
     # Configures all system components to support run training
     runtime.run_train_state()
@@ -2516,7 +2512,9 @@ def run_train_logic(
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.
         if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(speed_threshold, duration_threshold / 1000)  # Converts back to seconds
+            visualizer.update_speed_thresholds(
+                float(speed_threshold), float(duration_threshold) / 1000
+            )  # Converts back to seconds
             previous_speed_threshold = speed_threshold
             previous_duration_threshold = duration_threshold
 
@@ -2552,9 +2550,9 @@ def run_train_logic(
 
         # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
         # training early with a success message.
-        if dispensed_water_volume > maximum_water_volume:
+        if dispensed_water_volume > maximum_volume:
             message = (
-                f"Run training has delivered the maximum allowed volume of water ({maximum_water_volume} ml). Aborting "
+                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} ml). Aborting "
                 f"the training process."
             )
             console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2576,10 +2574,9 @@ def run_train_logic(
     # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
     # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
     # the training.
-    # noinspection PyProtectedMember
-    runtime._descriptor.final_running_speed_cm_s = float(speed_threshold)
-    # noinspection PyProtectedMember
-    runtime._descriptor.final_speed_duration_s = float(duration_threshold/1000)  # Converts from s to ms
+    if not isinstance(runtime.descriptor, _LickTrainingDescriptor):  # This is to appease mypy
+        runtime.descriptor.final_running_speed_cm_s = float(speed_threshold)
+        runtime.descriptor.final_speed_duration_s = float(duration_threshold / 1000)  # Converts from s to ms
 
     # Shutdown sequence:
     message = f"Training runtime: Complete."
@@ -2624,9 +2621,6 @@ def run_experiment_logic() -> None:
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
-
-    # Starts the visualizer process
-    visualizer.initialize()
 
     # Initializes the keyboard listener to support aborting test runtimes.
     listener = KeyboardListener()

@@ -1,12 +1,13 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR setup."""
 
-from zaber_motion import Tools, Units
-from tabulate import tabulate
 from typing import Any
-from zaber_motion.ascii import Connection, Axis, Device, SettingConstants
-from dataclasses import dataclass, field
+from dataclasses import field, dataclass
+
 from crc import Calculator, Configuration
+from tabulate import tabulate
+from zaber_motion import Tools, Units
 from ataraxis_time import PrecisionTimer
+from zaber_motion.ascii import Axis, Device, Connection, SettingConstants
 from ataraxis_base_utilities import console
 
 
@@ -72,7 +73,7 @@ def _scan_active_ports() -> tuple[dict[str, Any], tuple[str, ...]]:
         result = _attempt_connection(port=port)
 
         # If a particular port did not return a dictionary, sets its ID block to 'No Devices' tag.
-        if not isinstance(result, dict):
+        if isinstance(result, str):
             connected_dict[port] = "No Devices"
 
             # Because of how _attempt_connection() works, if the result is not a dictionary, it is necessarily a string
@@ -80,7 +81,7 @@ def _scan_active_ports() -> tuple[dict[str, Any], tuple[str, ...]]:
             error_messages.append(result)
         else:
             # Otherwise, merges each returned dictionary into the overall dictionary.
-            connected_dict[port] = result
+            connected_dict[port] = result  # type: ignore
 
     # Casts the error message list into tuple before returning it to the caller.
     return connected_dict, tuple(error_messages)
@@ -298,7 +299,7 @@ class _ZaberUnits:
     @property
     def displacement_units(self) -> Units:
         """Returns the Units class instance used to work with displacement (length) data."""
-        return self.zaber_units_conversion[self.unit_type]["length"]
+        return self.zaber_units_conversion[self.unit_type]["length"]  # type: ignore
 
     @property
     def acceleration_units(self) -> Units:
@@ -306,7 +307,7 @@ class _ZaberUnits:
 
         Note, all acceleration units are given in units / seconds^2.
         """
-        return self.zaber_units_conversion[self.unit_type]["acceleration"]
+        return self.zaber_units_conversion[self.unit_type]["acceleration"]  # type: ignore
 
     @property
     def velocity_units(self) -> Units:
@@ -314,7 +315,7 @@ class _ZaberUnits:
 
         Note, all velocity units are given in units / seconds.
         """
-        return self.zaber_units_conversion[self.unit_type]["velocity"]
+        return self.zaber_units_conversion[self.unit_type]["velocity"]  # type: ignore
 
 
 class ZaberAxis:
@@ -995,7 +996,7 @@ class ZaberConnection:
 
     def __del__(self) -> None:
         """Ensures that the connection is shut down gracefully whenever the class instance is deleted."""
-        if self.is_connected:
+        if self.is_connected and self._connection is not None:
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
             # involves motor parking and this may not be safe in all circumstances. Therefore, the user can only
             # call shutdown manually.
@@ -1045,10 +1046,11 @@ class ZaberConnection:
         for device in self._devices:
             device.shutdown()
 
-        # Resets the device list, closes the connection, and sets the connection tracker to False.
-        self._devices = []
-        self._is_connected: bool = False
-        self._connection.close()
+        # Resets the device tuple, closes the connection, and sets the connection tracker to False.
+        self._devices = tuple()
+        self._is_connected = False
+        if self._connection is not None:
+            self._connection.close()
 
     @property
     def is_connected(self) -> bool:
@@ -1061,7 +1063,7 @@ class ZaberConnection:
         return self._port
 
     @property
-    def device_information(self) -> dict:
+    def device_information(self) -> dict[int, Any]:
         """Returns a dictionary that provides the basic ID information about all Zaber devices using this connection."""
         return {
             num: {"ID": device.id, "Label": device.label, "Name": device.name}

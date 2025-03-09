@@ -1,21 +1,23 @@
 """This module provides click-based Command-Line Interface (CLI) scripts that allow using various features from this
 library through the terminal."""
 
-import click
 from pathlib import Path
+
+import click
+from ataraxis_base_utilities import LogLevel, console
+
 from sl_experiment.experiment import SessionData
 
-from .zaber_bindings import _CRCCalculator, discover_zaber_devices
 from .experiment import (
-    _BehavioralTraining,
-    _LickTrainingDescriptor,
-    _RunTrainingDescriptor,
-    lick_training_logic,
-    calibrate_valve_logic,
     run_train_logic,
+    _BehavioralTraining,
+    lick_training_logic,
     run_experiment_logic,
+    calibrate_valve_logic,
+    _RunTrainingDescriptor,
+    _LickTrainingDescriptor,
 )
-from ataraxis_base_utilities import console, LogLevel
+from .zaber_bindings import _CRCCalculator, discover_zaber_devices
 
 # Precalculated default valve calibration data. This is used as the 'default' field for our valve interface cli
 DEFAULT_VALVE_CALIBRATION_DATA = (
@@ -233,12 +235,12 @@ def lick_training(
     face_camera: int,
     left_camera: int,
     right_camera: int,
-    cti_path: str,
+    cti_path: Path | str,
     screens_on: bool,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    local_root_path,
-    server_root_path,
-    nas_root_path,
+    local_root_path: Path | str,
+    server_root_path: Path | str,
+    nas_root_path: Path | str,
 ) -> None:
     """Runs a single lick training session for the specified animal and project combination, using the input
     parameters.
@@ -618,12 +620,12 @@ def run_training(
     face_camera: int,
     left_camera: int,
     right_camera: int,
-    cti_path: str,
+    cti_path: Path | str,
     screens_on: bool,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    local_root_path,
-    server_root_path,
-    nas_root_path,
+    local_root_path: Path | str,
+    server_root_path: Path | str,
+    nas_root_path: Path | str,
 ) -> None:
     """Runs a single run training session for the specified animal and project combination, using the input
     parameters.

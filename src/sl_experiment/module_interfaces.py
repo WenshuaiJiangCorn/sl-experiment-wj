@@ -1,12 +1,15 @@
 """This module provides ModuleInterface implementations for the hardware used by the Sun lab VR-Mesoscope system."""
 
-from pathlib import Path
 from json import dumps
 import math
+from typing import Any
+from pathlib import Path
 
 import numpy as np
-from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
+import polars as pl
 from numpy.typing import NDArray
+from ataraxis_time import PrecisionTimer
+from scipy.optimize import curve_fit
 from ataraxis_base_utilities import console
 from ataraxis_communication_interface import (
     ModuleData,
@@ -18,15 +21,12 @@ from ataraxis_communication_interface import (
     RepeatedModuleCommand,
     extract_logged_hardware_module_data,
 )
-from scipy.optimize import curve_fit
-from ataraxis_time import PrecisionTimer
-from typing import Any
-import polars as pl
+from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 
 
 def _interpolate_data(
     timestamps: NDArray[np.uint64],
-    data: NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]],
+    data: NDArray[np.integer[Any] | np.floating[Any]],
     seed_timestamps: NDArray[np.uint64],
     is_discrete: bool,
 ) -> NDArray[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any]]:
@@ -77,7 +77,7 @@ def _interpolate_data(
 
     # Continuous data. Note, due to interpolation, continuous data is always returned using float_64 datatype.
     else:
-        return np.interp(seed_timestamps, timestamps, data)
+        return np.interp(seed_timestamps, timestamps, data)  # type: ignore
 
 
 class EncoderInterface(ModuleInterface):
@@ -185,7 +185,8 @@ class EncoderInterface(ModuleInterface):
 
     def terminate_remote_assets(self) -> None:
         """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""
-        self._communication.disconnect()
+        if self._communication is not None:
+            self._communication.disconnect()
         self._distance_tracker.disconnect()
 
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
@@ -200,6 +201,10 @@ class EncoderInterface(ModuleInterface):
         Notes:
             If debug mode is enabled, motion data is also converted to centimeters and printed via console.
         """
+        # Static guard to appease mypy, all processed module messages are ModuleData types at this point.
+        if isinstance(message, ModuleState):
+            return
+
         # If the incoming message is the PPR report, prints the data via console.
         if message.event == 53:
             console.echo(f"Encoder ppr: {message.data_object}")
@@ -273,7 +278,7 @@ class EncoderInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(200)) -> None:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
@@ -291,6 +296,7 @@ class EncoderInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
                 command will only run once.
         """
+        command: RepeatedModuleCommand | OneOffModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -308,7 +314,7 @@ class EncoderInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=np.uint32(repetition_delay),
             )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def reset_pulse_count(self) -> None:
         """Resets the EncoderModule pulse tracker to 0.
@@ -324,7 +330,7 @@ class EncoderInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def get_ppr(self) -> None:
         """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
@@ -353,7 +359,7 @@ class EncoderInterface(ModuleInterface):
             command=np.uint8(3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     @property
     def mqtt_topic(self) -> str:
@@ -508,13 +514,13 @@ class TTLInterface(ModuleInterface):
         # if the mesoscope trigger successfully starts frame acquisition.
         self._pulse_tracker: SharedMemoryArray | None = None
         if self._report_pulses:
-            self._pulse_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            self._pulse_tracker = SharedMemoryArray.create_array(
                 name=f"{self._module_type}_{self._module_id}_pulse_tracker",
                 prototype=np.zeros(shape=1, dtype=np.uint64),
                 exist_ok=True,
             )
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Destroys the _pulse_tracker memory buffer and releases the resources reserved by the array during class
         runtime."""
         if self._pulse_tracker is not None:
@@ -588,7 +594,7 @@ class TTLInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, averaging_pool_size),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True) -> None:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
@@ -605,6 +611,7 @@ class TTLInterface(ModuleInterface):
                 the pulse or not. Blocking ensures precise pulse duration, non-blocking allows the microcontroller to
                 perform other operations while waiting, increasing its throughput.
         """
+        command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -623,7 +630,7 @@ class TTLInterface(ModuleInterface):
                 cycle_delay=repetition_delay,
             )
 
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def toggle(self, state: bool) -> None:
         """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
@@ -641,7 +648,7 @@ class TTLInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Checks the state of the TTL signal received by the TTLModule.
@@ -654,6 +661,7 @@ class TTLInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
                 will only run once.
         """
+        command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -671,7 +679,7 @@ class TTLInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     @staticmethod
     def parse_logged_data(log_path: Path, output_directory: Path) -> None:
@@ -755,7 +763,10 @@ class TTLInterface(ModuleInterface):
     @property
     def pulse_count(self) -> int:
         """Returns the total number of received TTL pulses recorded by the class since initialization."""
-        return int(self._pulse_tracker.read_data(index=0, convert_output=True))
+        if self._pulse_tracker is not None:
+            return int(self._pulse_tracker.read_data(index=0, convert_output=True))
+        else:
+            return 0  # If the array does not exist, always returns 0
 
 
 class BreakInterface(ModuleInterface):
@@ -895,7 +906,7 @@ class BreakInterface(ModuleInterface):
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(breaking_strength,),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def toggle(self, state: bool) -> None:
         """Triggers the BreakModule to be permanently engaged at maximum strength or permanently disengaged.
@@ -917,7 +928,7 @@ class BreakInterface(ModuleInterface):
             command=np.uint8(1 if state else 2),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def set_breaking_power(self) -> None:
         """Triggers the BreakModule to engage with the strength (torque) defined by the breaking_strength runtime
@@ -940,7 +951,7 @@ class BreakInterface(ModuleInterface):
             command=np.uint8(3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
         """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
@@ -1140,7 +1151,7 @@ class ValveInterface(ModuleInterface):
 
         # Defines the power-law model. Our calibration data suggests that the Valve performs in a non-linear fashion
         # and is better calibrated using the power law, rather than a linear fit
-        def power_law_model(pulse_duration, a, b):
+        def power_law_model(pulse_duration: Any, a: Any, b: Any, /) -> Any:
             return a * np.power(pulse_duration, b)
 
         # Fits the power-law model to the input calibration data and saves the fit parameters and covariance matrix to
@@ -1203,7 +1214,7 @@ class ValveInterface(ModuleInterface):
             # Resets the cycle timer each time the valve transitions from closed to open state.
             if not self._previous_state:
                 self._previous_state = True
-                self._cycle_timer.reset()
+                self._cycle_timer.reset()  # type: ignore
 
         elif message.event == 53:
             if self._debug:
@@ -1214,7 +1225,7 @@ class ValveInterface(ModuleInterface):
             # the tracker array.
             if self._previous_state:
                 self._previous_state = False
-                open_duration = self._cycle_timer.elapsed
+                open_duration = self._cycle_timer.elapsed  # type: ignore
 
                 # Accumulates delivered water volumes into the tracker.
                 delivered_volume = np.float64(
@@ -1290,7 +1301,7 @@ class ValveInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, calibration_delay, calibration_count, tone_duration),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False) -> None:
         """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
@@ -1312,6 +1323,7 @@ class ValveInterface(ModuleInterface):
                 not. Blocking ensures precise pulse duration and dispensed fluid volume. Non-blocking
                 allows the microcontroller to perform other operations while waiting, increasing its throughput.
         """
+        command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -1329,7 +1341,7 @@ class ValveInterface(ModuleInterface):
                 noblock=np.bool(noblock),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def toggle(self, state: bool) -> None:
         """Triggers the ValveModule to be permanently open or closed.
@@ -1346,7 +1358,7 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(2 if state else 3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def calibrate(self) -> None:
         """Triggers ValveModule to repeatedly pulse the valve using the duration defined by the pulse_duration runtime
@@ -1373,7 +1385,7 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(4),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
@@ -1436,8 +1448,8 @@ class ValveInterface(ModuleInterface):
         return self._nonlinearity_exponent
 
     @property
-    def calibration_covariance(self) -> np.ndarray:
-        """mReturns the 2x2 covariance matrix associated with the power‐law calibration fit.
+    def calibration_covariance(self) -> NDArray[np.float64]:
+        """Returns the 2x2 covariance matrix associated with the power‐law calibration fit.
 
         The covariance matrix contains the estimated variances of the calibration parameters
         on its diagonal (i.e., variance of the scale coefficient and the nonlinearity exponent)
@@ -1560,7 +1572,7 @@ class ValveInterface(ModuleInterface):
         # Now carries out similar processing for the Tone signals
         # Same logic as with code 52 applies to code 55
         tone_on_data = log_data.get(np.uint8(55), [])
-        tone_off_data = log_data.get(np.uint8(56))
+        tone_off_data = log_data.get(np.uint8(56), [])  # The empty default is to appease mypy
 
         tone_length = len(tone_on_data) + len(tone_off_data)
         tone_timestamps: NDArray[np.uint64] = np.empty(tone_length, dtype=np.uint64)
@@ -1695,7 +1707,8 @@ class LickInterface(ModuleInterface):
 
     def terminate_remote_assets(self) -> None:
         """Destroys the MQTTCommunication class and disconnects from the lick-tracker SharedMemoryArray."""
-        self._communication.disconnect()
+        if self._communication is not None:
+            self._communication.disconnect()
         self._lick_tracker.disconnect()  # Does not destroy the array to support start / stop cycling.
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
@@ -1723,7 +1736,7 @@ class LickInterface(ModuleInterface):
         if detected_voltage >= self._lick_threshold:
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
             # which acts as a binary lick trigger.
-            self._communication.send_data(topic=self._sensor_topic, payload=None)
+            self._communication.send_data(topic=self._sensor_topic, payload=None)  # type: ignore
 
             # Increments the lick count and updates the tracker array with new data
             count = self._lick_tracker.read_data(index=0, convert_output=False)
@@ -1767,7 +1780,7 @@ class LickInterface(ModuleInterface):
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(signal_threshold, delta_threshold, averaging_pool_size),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the voltage signal detected by the analog pin monitored by the LickModule.
@@ -1785,6 +1798,7 @@ class LickInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
             command will only run once.
         """
+        command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -1803,7 +1817,7 @@ class LickInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def get_adc_units_from_volts(self, voltage: float) -> np.uint16:
         """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -2029,6 +2043,10 @@ class TorqueInterface(ModuleInterface):
         Notes:
             Make sure the console is enabled before calling this method.
         """
+        # This is here to appease mypy, currently all message inputs are ModuleData messages
+        if isinstance(message, ModuleState):
+            return
+
         # The torque direction is encoded via the message event code. CW torque (code 52) is interpreted as negative
         # and CCW (code 51) as positive.
         sign = 1 if message.event == np.uint8(51) else -1
@@ -2091,7 +2109,7 @@ class TorqueInterface(ModuleInterface):
                 averaging_pool_size,
             ),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the torque signal detected by the analog pin monitored by the TorqueModule.
@@ -2113,6 +2131,7 @@ class TorqueInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
             command will only run once.
         """
+        command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
             command = OneOffModuleCommand(
                 module_type=self._module_type,
@@ -2130,7 +2149,7 @@ class TorqueInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     def get_adc_units_from_torque(self, target_torque: float) -> np.uint16:
         """Converts the input torque to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -2333,7 +2352,7 @@ class ScreenInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration,),
         )
-        self._input_queue.put(message)  # type: ignore
+        self._input_queue.put(message)
 
     def toggle(self) -> None:
         """Triggers the ScreenModule to briefly simulate pressing the POWER button of the scree control board.
@@ -2354,7 +2373,7 @@ class ScreenInterface(ModuleInterface):
             command=np.uint8(1),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)  # type: ignore
+        self._input_queue.put(command)
 
     @staticmethod
     def parse_logged_data(log_path: Path, output_directory: Path, initially_on: bool) -> None:

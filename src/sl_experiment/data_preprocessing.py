@@ -12,12 +12,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import numpy as np
-from numpy.lib.npyio import NpzFile
+import polars as pl
 import tifffile
 from numpy.typing import NDArray
-from ataraxis_base_utilities import console
+from numpy.lib.npyio import NpzFile
 from ataraxis_video_system import extract_logged_video_system_data
+from ataraxis_base_utilities import console
 from ataraxis_data_structures import DataLogger
+
 from .module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -27,7 +29,6 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
-import polars as pl
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:

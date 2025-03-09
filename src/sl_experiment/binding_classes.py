@@ -1,15 +1,24 @@
 """This module provides classes that bind all Mesoscope-VR components (cameras, microcontrollers, Zaber motors). They
 are used to streamline the API used to interface with these components during experimental and training runtimes."""
 
+from pathlib import Path
+from dataclasses import dataclass
+
+import numpy as np
 from ataraxis_video_system import (
-    VideoSystem,
-    CameraBackends,
-    VideoFormats,
     VideoCodecs,
+    VideoSystem,
+    VideoFormats,
+    CameraBackends,
     GPUEncoderPresets,
     InputPixelFormats,
     OutputPixelFormats,
 )
+from ataraxis_base_utilities import LogLevel, console
+from ataraxis_data_structures import DataLogger, YamlConfig, SharedMemoryArray
+from ataraxis_communication_interface import MicroControllerInterface
+
+from .zaber_bindings import ZaberAxis, ZaberConnection
 from .module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -19,13 +28,6 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
-from .zaber_bindings import ZaberConnection, ZaberAxis
-from ataraxis_base_utilities import console, LogLevel
-from ataraxis_data_structures import YamlConfig, SharedMemoryArray, DataLogger
-from ataraxis_communication_interface import MicroControllerInterface
-from dataclasses import dataclass
-import numpy as np
-from pathlib import Path
 
 
 @dataclass()
@@ -112,7 +114,7 @@ class _HeadBar:
         # previous positions.
         self._previous_positions: None | _ZaberPositions = None
         if zaber_positions_path.exists():
-            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
+            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
 
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
@@ -359,7 +361,7 @@ class _LickPort:
         # previous positions.
         self._previous_positions: None | _ZaberPositions = None
         if zaber_positions_path.exists():
-            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)
+            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
 
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
@@ -787,8 +789,8 @@ class _MicroControllerInterfaces:
 
         # Configures the torque sensor to filter out noise and sub-threshold 'slack' torque signals.
         self.torque.set_parameters(
-            report_ccw=True,
-            report_cw=True,
+            report_ccw=np.bool(True),
+            report_cw=np.bool(True),
             signal_threshold=np.uint16(100),
             delta_threshold=np.uint16(70),
             averaging_pool_size=np.uint8(5),
