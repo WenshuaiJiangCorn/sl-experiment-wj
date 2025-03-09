@@ -24,7 +24,7 @@ def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
     """
     if not date:
         return 0
-    
+
     for date_format in ["%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"]:
         try:
             date_obj = datetime.strptime(date, date_format).date()
@@ -42,7 +42,7 @@ def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
     full_datetime = datetime.combine(date_obj, time_obj)
     full_datetime = full_datetime.replace(tzinfo=timezone.utc)
     utc_timestamp = int(full_datetime.timestamp())
-    
+
     return utc_timestamp
 
 
@@ -345,7 +345,7 @@ class SurgeryData:
         self.brain_data: BrainData = BrainData(headers=headers, row=row)
 
 
-class _SheetData:
+class _SurgerySheetData:
     """
     This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
     the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
@@ -404,13 +404,14 @@ class _SheetData:
         """
         raw_data = self._get_sheet_data()
         replaced_data = self._replace_empty(raw_data)
-        first_row = replaced_data[0]
 
-        self.headers = {}
+        if replaced_data:
+            first_row = replaced_data[0]
+            self.headers = {}
 
-        for i, column in enumerate(first_row):
-            column_str = str(column).lower()
-            self.headers[column_str] = i
+            for i, column in enumerate(first_row):
+                column_str = str(column).lower().strip()
+                self.headers[column_str] = i
 
         self.data = replaced_data[1:]
 
@@ -441,7 +442,7 @@ def extract_mouse(tab_name: str, mouse_id: int) -> FilteredSurgeries:
     """
     Fetches data from the specified tab in the Google Sheet and filters it based on the mouse ID provided.
     """
-    sheet_data = _SheetData(tab_name)
+    sheet_data = _SurgerySheetData(tab_name)
     sheet_data._parse()
     surgeries = sheet_data._return_all()
 

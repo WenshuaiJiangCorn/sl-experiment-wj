@@ -5,11 +5,11 @@ import matplotlib
 
 matplotlib.use("QtAgg")  # Uses QT backend for performance and compatibility with Linux
 
-from matplotlib.ticker import MaxNLocator
+from ataraxis_time import PrecisionTimer
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from ataraxis_base_utilities import console
 from ataraxis_data_structures import SharedMemoryArray
-from ataraxis_time import PrecisionTimer
 
 # Updates plotting dictionaries to preferentially use Arial text style and specific sizes for different text elements
 # in plots:

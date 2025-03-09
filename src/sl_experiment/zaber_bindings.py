@@ -1,12 +1,13 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR setup."""
 
-from zaber_motion import Tools, Units
-from tabulate import tabulate
 from typing import Any
-from zaber_motion.ascii import Connection, Axis, Device, SettingConstants
-from dataclasses import dataclass, field
+from dataclasses import field, dataclass
+
 from crc import Calculator, Configuration
+from tabulate import tabulate
+from zaber_motion import Tools, Units
 from ataraxis_time import PrecisionTimer
+from zaber_motion.ascii import Axis, Device, Connection, SettingConstants
 from ataraxis_base_utilities import console
 
 
