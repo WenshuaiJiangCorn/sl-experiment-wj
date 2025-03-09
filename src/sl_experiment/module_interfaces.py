@@ -1473,7 +1473,7 @@ class ValveInterface(ModuleInterface):
 
         Notes:
             Unlike other processing methods, this method generates a .feather dataset with 3 columns: time, dispensed
-            water volume and the state of the tone buzzer.
+            water volume, and the state of the tone buzzer.
 
         Args:
             log_path: The path to the .npz archive that stores the data logged by the module during runtime.
@@ -1577,18 +1577,22 @@ class ValveInterface(ModuleInterface):
 
         # Sorts both arrays based on timestamps.
         sort_indices = np.argsort(tone_timestamps)
-        tone_timestamps = timestamps[sort_indices]
+        tone_timestamps = tone_timestamps[sort_indices]
         tone_states = tone_states[sort_indices]
 
         # Constructs a shared array that includes all reward and tone timestamps. This will be used to interpolate tone
         # and timestamp values. Sorts the generated array to arrange all timestamps in monotonically ascending order
-        shared_stamps = np.concatenate(tone_timestamps, reward_timestamps)
+        shared_stamps = np.concatenate([tone_timestamps, reward_timestamps])
         sort_indices = np.argsort(shared_stamps)
         shared_stamps = shared_stamps[sort_indices]
 
         # Interpolates the reward volumes for each tone state and tone states for each reward volume.
-        out_reward = _interpolate_data(timestamps=reward_timestamps, data=volumes, seed_timestamps=shared_stamps, is_discrete=True)
-        out_tones = _interpolate_data(timestamps=tone_timestamps, data=tone_states, seed_timestamps=shared_stamps, is_discrete=True)
+        out_reward = _interpolate_data(
+            timestamps=reward_timestamps, data=volumes, seed_timestamps=shared_stamps, is_discrete=True
+        )
+        out_tones = _interpolate_data(
+            timestamps=tone_timestamps, data=tone_states, seed_timestamps=shared_stamps, is_discrete=True
+        )
 
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(

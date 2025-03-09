@@ -2516,7 +2516,7 @@ def run_train_logic(
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.
         if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(speed_threshold, duration_threshold/1000)  # Converts back to seconds
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold / 1000)  # Converts back to seconds
             previous_speed_threshold = speed_threshold
             previous_duration_threshold = duration_threshold
 
@@ -2579,7 +2579,7 @@ def run_train_logic(
     # noinspection PyProtectedMember
     runtime._descriptor.final_running_speed_cm_s = float(speed_threshold)
     # noinspection PyProtectedMember
-    runtime._descriptor.final_speed_duration_s = float(duration_threshold)
+    runtime._descriptor.final_speed_duration_s = float(duration_threshold/1000)  # Converts from s to ms
 
     # Shutdown sequence:
     message = f"Training runtime: Complete."
