@@ -295,6 +295,8 @@ class SessionData:
         _persistent: The path to the host-machine directory used to retain persistent data from previous session(s) of
             the managed project and animal combination. For example, this directory is used to persist Zaber positions
             and mesoscope motion estimator files when the original session directory is moved to nas and server.
+        _mesoscope_persistent: Similar to above, but stores the path to the mesoscope (ScanImage) PC persistent
+            directory. This directory ios used to persist motion estimator files between experimental sessions.
         _project_name: Stores the name of the project whose data is managed by the class.
         _animal_name: Stores the name of the animal whose data is managed by the class.
         _session_name: Stores the name of the session directory whose data is managed by the class.
@@ -319,6 +321,9 @@ class SessionData:
         # Generates a separate directory to store persistent data. This has to be done early as _local is later
         # overwritten with the path to the raw_data directory of the created session.
         self._persistent: Path = self._local.joinpath("persistent_data")
+
+        # Also generates the mesoscope persistent path
+        self._mesoscope_persistent: Path = self._mesoscope.joinpath("persistent_data", project_name, animal_name)
 
         # Records animal and project names to attributes. Session name is resolved below
         self._project_name: str = project_name
@@ -364,8 +369,9 @@ class SessionData:
         ensure_directory_exists(self._local)
         ensure_directory_exists(self._nas)
         ensure_directory_exists(self._server)
-        if not generate_mesoscope_paths:
+        if generate_mesoscope_paths:
             ensure_directory_exists(self._mesoscope)
+            ensure_directory_exists(self._mesoscope_persistent)
         ensure_directory_exists(self._persistent)
 
     @property
@@ -481,14 +487,14 @@ class SessionData:
 
     @property
     def persistent_motion_estimator_path(self) -> Path:
-        """Returns the path to the MotionEstimator.me file for the managed animal and project combination stored on the
+        """Returns the path to the MotionEstimator.me file for the manageqd animal and project combination stored on the
         ScanImagePC.
 
         This path is used during the first training session to save the 'reference' MotionEstimator.me file established
         during the initial mesoscope ROI selection to the ScanImagePC. The same reference file is used for all following
         sessions to correct for the natural motion of the brain relative to the cranial window.
         """
-        return self._mesoscope.joinpath("persistent_data", self._project_name, self._animal_name, "MotionEstimator.me")
+        return self._mesoscope_persistent.joinpath("MotionEstimator.me")
 
     def pull_mesoscope_data(
         self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
@@ -556,7 +562,6 @@ class SessionData:
         # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
         # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
         if not self.persistent_motion_estimator_path.exists():
-            ensure_directory_exists(self.persistent_motion_estimator_path)
             shutil.copy2(src=source.joinpath("MotionEstimator.me"), dst=self.persistent_motion_estimator_path)
 
         # Generates the checksum for the source folder if transfer integrity verification is enabled.

@@ -688,11 +688,6 @@ class TTLInterface(ModuleInterface):
         Args:
             log_path: The path to the .npz archive that stores the data logged by the module during runtime.
             output_directory: The path to the directory where to save the parsed data as a .feather file.
-
-        Notes:
-            This parsing code includes the 'blip' correction. If the first detected pulse is less than 10 ms duration,
-            the corresponding event is removed from the returned array. This is used to filter the 'blip' associated
-            with starting the mesoscope frame acquisition.
         """
 
         # Extracts data from the log file
@@ -747,15 +742,15 @@ class TTLInterface(ModuleInterface):
         # Calculate pulse durations by looking ahead to the next falling edge
         # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
 
-        # Determines the durations of all detected pulses. This is needed to filter out the 'blip' in the mesoscope
-        # frame stamps. The blip pulse is usually under 5 ms, vs. a real frame pulse that is ~100 ms, and it happens
-        # at the very beginning of the mesoscope acquisition sequence. Since timestamps alternate rising and falling
-        # edges, rising edge + 1 corresponds to the falling edge of that pulse.
-        pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
-
-        # If the very first recorded pulse has a duration below 10 ms, removes the pulse from the returned array
-        if pulse_durations[0] < 10000:  # The timestamps use microseconds, so the check uses 10,000 us
-            frame_timestamps = frame_timestamps[1:]
+        # # Determines the durations of all detected pulses. This is needed to filter out the 'blip' in the mesoscope
+        # # frame stamps. The blip pulse is usually under 5 ms, vs. a real frame pulse that is ~100 ms, and it happens
+        # # at the very beginning of the mesoscope acquisition sequence. Since timestamps alternate rising and falling
+        # # edges, rising edge + 1 corresponds to the falling edge of that pulse.
+        # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
+        #
+        # # If the very first recorded pulse has a duration below 10 ms, removes the pulse from the returned array
+        # if pulse_durations[0] < 10000:  # The timestamps use microseconds, so the check uses 10,000 us
+        #     frame_timestamps = frame_timestamps[1:]
 
         module_series = pl.Series(name="time_us", values=frame_timestamps)
         module_series.to_frame().write_ipc(file=output_directory.joinpath("frame_data.feather"), compression="lz4")
@@ -1616,6 +1611,7 @@ class ValveInterface(ModuleInterface):
 
         # Saves the DataFrame to the output directory as a Feather file with lz4 compression
         module_dataframe.write_ipc(file=output_directory.joinpath("valve_data.feather"), compression="lz4")
+
 
 class LickInterface(ModuleInterface):
     """Interfaces with LickModule instances running on Ataraxis MicroControllers.
