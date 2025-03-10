@@ -2037,9 +2037,6 @@ def lick_training_logic(
 
     # Uses runtime tracker extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
 
     message = f"Generating the pseudorandom reward delay sequence..."
     console.echo(message=message, level=LogLevel.INFO)
@@ -2088,6 +2085,11 @@ def lick_training_logic(
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
+
+    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     # Configures all system components to support lick training
     runtime.lick_train_state()
@@ -2437,13 +2439,15 @@ def run_train_logic(
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
+
+    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     # Updates the threshold lines to use the initial speed and duration values
     visualizer.update_speed_thresholds(speed_threshold=float(initial_speed), duration_threshold=float(initial_duration))
@@ -2614,13 +2618,15 @@ def run_experiment_logic() -> None:
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
     runtime.start()
+
+    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
     # Initializes the keyboard listener to support aborting test runtimes.
     listener = KeyboardListener()

@@ -1495,7 +1495,6 @@ class ValveInterface(ModuleInterface):
             nonlinearity_exponent: Stores the nonlinearity exponent used in the fitted power law equation that
                 translates valve pulses into dispensed water volumes.
         """
-
         # Extracts data from the log file
         log_data = extract_logged_hardware_module_data(log_path=log_path, module_type=5, module_id=1)
 
@@ -1609,7 +1608,7 @@ class ValveInterface(ModuleInterface):
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
             {
-                "time_us": reward_timestamps,
+                "time_us": shared_stamps,
                 "dispensed_water_volume_uL": out_reward,
                 "tone_state": out_tones,
             }
@@ -1617,7 +1616,6 @@ class ValveInterface(ModuleInterface):
 
         # Saves the DataFrame to the output directory as a Feather file with lz4 compression
         module_dataframe.write_ipc(file=output_directory.joinpath("valve_data.feather"), compression="lz4")
-
 
 class LickInterface(ModuleInterface):
     """Interfaces with LickModule instances running on Ataraxis MicroControllers.
