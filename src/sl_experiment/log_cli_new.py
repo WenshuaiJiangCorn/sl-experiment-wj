@@ -59,8 +59,8 @@ def _valid_mouse_id(mouse_id: str, available_ids: set[int]) -> int:
 @click.command()
 @click.option(
     "--log-choice",
-    type=click.Choice(['1', '2']),
-    default='1',
+    type=click.Choice(["1", "2"]),
+    default="1",
     help="The type of log to fetch: 1 for Surgery Log, 2 for Water Log.",
 )
 @click.option(
@@ -107,13 +107,13 @@ def main(
         list_surgery_mouse_ids(id_from_tab_surgery)
         return
 
-    if log_choice == '1':
+    if log_choice == "1":
         if not id_from_tab_surgery:
             click.echo("Error: --id-from-tab-surgery is required for surgery log.")
             return
         process_surgery_log(id_from_tab_surgery, mouse_id)
 
-    elif log_choice == '2':
+    elif log_choice == "2":
         process_water_log(mouse_id, date, list_water_mice)
 
     else:
