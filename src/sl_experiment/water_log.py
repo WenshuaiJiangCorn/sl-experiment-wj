@@ -8,37 +8,13 @@ from datetime import (
 from dataclasses import field, dataclass
 
 import numpy as np
+from gs_data_parser import _convert_date_time
 from ataraxis_data_structures import YamlConfig
 from googleapiclient.discovery import build  # type: ignore
 from google.oauth2.service_account import Credentials
 
 
-def _convert_date_time(date: Optional[str], time: Optional[str]) -> int:
-    """
-    Converts a date and time string to a UTC timestamp.
-
-    Args:
-        date: The date string in the format "%m-%d-%y".
-        time: The time string in the format "%H:%M". If None, it is set to a default of "00:00"
-    """
-    if not date:
-        return 0
-
-    date_obj = datetime.strptime(date, "%m/%d/%y").date()
-
-    if time:
-        time_obj = datetime.strptime(time, "%H:%M").time()
-    else:
-        time_obj = dt_time(0, 0)
-
-    full_datetime = datetime.combine(date_obj, time_obj)
-    full_datetime = full_datetime.replace(tzinfo=timezone.utc)
-    utc_timestamp = int(full_datetime.timestamp())
-
-    return utc_timestamp
-
-
-class _SheetData:
+class _WaterSheetData:
     """
     This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
     the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
@@ -130,7 +106,6 @@ class _SheetData:
             )
             .execute()
         )
-        # print(f"{result.get('updatedCells')} cells updated in {full_range}.")
 
 
 @dataclass
@@ -203,6 +178,22 @@ class MouseKey(YamlConfig):
         self.target_weight = float(row[headers.index("target weight (g)")])
         self.daily_log = {}
 
+    def __repr__(self) -> str:
+        """
+        Returns a string representation of the MouseKey instance including all attributes
+        from the MouseKey class and data from the DailyLog class.
+        """
+        daily_log_str = ", ".join([f"{date}: {log}" for date, log in self.daily_log.items()])
+        return (
+            f"MouseKey(mouse_id={self.mouse_id}, "
+            f"cage={self.cage}, "
+            f"ear_punch={self.ear_punch}, "
+            f"sex={self.sex}, "
+            f"baseline_weight={self.baseline_weight}, "
+            f"target_weight={self.target_weight}, "
+            f"daily_log={{{daily_log_str}}})"
+        )
+
 
 class ParseData:
     """
@@ -224,7 +215,7 @@ class ParseData:
         self.tab_name = tab_name
         self.mouse_id = mouse_id
         self.date = date
-        self.sheet_data = _SheetData()
+        self.sheet_data = _WaterSheetData()
         self.sheet_data._fetch_data_from_tab(tab_name)
         self.mouse_classes: Dict[str, Type[MouseKey]] = {}
         self.mouse_instances: Dict[str, MouseKey] = {}
@@ -296,7 +287,7 @@ class ParseData:
 
 
 # Write Data
-# sheet_data = _SheetData()
+# sheet_data = _WaterSheetData()
 # sheet_data._write_to_sheet(
 #     tab_name="MouseInfo",
 #     range_name="A6",
