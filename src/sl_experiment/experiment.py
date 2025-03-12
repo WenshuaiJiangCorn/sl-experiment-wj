@@ -162,7 +162,7 @@ class KeyboardListener:
 
         This is a fallback method, using shutdown() should be standard.
         """
-        if not self._started:
+        if self._started:
             self.shutdown()
 
     def shutdown(self):
@@ -2207,6 +2207,9 @@ def lick_training_logic(
     console.echo(message=message, level=LogLevel.SUCCESS)
     delay_timer.delay_noblock(lower_bound * 1000000)  # Converts to microseconds before delaying
 
+    # Terminates the listener
+    listener.shutdown()
+
     # Closes the visualizer, as the runtime is now over
     visualizer.close()
 
@@ -2554,10 +2557,10 @@ def run_train_logic(
         increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
 
         # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
-        # Note, user input has a static resolution of 0.05 cm/s per step and 50 ms per step.
+        # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
         speed_threshold = np.clip(
-            a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.05),
-            a_min=0.05,  # Minimum value
+            a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.1),
+            a_min=0.1,  # Minimum value
             a_max=maximum_speed,  # Maximum value
         )
         duration_threshold = np.clip(
@@ -2636,6 +2639,9 @@ def run_train_logic(
     # Shutdown sequence:
     message = f"Training runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Terminates the listener
+    listener.shutdown()
 
     # Closes the visualizer, as the runtime is now over
     visualizer.close()

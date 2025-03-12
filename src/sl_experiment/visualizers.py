@@ -113,7 +113,7 @@ class BehaviorVisualizer:
 
     Attributes:
         _time_window: Specifies the time window, in seconds, to visualize during runtime. Currently, this is statically
-            set to 20 seconds.
+            set to 12 seconds.
         _time_step: Specifies the interval, in milliseconds, at which to update the visualization plots. Currently, this
             is statically set to 30 milliseconds, which gives a good balance between update smoothness and rendering
             time.
@@ -154,8 +154,8 @@ class BehaviorVisualizer:
         valve_tracker: SharedMemoryArray,
         distance_tracker: SharedMemoryArray,
     ) -> None:
-        # Currently, the class is statically configured to visualize the sliding window of 20 seconds.
-        self._time_window: int = 20
+        # Currently, the class is statically configured to visualize the sliding window of 12 seconds.
+        self._time_window: int = 12
         self._time_step: int = 30
         self._update_timer = PrecisionTimer("ms")
 
@@ -196,7 +196,8 @@ class BehaviorVisualizer:
 
         # Creates the figure with three subplots sharing the same x-axis
         self._figure, (self._lick_axis, self._valve_axis, self._speed_axis) = plt.subplots(
-            3, 1, figsize=(10, 8), sharex=True, gridspec_kw={"hspace": 0.3, "left": 0.15}
+            3, 1, figsize=(10, 8), sharex=True,
+            gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1, 3]}  # Third subplot is thrice as tall
         )
 
         # Sets consistent y-label padding for all axes. This aligns y-axis names for all axes, making the figure more
@@ -225,7 +226,7 @@ class BehaviorVisualizer:
 
         # Speed axis
         self._speed_axis.set_title("Average Running Speed", fontdict=_fontdict_title)
-        self._speed_axis.set_ylim(-2, 32)
+        self._speed_axis.set_ylim(-2, 22)
         self._speed_axis.set_ylabel("Running speed (cm/s)", fontdict=_fontdict_axis_label)
         self._speed_axis.set_xlabel("Time (s)", fontdict=_fontdict_axis_label)
         self._speed_axis.yaxis.set_major_locator(MaxNLocator(nbins="auto", integer=False))
@@ -273,10 +274,10 @@ class BehaviorVisualizer:
         # Running speed and duration threshold. These are initially invisible and will not be shown unless the
         # class is used to visualize run training progress.
         self._speed_threshold_line = self._speed_axis.axhline(
-            y=0.1, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+            y=0.05, color=_plt_palette("black"), linestyle="dashed", linewidth=1.5, alpha=0.5, visible=False
         )
         self._duration_threshold_line = self._speed_axis.axvline(
-            x=-0.1, color=_plt_palette("black"), linestyle="dashed", linewidth=2, alpha=0.5, visible=False
+            x=-0.05, color=_plt_palette("black"), linestyle="dashed", linewidth=1.5, alpha=0.5, visible=False
         )
 
         # Generates the figure object and updates it to show the initial (zero-initialized) data state.
@@ -296,7 +297,7 @@ class BehaviorVisualizer:
 
         This method discards the oldest datapoint in the plot memory and instead samples a new datapoint. It also shifts
         all datapoints one timestamp to the left. When the method is called repeatedly, this makes the plot lines
-        naturally flow from the right (now) to the left (20 seconds in the past), accurately displaying the visualized
+        naturally flow from the right (now) to the left (12 seconds in the past), accurately displaying the visualized
         data history.
 
         Notes:
