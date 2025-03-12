@@ -1243,12 +1243,6 @@ class MesoscopeExperiment:
             has_ttl=True,
         )
 
-        # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
-        self._session_data.pull_mesoscope_data()
-
-        # Preprocesses the pulled mesoscope data.
-        self._session_data.process_mesoscope_data()
-
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
         os.renames(
             old=self._session_data.camera_frames_path.joinpath("051.mp4"),
@@ -1262,6 +1256,12 @@ class MesoscopeExperiment:
             old=self._session_data.camera_frames_path.joinpath("073.mp4"),
             new=self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
         )
+
+        # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
+        self._session_data.pull_mesoscope_data()
+
+        # Preprocesses the pulled mesoscope data.
+        self._session_data.process_mesoscope_data()
 
         # Pushes the processed data to the NAS and BioHPC server.
         self._session_data.push_data()
