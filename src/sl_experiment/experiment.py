@@ -487,7 +487,7 @@ class SessionData:
 
     @property
     def persistent_motion_estimator_path(self) -> Path:
-        """Returns the path to the MotionEstimator.me file for the manageqd animal and project combination stored on the
+        """Returns the path to the MotionEstimator.me file for the managed animal and project combination stored on the
         ScanImagePC.
 
         This path is used during the first training session to save the 'reference' MotionEstimator.me file established
@@ -1258,7 +1258,7 @@ class MesoscopeExperiment:
         )
 
         # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
-        self._session_data.pull_mesoscope_data()
+        self._session_data.pull_mesoscope_data(remove_sources=True)
 
         # Preprocesses the pulled mesoscope data.
         self._session_data.process_mesoscope_data()
@@ -2367,11 +2367,11 @@ def calibrate_valve_logic(
 
 def run_train_logic(
     runtime: _BehavioralTraining,
-    initial_speed_threshold: float = 0.1,
-    initial_duration_threshold: float = 0.1,
-    speed_increase_step: float = 0.1,
+    initial_speed_threshold: float = 0.05,
+    initial_duration_threshold: float = 0.05,
+    speed_increase_step: float = 0.05,
     duration_increase_step: float = 0.05,
-    increase_threshold: float = 0.2,
+    increase_threshold: float = 0.1,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
@@ -2420,10 +2420,8 @@ def run_train_logic(
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
     """
-    # Initializes the timer that keeps the training running until the time threshold is reached
+    # Initializes the timers used during runtime
     runtime_timer = PrecisionTimer("s")
-
-    # Also initializes the timer used to track how long the animal maintains above-threshold running speed.
     speed_timer = PrecisionTimer("ms")
 
     # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
@@ -2455,7 +2453,7 @@ def run_train_logic(
     )
 
     # Updates the threshold lines to use the initial speed and duration values
-    visualizer.update_speed_thresholds(speed_threshold=float(initial_speed), duration_threshold=float(initial_duration))
+    visualizer.update_speed_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
 
     # Configures all system components to support run training
     runtime.run_train_state()
@@ -2484,8 +2482,8 @@ def run_train_logic(
 
     # Tracks when speed and / or duration thresholds are updated. This is necessary to redraw the threshold lines in
     # the visualizer plot
-    previous_speed_threshold = np.float64(0)
-    previous_duration_threshold = np.float64(0)
+    previous_speed_threshold = copy.copy(initial_speed)
+    previous_duration_threshold = copy.copy(initial_duration)
 
     # Also pre-initializes the speed and duration trackers
     speed_threshold: np.float64 = np.float64(0)
@@ -2505,25 +2503,23 @@ def run_train_logic(
         # harder to keep receiving water.
         increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
 
-        # Note, the thresholds account for the user input by factoring in the speed and duration modifier obtained from
-        # the keyboard listener.
-        speed_threshold = np.minimum(
-            initial_speed + ((increase_steps + listener.speed_modifier) * speed_step), maximum_speed
+        # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
+        # Note, user input has a static resolution of 0.05 cm/s per step and 50 ms per step.
+        speed_threshold = np.clip(
+            a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.05),
+            a_min=0.05,  # Minimum value
+            a_max=maximum_speed,  # Maximum value
         )
-        # Limit the threshold to 0.05 cm/s
-        speed_threshold = np.maximum(speed_threshold, 0.05)
-        duration_threshold = np.minimum(
-            initial_duration + ((increase_steps + listener.duration_modifier) * duration_step), maximum_duration
+        duration_threshold = np.clip(
+            a=initial_duration + (increase_steps * duration_step) + (listener.duration_modifier * 50),
+            a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
+            a_max=maximum_duration,  # Maximum value
         )
-        # Limits the threshold to 50 milliseconds
-        duration_threshold = np.maximum(duration_threshold, 50)  # 0.05 seconds == 50 milliseconds
 
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.
         if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(
-                float(speed_threshold), float(duration_threshold) / 1000
-            )  # Converts back to seconds
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)  # Converts back to seconds
             previous_speed_threshold = speed_threshold
             previous_duration_threshold = duration_threshold
 
@@ -2559,9 +2555,9 @@ def run_train_logic(
 
         # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
         # training early with a success message.
-        if dispensed_water_volume > maximum_volume:
+        if dispensed_water_volume >= maximum_volume:
             message = (
-                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} ml). Aborting "
+                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
                 f"the training process."
             )
             console.echo(message=message, level=LogLevel.SUCCESS)

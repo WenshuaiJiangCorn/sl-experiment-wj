@@ -1548,9 +1548,7 @@ class ValveInterface(ModuleInterface):
 
         # Calculates pulse durations in microseconds for each open-close cycle. Since the original timestamp array
         # contains alternating HIGH / LOW edges, each falling edge has to match to a rising edge.
-        pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[rising_edges]).astype(
-            np.float64
-        )
+        pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[rising_edges]).astype(np.float64)
 
         # Converts the time the Valve stayed open into the dispensed water volume, in microliters.
         # noinspection PyTypeChecker

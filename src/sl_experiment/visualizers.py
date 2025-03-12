@@ -145,6 +145,7 @@ class BehaviorVisualizer:
         _running_speed: Stores the current running speed of the animal. Somewhat confusingly, since we already compute
             the average running speed of the animal via the visualizer, it is easier to retrieve and use it from the
             main training runtime. This value is used to share the current running speed with the training runtime.
+        _once: This flag is sued to limit certain visualizer operations to only be called once during runtime.
     """
 
     def __init__(
@@ -283,6 +284,9 @@ class BehaviorVisualizer:
         self._figure.canvas.draw()
         self._figure.canvas.flush_events()
 
+        # This is used to make speed and duration thresholds visible for runtimes that need this visualization.
+        self._once = True
+
     def __del__(self) -> None:
         """Ensures all resources are released when the figure object is garbage-collected."""
         self.close()
@@ -316,7 +320,9 @@ class BehaviorVisualizer:
         self._figure.canvas.draw()
         self._figure.canvas.flush_events()
 
-    def update_speed_thresholds(self, speed_threshold: float, duration_threshold: float) -> None:
+    def update_speed_thresholds(
+        self, speed_threshold: float | np.float64, duration_threshold: float | np.float64
+    ) -> None:
         """Updates the running speed and duration threshold lines to use the input anchor values.
 
         This positions the threshold lines in the running speed plot to indicate the cut-offs for the running speed and
@@ -325,13 +331,20 @@ class BehaviorVisualizer:
 
         Args:
             speed_threshold: The speed, in centimeter per second, the animal needs to maintain to get water rewards.
-            duration_threshold: The duration, in seconds, the animal has to maintain the above-threshold speed to get
-                water rewards.
+            duration_threshold: The duration, in milliseconds, the animal has to maintain the above-threshold speed to
+                get water rewards.
         """
-        self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])
-        self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])
-        self._speed_threshold_line.set_visible(True)
-        self._duration_threshold_line.set_visible(True)
+        # Converts from milliseconds to seconds
+        duration_threshold /= 1000
+
+        self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])  # type: ignore
+        self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])  # type: ignore
+
+        # This ensures the visibility is only changed once during runtime
+        if self._once:
+            self._speed_threshold_line.set_visible(True)
+            self._duration_threshold_line.set_visible(True)
+            self._once = False
 
         # Renders the changes
         self._figure.canvas.draw()

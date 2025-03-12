@@ -1,13 +1,18 @@
-import polars as pl
 from pathlib import Path
-from sl_experiment.module_interfaces import _interpolate_data
-import numpy as np
 
-x = Path("/media/cyberaxolotl/SciDataLin/Demo/VRPC/Experiments/TestMice/666/2025-03-10-16-15-25-577230/raw_data/behavior_data/valve_data.feather")
+import numpy as np
+import polars as pl
+
+from sl_experiment.module_interfaces import _interpolate_data
+
+x = Path(
+    "/media/cyberaxolotl/SciDataLin/Demo/VRPC/Experiments/TestMice/666/2025-03-10-16-15-25-577230/raw_data/behavior_data/valve_data.feather"
+)
 y = pl.read_ipc(x, use_pyarrow=True)
 print(y)
 
 import sys
+
 sys.exit()
 
 # # Load data

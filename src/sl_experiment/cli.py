@@ -394,7 +394,7 @@ def calibrate_valve_cli(
     "--initial_speed",
     type=float,
     show_default=True,
-    default=1,
+    default=0.05,
     help="The initial speed, in centimeters per second, the animal must maintain to obtain water rewards.",
 )
 @click.option(
@@ -402,7 +402,7 @@ def calibrate_valve_cli(
     "--initial_duration",
     type=float,
     show_default=True,
-    default=1,
+    default=0.05,
     help=(
         "The initial duration, in seconds, the animal must maintain above-threshold running speed to obtain water "
         "rewards."
@@ -425,7 +425,7 @@ def calibrate_valve_cli(
     "--speed_step",
     type=float,
     show_default=True,
-    default=0.5,
+    default=0.05,
     help=(
         "The amount, in centimeters per second, to increase the speed threshold each time the animal receives the "
         "volume of water specified by the 'increase-threshold' parameter. This determines how much harder tha training "
@@ -437,7 +437,7 @@ def calibrate_valve_cli(
     "--duration_step",
     type=float,
     show_default=True,
-    default=0.5,
+    default=0.05,
     help=(
         "The amount, in seconds, to increase the duration threshold each time the animal receives the volume of water "
         "specified by the 'increase-threshold' parameter. This determines how much harder tha training becomes at "
