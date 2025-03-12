@@ -13,10 +13,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import numpy as np
+import polars as pl
 import tifffile
 from numpy.typing import NDArray
-from ataraxis_base_utilities import console
 from ataraxis_video_system import extract_logged_video_system_data
+from ataraxis_base_utilities import console
+
 from .module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -26,7 +28,6 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
-import polars as pl
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
@@ -655,7 +656,6 @@ def process_module_data(
     """
 
     try:
-
         # Extracts and preprocesses the data logged by the module during runtime. For all modules other than the TTLModule,
         # the data is returned as a tuple of (timestamps, data). For TTLModule, the data is returned as an array of
         # timestamps.

@@ -1,15 +1,25 @@
 """This module provides classes that bind all Mesoscope-VR components (cameras, microcontrollers, Zaber motors). They
 are used to streamline the API used to interface with these components during experimental and training runtimes."""
 
+from pathlib import Path
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
 from ataraxis_video_system import (
-    VideoSystem,
-    CameraBackends,
-    VideoFormats,
     VideoCodecs,
+    VideoSystem,
+    VideoFormats,
+    CameraBackends,
     GPUEncoderPresets,
     InputPixelFormats,
     OutputPixelFormats,
 )
+from ataraxis_base_utilities import LogLevel, console
+from ataraxis_data_structures import DataLogger, YamlConfig, SharedMemoryArray
+from ataraxis_communication_interface import MicroControllerInterface
+
+from .zaber_bindings import ZaberAxis, ZaberConnection
 from .module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -19,14 +29,6 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
-from .zaber_bindings import ZaberConnection, ZaberAxis
-from ataraxis_base_utilities import console, LogLevel
-from ataraxis_data_structures import YamlConfig, SharedMemoryArray, DataLogger
-from ataraxis_communication_interface import MicroControllerInterface
-from dataclasses import dataclass
-import numpy as np
-from numpy.typing import NDArray
-from pathlib import Path
 
 
 @dataclass()

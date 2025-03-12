@@ -2,37 +2,37 @@
 lab's Mesoscope-VR system and SessionData class that abstracts working with acquired experimental data."""
 
 import os
-import warnings
-from pathlib import Path
-import tempfile
-
-import numpy as np
-from numpy.typing import NDArray
-from numpy.lib.npyio import NpzFile
 import copy
 import json
-from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
+import shutil
+from pathlib import Path
+import tempfile
+import warnings
+from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from tqdm import tqdm
+import numpy as np
+import polars as pl
+from pynput import keyboard
+from numpy.typing import NDArray
+from ataraxis_time import PrecisionTimer
+from numpy.lib.npyio import NpzFile
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, LogPackage, YamlConfig, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
-from ataraxis_communication_interface import MicroControllerInterface, MQTTCommunication
-from ataraxis_time import PrecisionTimer
+from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from .transfer_tools import transfer_directory
-from .packaging_tools import calculate_directory_checksum
-from .data_preprocessing import (
-    process_mesoscope_directory,
-    process_camera_timestamps,
-    process_module_data,
-)
 from .visualizers import BehaviorVisualizer
+from .transfer_tools import transfer_directory
+from .binding_classes import _HeadBar, _LickPort, _VideoSystems, _ZaberPositions, _MicroControllerInterfaces
+from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import ValveInterface
-from .binding_classes import _MicroControllerInterfaces, _HeadBar, _LickPort, _VideoSystems, _ZaberPositions
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import shutil
-from dataclasses import dataclass
-import polars as pl
-from tqdm import tqdm
-from pynput import keyboard
+from .data_preprocessing import (
+    process_module_data,
+    process_camera_timestamps,
+    process_mesoscope_directory,
+)
 
 
 @dataclass()

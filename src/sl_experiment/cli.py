@@ -1,21 +1,23 @@
 """This module provides click-based Command-Line Interface (CLI) scripts that allow using various features from this
 library through the terminal."""
 
-import click
 from pathlib import Path
+
+import click
+from ataraxis_base_utilities import LogLevel, console
+
 from sl_experiment.experiment import SessionData
 
-from .zaber_bindings import _CRCCalculator, discover_zaber_devices
 from .experiment import (
-    _BehavioralTraining,
-    _LickTrainingDescriptor,
-    _RunTrainingDescriptor,
-    lick_training_logic,
-    calibrate_valve_logic,
     run_train_logic,
+    _BehavioralTraining,
+    lick_training_logic,
     run_experiment_logic,
+    calibrate_valve_logic,
+    _RunTrainingDescriptor,
+    _LickTrainingDescriptor,
 )
-from ataraxis_base_utilities import console, LogLevel
+from .zaber_bindings import _CRCCalculator, discover_zaber_devices
 
 # Precalculated default valve calibration data. This is used as the 'default' field for our valve interface cli
 DEFAULT_VALVE_CALIBRATION_DATA = (

@@ -2,10 +2,12 @@
 
 from json import dumps
 import math
+from typing import Any
 
 import numpy as np
-from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 from numpy.typing import NDArray
+from ataraxis_time import PrecisionTimer
+from scipy.optimize import curve_fit
 from ataraxis_base_utilities import console
 from ataraxis_communication_interface import (
     ModuleData,
@@ -16,9 +18,7 @@ from ataraxis_communication_interface import (
     OneOffModuleCommand,
     RepeatedModuleCommand,
 )
-from typing import Any
-from scipy.optimize import curve_fit
-from ataraxis_time import PrecisionTimer
+from ataraxis_data_structures.shared_memory.shared_memory_array import SharedMemoryArray
 
 
 class EncoderInterface(ModuleInterface):

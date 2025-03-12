@@ -2,14 +2,13 @@ from typing import Dict, List, Type, Optional
 from pathlib import Path
 from datetime import (
     time as dt_time,
-    datetime,
-    timezone,
 )
 from dataclasses import field, dataclass
 
 import numpy as np
 from gs_data_parser import _convert_date_time
 from ataraxis_data_structures import YamlConfig
+from ataraxis_base_utilities import console
 from googleapiclient.discovery import build  # type: ignore
 from google.oauth2.service_account import Credentials
 
@@ -19,6 +18,11 @@ class _WaterSheetData:
     This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
     the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
     and grant access to Google APIs for data parsing.
+
+    Args:
+        tab name: Stores a list of tab names for the water log, where each tab corresponds to an individual mouse ID.
+        row_data: Stores data from each row when it is processed to replace empty or irrelevant cells.  
+        range_name: Stores the range of the sheet to parse data from. The range is set to the entire sheet by default.
     """
 
     def __init__(self):
@@ -28,85 +32,172 @@ class _WaterSheetData:
         self.SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
         self.data: Dict[str, List[List[Optional[str]]]] = {}
 
+    def _get_service(self):
+        """
+        Authenticates the Google Sheets API using the service account credentials and the defined API scope. 
+        It then builds and returns the Google Sheets API service client to enable the script to interact with 
+        the sheet.
+        """
+        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
+        return build("sheets", "v4", credentials=creds)
+
     def _get_tab_data(self, tab_name: str) -> List[List[str]]:
         """
         Retrieves data from the specified tab in the Google Sheet.
         """
-        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
-        service = build("sheets", "v4", credentials=creds)
+        service = self._get_service()
         range_name = f"'{tab_name}'!{self.range}"
         result = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
         return result.get("values", [])
-
-    def _replace_empty(self, row_data: List[List[str]]) -> List[List[Optional[str]]]:
-        """
-        Replaces empty cells and cells containing 'n/a', '--' or '---' with None. This funcation
-        also ensures that cells in the main grid are processed and that all rows  have equal length.
-        """
-        result: List[List[Optional[str]]] = []
-
-        for row in row_data:
-            processed_row: List[Optional[str]] = []
-
-            for cell in row:
-                if not cell.strip():
-                    break
-
-                if cell.strip().lower() in {"n/a", "--", "---", ""}:
-                    processed_row.append(None)
-                else:
-                    processed_row.append(cell)
-
-            result.append(processed_row)
-
-        max_row_length = max(len(row) for row in result)
-        for row in result:
-            while len(row) < max_row_length:
-                row.append(None)
-
-        return result
 
     def _fetch_data_from_tab(self, tab_name: str) -> None:
         """
         Fetches data from the specified tab, processes it, and stores it in self.data.
         """
         tab_data = self._get_tab_data(tab_name)
-        processed_data = self._replace_empty(tab_data)
-        self.data[tab_name] = processed_data
+        self.data[tab_name] = self._replace_empty(tab_data)
+
+    def _replace_empty(self, row_data: List[List[str]]) -> List[List[Optional[str]]]:
+        """
+        Replaces empty cells and cells containing 'n/a', '--' or '---' with None. This funcation
+        also ensures that cells in the main grid are processed and that all rows  have equal length.
+        """
+        result = []
+
+        for row in row_data:
+            processed_row = []
+
+            for cell in row:
+                if cell.strip().lower() in {"n/a", "--", "---", ""}:
+                    processed_row.append(None)  
+                else:
+                    processed_row.append(cell)  
+            result.append(processed_row)
+
+        max_row_length = max(len(row) for row in result)  
+
+        for row in result:
+            row.extend([None] * (max_row_length - len(row))) 
+
+        return result
 
     def _get_tab_names(self) -> List[str]:
         """
         Retrieves the metadata including the names of all tabs in the Google Sheet.
         """
-        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
-        service = build("sheets", "v4", credentials=creds)
+        service = self._get_service()
         sheet_metadata = service.spreadsheets().get(spreadsheetId=self.sheet_id).execute()
         sheets = sheet_metadata.get("sheets", "")
         return [sheet["properties"]["title"] for sheet in sheets]
+    
+
+class _WriteData(_WaterSheetData):
+    """
+    This class provides write access to the water restriction log Google Sheet to update daily water 
+    log records. It allows the script to modify specific attributes within the sheet, such as 
+    weight (g), water given (mL), the NetID of the water provider, and the time. The cell to update 
+    is located based on the mouse ID and date.
+
+    Args:
+        mouseID: Identifies the mouse for which data is being updated. The mouseID is 
+                 used to locate the corresponding tab to update.
+        date: Stores the date corresponding to the row that should be updated.
+        attribute: The specific column header to update. 
+        value(s): The new value to be written into the cell.
+    """
 
     def _write_to_sheet(self, tab_name: str, range_name: str, values: List[List[str]]) -> None:
         """
-        Updates a specified cell or range in a Google Sheets document with the given values using
-        the provided tab name and range.
+        This method handles connection and write access to the Google Sheets API. It allows data
+        to be written to multiple cells within a specified range. It also configures the formatting
+        of the written data to be centered within the cell. 
         """
 
-        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
-        service = build("sheets", "v4", credentials=creds)
+        service = self._get_service()
         full_range = f"'{tab_name}'!{range_name}"
         body = {"values": values}
+        service.spreadsheets().values().update(
+            spreadsheetId=self.sheet_id, range=full_range, valueInputOption="RAW", body=body
+        ).execute()
+        
+        col_letter = range_name[0].upper()
+        row_number = int(range_name[1:])
+        col_index = ord(col_letter) - ord("A")
+        sheet_metadata = service.spreadsheets().get(spreadsheetId=self.sheet_id).execute()
+        
+        sheet_id = None 
+        for sheet in sheet_metadata["sheets"]:
+            if sheet["properties"]["title"] == tab_name:
+                sheet_id = sheet["properties"]["sheetId"]  
+                break  
+            
+        if sheet_id is None:
+            raise ValueError(f"Tab '{tab_name}' not found in the Google Sheet.")
+        
+        requests = [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id, 
+                    "startRowIndex": row_number - 1, 
+                    "endRowIndex": row_number,
+                    "startColumnIndex": col_index, 
+                    "endColumnIndex": col_index + 1
+                },
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+            }
+        }]
 
-        result = (
-            service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=self.sheet_id,
-                range=full_range,
-                valueInputOption="RAW",
-                body=body,
-            )
-            .execute()
-        )
+        service.spreadsheets().batchUpdate(spreadsheetId=self.sheet_id, body={"requests": requests}).execute()
 
+
+    def _write_to_cell(self, mouseID: int, date: str, attribute: str, value: str) -> None:
+        """
+        Writes a specific value to the Google Sheet based on mouse ID, date, and attribute. The 
+        correct row is located using the input date and the corresponding attribute in the headers
+        headers list.
+        """
+
+        tab_name = str(mouseID)
+        self._fetch_data_from_tab(tab_name)
+        tab_data = self.data.get(tab_name, [])
+
+        row_index = -1
+        for i, row in enumerate(tab_data):
+            if not row or len(row) <= 1:
+                continue
+            if row[1] == date:
+                row_index = i
+                break
+
+        if row_index == -1:
+            raise ValueError(f"No row found for date {date} in tab {tab_name}.")
+
+        headers = tab_data[1]
+        if attribute == "weight":
+            value = float(value) 
+            col_index = headers.index("weight (g)")
+
+        elif attribute == "given by":
+            col_index = headers.index("given by:")
+
+        elif attribute == "water given":
+            col_index = headers.index("water given (mL)")
+
+        elif attribute == "time":
+            _convert_date_time(date, value)  
+            col_index = headers.index("time")
+
+        else:
+            raise ValueError(f"Invalid attribute: {attribute}. Only 'weight', 'given by:', 'water given (mL)', and 'time' can be updated.")
+
+        tab_data[row_index][col_index] = value
+        col_letter = chr(ord("A") + col_index)
+        row_number = row_index + 1
+        cell_range = f"{col_letter}{row_number}"
+
+        self._write_to_sheet(tab_name, cell_range, [[value]])
+            
 
 @dataclass
 class DailyLog(YamlConfig):
@@ -287,14 +378,13 @@ class ParseData:
 
 
 # Write Data
-# sheet_data = _WaterSheetData()
-# sheet_data._write_to_sheet(
-#     tab_name="MouseInfo",
-#     range_name="A6",
-#     values=[["6"]]
-# )
+# sheet_data = _WriteData()
+# sheet_data._write_to_cell(mouseID=1, date="2/28/25", attribute="given by", value="ik278")
+# sheet_data._write_to_cell(mouseID=1, date="2/28/25", attribute="water given", value="1")
+# sheet_data._write_to_cell(mouseID=1, date="2/28/25", attribute="weight", value="28.0")
+# sheet_data._write_to_cell(mouseID=1, date="2/28/25", attribute="time", value="16:00")
 
 # Read Data
-water_log = ParseData(tab_name="MouseInfo", mouse_id=1, date="2/8/25")
-mouse_instance = water_log.mouse_instances.get(water_log.mouse_id)
-mouse_instance.to_yaml(file_path=Path("water_log.yaml"))
+# water_log = ParseData(tab_name="MouseInfo", mouse_id=1, date="2/8/25")
+# mouse_instance = water_log.mouse_instances.get(water_log.mouse_id)
+# mouse_instance.to_yaml(file_path=Path("water_log.yaml"))
