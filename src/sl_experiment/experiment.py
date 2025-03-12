@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 import warnings
 from dataclasses import dataclass
+from multiprocessing import Process
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
@@ -121,10 +122,6 @@ class KeyboardListener:
     Mesoscope-VR system and runtime. For example, it is used to abort the training runtime early and manually deliver
     rewards via the lick-tube.
 
-    This class looks for the following key combinations to set the following flags:
-        - ESC + 'q': Immediately aborts the training runtime.
-        - ESC + 'r': Delivers 5 uL of water via the LickTube.
-
     Notes:
         While our training logic functions automatically make use of this class, it is NOT explicitly part of the
         MesoscopeExperiment class runtime. We highly encourage incorporating this class into all experiment runtimes to
@@ -134,27 +131,72 @@ class KeyboardListener:
         combination is likely to not be used elsewhere, exercise caution when using other applications alongside the
         runtime code.
 
-    Attributes:
-        _exit_flag: Tracks whether the instance has detected the runtime abort key sequence press.
-        _reward_flag: Tracks whether the instance has detected the reward delivery key sequence press.
-        _speed_flag: Tracks the current user-defined modifier applied to the running speed threshold.
-        _duration_flag: Tracks the current user-defined modifier applied to the running duration threshold.
-        _currently_pressed: Stores the keys that are currently being pressed.
-        _listener: The Listener instance used to monitor keyboard strokes.
+        The monitor runs in a separate process (on a separate core) and sends the data to the main process via
+        shared memory arrays. This prevents the listener from competing for resources with the runtime logic and the
+        visualizer class.
 
+    Attributes:
+        _data_array: A SharedMemoryArray used to store the data recorded by the remote listener process.
+        _currently_pressed: Stores the keys that are currently being pressed.
+        _keyboard_process: The Listener instance used to monitor keyboard strokes. The listener runs in a remote
+            process.
+        _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
     """
 
     def __init__(self) -> None:
-        self._exit_flag: bool = False
-        self._reward_flag: bool = False
-        self._speed_flag: int = 0
-        self._duration_flag: int = 0
+        self._data_array = SharedMemoryArray.create_array(
+            name="keyboard_listener", prototype=np.zeros(shape=5, dtype=np.int32), exist_ok=True
+        )
         self._currently_pressed: set[str] = set()
 
-        # Set up listeners for both press and release
+        # Starts the listener process
+        self._keyboard_process = Process(
+            target=self._run_keyboard_listener,
+            daemon=True
+        )
+        self._keyboard_process.start()
+        self._started = True
+
+    def __del__(self) -> None:
+        """Ensures all class resources are released before the instance is destroyed.
+
+        This is a fallback method, using shutdown() should be standard.
+        """
+        if not self._started:
+            self.shutdown()
+
+    def shutdown(self):
+        """This method should be called at the end of runtime to properly release all resources and terminate the
+        remote process."""
+        if self._keyboard_process.is_alive():
+            self._data_array.write_data(index=0, data=np.int32(1))  # Termination signal
+            self._keyboard_process.terminate()
+            self._keyboard_process.join(timeout=1.0)
+        self._data_array.disconnect()
+        self._data_array.destroy()
+        self._started = False
+
+    def _run_keyboard_listener(self) -> None:
+        """The main function that runs in the parallel process to monitor keyboard inputs."""
+
+        # Sets up listeners for both press and release
         self._listener: keyboard.Listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._listener.daemon = True
         self._listener.start()
+
+        # Connects to the shared memory array from the remote process
+        self._data_array.connect()
+
+        # Initializes the timer used to delay the process. This reduces the CPU load
+        delay_timer = PrecisionTimer("ms")
+
+        # Keeps the process alive until it receives the shutdown command via the SharedMemoryArray instance
+        while self._data_array.read_data(index=0, convert_output=True) == 0:
+            delay_timer.delay_noblock(delay=10, allow_sleep=True)  # 10 ms delay
+
+        # If the loop above is escaped, this indicates that the listener process has been terminated. Disconnects from
+        # the shared memory array and exits
+        self._data_array.disconnect()
 
     def _on_press(self, key: Any) -> None:
         """Adds newly pressed keys to the storage set and determines whether the pressed key combination matches the
@@ -169,25 +211,33 @@ class KeyboardListener:
         if "Key.esc" in self._currently_pressed:
             # Exit combination: ESC + q
             if "'q'" in self._currently_pressed:
-                self._exit_flag = True
+                self._data_array.write_data(index=1, data=np.int32(1))
 
             # Reward combination: ESC + r
             if "'r'" in self._currently_pressed:
-                self._reward_flag = True
+                self._data_array.write_data(index=2, data=np.int32(1))
 
             # Speed control: ESC + Up/Down arrows
             if "Key.up" in self._currently_pressed:
-                self._speed_flag += 1
+                previous_value = self._data_array.read_data(index=3, convert_output=False)
+                previous_value += 1
+                self._data_array.write_data(index=3, data=previous_value)
 
             if "Key.down" in self._currently_pressed:
-                self._speed_flag -= 1
+                previous_value = self._data_array.read_data(index=3, convert_output=False)
+                previous_value -= 1
+                self._data_array.write_data(index=3, data=previous_value)
 
             # Duration control: ESC + Left/Right arrows
             if "Key.right" in self._currently_pressed:
-                self._duration_flag -= 1
+                previous_value = self._data_array.read_data(index=4, convert_output=False)
+                previous_value -= 1
+                self._data_array.write_data(index=4, data=previous_value)
 
             if "Key.left" in self._currently_pressed:
-                self._duration_flag += 1
+                previous_value = self._data_array.read_data(index=4, convert_output=False)
+                previous_value += 1
+                self._data_array.write_data(index=4, data=previous_value)
 
     def _on_release(self, key: Any) -> None:
         """Removes no longer pressed keys from the storage set.
@@ -205,7 +255,7 @@ class KeyboardListener:
 
         This indicates that the user has requested the runtime to gracefully abort.
         """
-        return self._exit_flag
+        return bool(self._data_array.read_data(index=1, convert_output=True))
 
     @property
     def reward_signal(self) -> bool:
@@ -217,9 +267,9 @@ class KeyboardListener:
         Notes:
             Each time this property is accessed, the flag is reset to 0.
         """
-        signal = copy.copy(self._reward_flag)
-        self._reward_flag = False  # FLips the flag to False
-        return signal
+        reward_flag = bool(self._data_array.read_data(index=2, convert_output=True))
+        self._data_array.write_data(index=2, data=np.int32(0))
+        return reward_flag
 
     @property
     def speed_modifier(self) -> int:
@@ -227,7 +277,7 @@ class KeyboardListener:
 
         This is used during run training to manually update the running speed threshold.
         """
-        return self._speed_flag
+        return int(self._data_array.read_data(index=3, convert_output=True))
 
     @property
     def duration_modifier(self) -> int:
@@ -235,7 +285,7 @@ class KeyboardListener:
 
         This is used during run training to manually update the running epoch duration threshold.
         """
-        return self._duration_flag
+        return int(self._data_array.read_data(index=4, convert_output=True))
 
 
 class SessionData:
