@@ -438,6 +438,10 @@ class EncoderInterface(ModuleInterface):
         # track, negative positions mean moving backward along the track.
         positions: NDArray[np.float64] = np.round(np.cumsum(displacements * cm_per_pulse), decimals=8)
 
+        # Replaces -0.0 values with 0.0. This is a convenience conversion to improve the visual appearance of numbers
+        # to users
+        positions = np.where(np.isclose(positions, -0.0) & (np.signbit(positions)), 0.0, positions)
+
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
             {
@@ -730,30 +734,22 @@ class TTLInterface(ModuleInterface):
         timestamps = timestamps[sort_indices]
         triggers = triggers[sort_indices]
 
-        # Finds falling edges (where the signal goes from 1 to 0). Then uses the indices for such events to extract the
-        # timestamps associated with each falling edge, before returning them to the caller.
-        # falling_edges = np.where((triggers[:-1] == 1) & (triggers[1:] == 0))[0] + 1
+        # If the last value is not 0, adds a zero-value to the end of the data sequence, one microsecond
+        # after the last readout. This is to properly mark the end of the monitoring sequence.
+        if triggers[-1] != 0:
+            timestamps = np.append(timestamps, timestamps[-1] + 1)
+            triggers = np.append(triggers, 0)
 
-        # Recently we switched to using the rising edges instead of falling edges. The purpose and code are very
-        # similar, though.
-        rising_edges = np.where((triggers[:-1] == 0) & (triggers[1:] == 1))[0] + 1
-        frame_timestamps = timestamps[rising_edges]
+        # Creates a Polars DataFrame with the processed data
+        module_dataframe = pl.DataFrame(
+            {
+                "time_us": timestamps,
+                "mesoscope_scanning_state": triggers,
+            }
+        )
 
-        # Calculate pulse durations by looking ahead to the next falling edge
-        # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
-
-        # # Determines the durations of all detected pulses. This is needed to filter out the 'blip' in the mesoscope
-        # # frame stamps. The blip pulse is usually under 5 ms, vs. a real frame pulse that is ~100 ms, and it happens
-        # # at the very beginning of the mesoscope acquisition sequence. Since timestamps alternate rising and falling
-        # # edges, rising edge + 1 corresponds to the falling edge of that pulse.
-        # pulse_durations = (timestamps[rising_edges + 1] - timestamps[rising_edges]).astype(np.float64)
-        #
-        # # If the very first recorded pulse has a duration below 10 ms, removes the pulse from the returned array
-        # if pulse_durations[0] < 10000:  # The timestamps use microseconds, so the check uses 10,000 us
-        #     frame_timestamps = frame_timestamps[1:]
-
-        module_series = pl.Series(name="time_us", values=frame_timestamps)
-        module_series.to_frame().write_ipc(file=output_directory.joinpath("frame_data.feather"), compression="lz4")
+        # Saves the DataFrame to the output directory as a Feather file with lz4 compression
+        module_dataframe.write_ipc(file=output_directory.joinpath("frame_data.feather"), compression="lz4")
 
     @property
     def pulse_count(self) -> int:
@@ -1542,17 +1538,17 @@ class ValveInterface(ModuleInterface):
         timestamps = timestamps[sort_indices]
         volume = volume[sort_indices]
 
-        # Find falling edges (valve closing events)
+        # Find falling and rising edges. Falling edges are valve closing events, rising edges are valve opening events.
+        rising_edges = np.where((volume[:-1] == 0) & (volume[1:] == 1))[0] + 1
         falling_edges = np.where((volume[:-1] == 1) & (volume[1:] == 0))[0] + 1
 
-        # Samples the timestamp array to only include timestamps for the falling edges. That is, the timestamps for
-        # when the valve has fully delivered the requested volume of water.
-        reward_timestamps = timestamps[falling_edges]
+        # Samples the timestamp array to only include timestamps for the rising edges. That is, the timestamps for
+        # when the valve started delivering the water rewards.
+        reward_timestamps = timestamps[rising_edges]
 
         # Calculates pulse durations in microseconds for each open-close cycle. Since the original timestamp array
-        # contains alternating HIGH / LOW edges, falling edge - 1 corresponds to the rising edge of that very same
-        # pulse.
-        pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[falling_edges - 1]).astype(
+        # contains alternating HIGH / LOW edges, each falling edge has to match to a rising edge.
+        pulse_durations: NDArray[np.float64] = (timestamps[falling_edges] - timestamps[rising_edges]).astype(
             np.float64
         )
 
@@ -1562,6 +1558,11 @@ class ValveInterface(ModuleInterface):
             np.cumsum(scale_coefficient * np.power(pulse_durations, nonlinearity_exponent)),
             decimals=8,
         )
+
+        # The processing logic above removes the initial water volume of 0. This re-adds the initial volume using the
+        # first timestamp of the module data. That timestamp communicates the initial valve state, which should be 0.
+        reward_timestamps = np.insert(reward_timestamps, 0, timestamps[0])
+        volumes = np.insert(volumes, 0, 0.0)
 
         # Now carries out similar processing for the Tone signals
         # Same logic as with code 52 applies to code 55
@@ -1585,6 +1586,12 @@ class ValveInterface(ModuleInterface):
         sort_indices = np.argsort(tone_timestamps)
         tone_timestamps = tone_timestamps[sort_indices]
         tone_states = tone_states[sort_indices]
+
+        # If the last value is not 0, adds a zero-value to the end of the data sequence, one microsecond
+        # after the last readout. This is to properly mark the end of the monitoring sequence.
+        if tone_states[-1] != 0:
+            tone_timestamps = np.append(tone_timestamps, tone_timestamps[-1] + 1)
+            tone_states = np.append(tone_states, 0)
 
         # Constructs a shared array that includes all reward and tone timestamps. This will be used to interpolate tone
         # and timestamp values. Sorts the generated array to arrange all timestamps in monotonically ascending order
@@ -1910,8 +1917,14 @@ class LickInterface(ModuleInterface):
 
         # The transformation above removes the initial lick state (0). Re-adds the initial timestamp and state to
         # the output array
-        timestamps = np.concatenate(([timestamps[0]], state_stamps))
-        states = np.concatenate(([licks[0]], states))
+        timestamps = np.insert(state_stamps, 0, timestamps[0])
+        states = np.insert(states, 0, licks[0])
+
+        # If the last value is not 0, adds a zero-value to the end of the data sequence, one microsecond
+        # after the last readout. This is to properly mark the end of the monitoring sequence.
+        if states[-1] != 0:
+            timestamps = np.append(timestamps, timestamps[-1] + 1)
+            states = np.append(states, 0)
 
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
@@ -2240,6 +2253,16 @@ class TorqueInterface(ModuleInterface):
         timestamps = timestamps[sort_indices]
         torques = torques[sort_indices]
 
+        # If the last value is not 0, adds a zero-value to the end of the data sequence, one microsecond
+        # after the last readout. This is to properly mark the end of the monitoring sequence.
+        if torques[-1] != 0:
+            timestamps = np.append(timestamps, timestamps[-1] + 1)
+            torques = np.append(torques, 0)
+
+        # Replaces -0.0 values with 0.0. This is a convenience conversion to improve the visual appearance of numbers
+        # to users
+        torques = np.where(np.isclose(torques, -0.0) & (np.signbit(torques)), 0.0, torques)
+
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
             {
@@ -2382,11 +2405,6 @@ class ScreenInterface(ModuleInterface):
         Notes:
             This extraction method works similar to the TTLModule method. This is intentional, as ScreenInterface is
             essentially a group of 3 TTLModules.
-
-        Returns:
-            A tuple with two elements. The first element is a numpy array that stores the timestamps, as microseconds
-            elapsed since UTC epoch onset. The second element is a numpy array that stores the state of the screens
-            (1 for ON, 0 for OFF) at each timestamp.
         """
 
         # Extracts data from the log file
@@ -2409,6 +2427,7 @@ class ScreenInterface(ModuleInterface):
                 }
             )
             module_dataframe.write_ipc(file=output_directory.joinpath("screen_data.feather"), compression="lz4")
+            return
 
         # Precreates the storage numpy arrays for both message types. Timestamps use uint64 datatype and the trigger
         # values are boolean. We use uint8 as it has the same memory footprint as a boolean and allows us to use integer
@@ -2451,7 +2470,7 @@ class ScreenInterface(ModuleInterface):
         # Creates a Polars DataFrame with the processed data
         module_dataframe = pl.DataFrame(
             {
-                "time_us": timestamps,
+                "time_us": screen_timestamps,
                 "screen_state": screen_states,
             }
         )

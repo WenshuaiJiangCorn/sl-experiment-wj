@@ -893,7 +893,7 @@ class MesoscopeExperiment:
         # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
         message = (
             "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
-            "running before proceeding further. If ZaberLauncher is not running, youi WILL NOT be able to manually "
+            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
             "control the HeadBar and LickPort motor positions until you reset the runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
@@ -1620,7 +1620,7 @@ class _BehavioralTraining:
         # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
         message = (
             "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
-            "running before proceeding further. If ZaberLauncher is not running, youi WILL NOT be able to manually "
+            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
             "control the HeadBar and LickPort motor positions until you reset the runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
