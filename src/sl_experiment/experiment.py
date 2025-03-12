@@ -2367,11 +2367,11 @@ def calibrate_valve_logic(
 
 def run_train_logic(
     runtime: _BehavioralTraining,
-    initial_speed_threshold: float = 1,
-    initial_duration_threshold: float = 1,
-    speed_increase_step: float = 0.5,
-    duration_increase_step: float = 0.5,
-    increase_threshold: float = 0.1,
+    initial_speed_threshold: float = 0.1,
+    initial_duration_threshold: float = 0.1,
+    speed_increase_step: float = 0.1,
+    duration_increase_step: float = 0.05,
+    increase_threshold: float = 0.2,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
@@ -2510,13 +2510,13 @@ def run_train_logic(
         speed_threshold = np.minimum(
             initial_speed + ((increase_steps + listener.speed_modifier) * speed_step), maximum_speed
         )
-        # Limit the threshold to 1 cm/s
-        speed_threshold = np.maximum(speed_threshold, 1)
+        # Limit the threshold to 0.05 cm/s
+        speed_threshold = np.maximum(speed_threshold, 0.05)
         duration_threshold = np.minimum(
             initial_duration + ((increase_steps + listener.duration_modifier) * duration_step), maximum_duration
         )
-        # Limits the threshold to 500 milliseconds
-        duration_threshold = np.maximum(duration_threshold, 500)  # 0.5 seconds == 500 milliseconds
+        # Limits the threshold to 50 milliseconds
+        duration_threshold = np.maximum(duration_threshold, 50)  # 0.05 seconds == 50 milliseconds
 
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.

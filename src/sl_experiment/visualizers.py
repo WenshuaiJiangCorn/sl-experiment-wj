@@ -333,6 +333,10 @@ class BehaviorVisualizer:
         self._speed_threshold_line.set_visible(True)
         self._duration_threshold_line.set_visible(True)
 
+        # Renders the changes
+        self._figure.canvas.draw()
+        self._figure.canvas.flush_events()
+
     def close(self) -> None:
         """Closes the visualized figure and cleans up the resources used by the class during runtime."""
         plt.close(self._figure)  # Closes the figure
