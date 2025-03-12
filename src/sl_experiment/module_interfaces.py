@@ -1542,9 +1542,9 @@ class ValveInterface(ModuleInterface):
         rising_edges = np.where((volume[:-1] == 0) & (volume[1:] == 1))[0] + 1
         falling_edges = np.where((volume[:-1] == 1) & (volume[1:] == 0))[0] + 1
 
-        # Samples the timestamp array to only include timestamps for the rising edges. That is, the timestamps for
-        # when the valve started delivering the water rewards.
-        reward_timestamps = timestamps[rising_edges]
+        # Samples the timestamp array to only include timestamps for the falling edges. That is, when the valve has
+        # finished delivering water
+        reward_timestamps = timestamps[falling_edges]
 
         # Calculates pulse durations in microseconds for each open-close cycle. Since the original timestamp array
         # contains alternating HIGH / LOW edges, each falling edge has to match to a rising edge.
