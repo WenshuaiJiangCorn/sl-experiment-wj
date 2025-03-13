@@ -1,6 +1,6 @@
 # sl-experiment
 
-A Python library that aggregates the interfaces and runtime bindings used to record experimental data in the Sun 
+A Python library that provides the interfaces and runtime control bindings used to record experimental data in the Sun 
 (NeuroAI) lab at Cornell university.
 
 ![PyPI - Version](https://img.shields.io/pypi/v/sl-experiment)
@@ -16,18 +16,13 @@ ___
 ## Detailed Description
 
 All experimental projects in the lab are based on this interface library. Primarily, it contains the bindings for all 
-subsystems used to run experiments in Virtual Reality (VR). In the future, the library will be extended to support other
-equipment used in the lab to conduct experiments. This library is purpose-built for the hardware used in the lab and 
-will likely require extensive modifications to be used elsewhere.
+subsystems used to collect behavior data and control experiment runtimes. This library is purpose-built for the hardware
+used in the lab and will likely require extensive modifications to be used elsewhere.
 
 This library leverages the codebase developed in the lab as part of the 'Ataraxis' project to interface with 
 individual system components. It is publicly accessible primarily to serve as an example of how to leverage 'Ataraxis' 
 libraries to implement custom projects in scientific and industrial contexts. Navigate to the ReadMe / API 
 documentation of specific 'Ataraxis' libraries if you need help with a particular system component or interface.
-
-**Note** This library is not designed to directly interface with brain activity recording instruments, beyond sending 
-and receiving TTL triggers. See other Sun lab repositories and manuscripts for information about the instruments used
-to record brain activity during experiments.
 ___
 
 ## Features
