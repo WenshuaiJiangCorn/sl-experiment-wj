@@ -21,7 +21,7 @@ from ataraxis_data_structures import SharedMemoryArray
 plt.rcParams.update({"font.family": "Arial", "font.weight": "normal", "xtick.labelsize": 16, "ytick.labelsize": 16})
 _fontdict_axis_label = {"family": "Arial", "weight": "normal", "size": 18}  # Axis label fonts
 _fontdict_title = {"family": "Arial", "weight": "normal", "size": 20}  # Title fonts
-_fontdict_legend = {"family": "Arial", "weight": "normal", "size": 16}  # Legend fonts
+_fontdict_legend = {"family": "Arial", "weight": "normal", "size": 14}  # Legend fonts
 
 # Initializes dictionaries to map colloquial names to specific linestyle and color parameters
 _line_style_dict = {"solid": "-", "dashed": "--", "dotdashed": "_.", "dotted": ":"}
@@ -146,6 +146,8 @@ class BehaviorVisualizer:
             the average running speed of the animal via the visualizer, it is easier to retrieve and use it from the
             main training runtime. This value is used to share the current running speed with the training runtime.
         _once: This flag is sued to limit certain visualizer operations to only be called once during runtime.
+        _speed_threshold_text: Stores the text object used to display the speed threshold value to the user.
+        _duration_threshold_text: Stores the text object used to display the running epoch duration value to the user.
     """
 
     def __init__(
@@ -288,6 +290,25 @@ class BehaviorVisualizer:
         # This is used to make speed and duration thresholds visible for runtimes that need this visualization.
         self._once = True
 
+        # Adds text annotations for speed and duration thresholds to the top left corner of the speed plot.
+        self._speed_threshold_text = self._speed_axis.text(
+            -self._time_window + 0.5,  # x position: left edge and padding
+            20,  # y position: near top of plot
+            f"Target speed: {0:.2f} cm/s",
+            fontdict=_fontdict_legend,
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=1.0, edgecolor='none', pad=3)
+        )
+
+        self._duration_threshold_text = self._speed_axis.text(
+            -self._time_window + 0.5,  # x position: left edge and padding
+            17.5,  # y position: below speed text
+            f"Target duration: {0:.2f} s",
+            fontdict=_fontdict_legend,
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=1.0, edgecolor='none', pad=3)
+        )
+
     def __del__(self) -> None:
         """Ensures all resources are released when the figure object is garbage-collected."""
         self.close()
@@ -338,8 +359,13 @@ class BehaviorVisualizer:
         # Converts from milliseconds to seconds
         duration_threshold /= 1000
 
+        # Updates line position(s)
         self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])  # type: ignore
         self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])  # type: ignore
+
+        # Updates text annotations with current threshold values
+        self._speed_threshold_text.set_text(f"Target speed: {speed_threshold:.2f} cm/s")
+        self._duration_threshold_text.set_text(f"Target duration: {duration_threshold:.2f} s")
 
         # This ensures the visibility is only changed once during runtime
         if self._once:
