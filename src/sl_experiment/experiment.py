@@ -1048,6 +1048,11 @@ class MesoscopeExperiment:
         self._lickport.mount_position(wait_until_idle=True)
         self._headbar.wait_until_idle()
 
+        message = (
+            "HeadBar: Positioned."
+        )
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
             "Preparing to move the LickPort into position. Mount the animal onto the VR rig and install the mesoscope "
@@ -1056,6 +1061,11 @@ class MesoscopeExperiment:
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
+
+        message = (
+            "LickPort: Positioned."
+        )
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
         # the LickPort in a way that is easily accessible by the animal.
@@ -1229,11 +1239,16 @@ class MesoscopeExperiment:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
+        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
+        # obvious to the user when it is safe to start preparing for the next session and leave the current one
+        # processing the data.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Uninstall the mesoscope objective, remove the animal "
-            "from the VR rig and swivel the VR screens out. Failure to do so may DAMAGE the mesoscope objective and "
-            "HARM the animal."
+            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
+            f"update the notes session with the notes taken during runtime. Then, uninstall the mesoscope objective "
+            f"and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and HARM the "
+            f"animal. This is the last manual checkpoint, once you hit 'y,' it is safe to start preparing for the next "
+            f"session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -1249,20 +1264,6 @@ class MesoscopeExperiment:
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
-        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
-        # obvious to the user when it is safe to start preparing for the next session and leave the current one
-        # processing the data.
-        message = (
-            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
-            f"update the notes session with the notes taken during runtime. This is the last manual checkpoint, "
-            f"entering 'y' after this message will begin data preprocessing and, after that, transmit it to the BioHPC "
-            f"server and the NAS storage. It is safe to start preparing for the next session after hitting 'y'."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
 
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
@@ -1748,6 +1749,11 @@ class _BehavioralTraining:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
+        message = (
+            "HeadBar: Positioned."
+        )
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
         # with each other, so it is safe to move both assemblies at the same time.
         self._headbar.prepare_motors(wait_until_idle=False)
@@ -1769,6 +1775,11 @@ class _BehavioralTraining:
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
             continue
+
+        message = (
+            "LickPort: Positioned."
+        )
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
         # the LickPort in a way that is easily accessible by the animal.
@@ -1890,10 +1901,16 @@ class _BehavioralTraining:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
+        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
+        # obvious to the user when it is safe to start preparing for the next session and leave the current one
+        # processing the data.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Remove the animal from the VR rig and swivel the VR "
-            "screens out. Failure to do so may HARM the animal."
+            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
+            f"update the notes session with the notes taken during runtime. Then, uninstall the mesoscope objective "
+            f"and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and HARM the "
+            f"animal. This is the last manual checkpoint, once you hit 'y,' it is safe to start preparing for the next "
+            f"session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         while input("Enter 'y' to continue: ") != "y":
@@ -1909,20 +1926,6 @@ class _BehavioralTraining:
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
-        # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
-        # obvious to the user when it is safe to start preparing for the next session and leave the current one
-        # processing the data.
-        message = (
-            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
-            f"update the notes session with the notes taken during runtime. This is the last manual checkpoint, "
-            f"entering 'y' after this message will begin data preprocessing and, after that, transmit it to the BioHPC "
-            f"server and the NAS storage. It is safe to start preparing for the next session after hitting 'y'."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
 
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
