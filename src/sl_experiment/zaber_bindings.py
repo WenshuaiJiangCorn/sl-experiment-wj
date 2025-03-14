@@ -1,4 +1,5 @@
-"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR setup."""
+"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR system to position the
+HeadBar and LickPort manipulators."""
 
 from typing import Any
 from dataclasses import field, dataclass

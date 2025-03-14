@@ -1,5 +1,5 @@
-"""This module provides the main MesoscopeExperiment and BehavioralTraining classes that abstract working with Sun
-lab's Mesoscope-VR system and SessionData class that abstracts working with acquired experimental data."""
+"""This module provides classes that abstract working with Sun lab's Mesoscope-VR system and managing the acquired
+session data."""
 
 import os
 import copy
@@ -150,10 +150,7 @@ class KeyboardListener:
         self._currently_pressed: set[str] = set()
 
         # Starts the listener process
-        self._keyboard_process = Process(
-            target=self._run_keyboard_listener,
-            daemon=True
-        )
+        self._keyboard_process = Process(target=self._run_keyboard_listener, daemon=True)
         self._keyboard_process.start()
         self._started = True
 
@@ -165,7 +162,7 @@ class KeyboardListener:
         if self._started:
             self.shutdown()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """This method should be called at the end of runtime to properly release all resources and terminate the
         remote process."""
         if self._keyboard_process.is_alive():
@@ -1048,9 +1045,7 @@ class MesoscopeExperiment:
         self._lickport.mount_position(wait_until_idle=True)
         self._headbar.wait_until_idle()
 
-        message = (
-            "HeadBar: Positioned."
-        )
+        message = "HeadBar: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
@@ -1062,9 +1057,7 @@ class MesoscopeExperiment:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        message = (
-            "LickPort: Positioned."
-        )
+        message = "LickPort: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
@@ -1749,9 +1742,7 @@ class _BehavioralTraining:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        message = (
-            "HeadBar: Positioned."
-        )
+        message = "HeadBar: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
@@ -1776,9 +1767,7 @@ class _BehavioralTraining:
         while input("Enter 'y' to continue: ") != "y":
             continue
 
-        message = (
-            "LickPort: Positioned."
-        )
+        message = "LickPort: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Restores the lickPort to the previous session's position or to the default parking position. This positions

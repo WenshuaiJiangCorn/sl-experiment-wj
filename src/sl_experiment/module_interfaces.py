@@ -1,4 +1,4 @@
-"""This module provides ModuleInterface implementations for the hardware used by the Sun lab VR-Mesoscope system."""
+"""This module provides ModuleInterface implementations for the hardware used by the Sun lab Mesoscope-VR system."""
 
 from json import dumps
 import math

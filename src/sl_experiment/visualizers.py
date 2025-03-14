@@ -1,4 +1,5 @@
-"""This module provides Visualizer classes to render hardware module data in real time."""
+"""This module provides Visualizer classes to render animal training and experiment task performance data in real
+time."""
 
 import numpy as np
 import matplotlib
@@ -198,8 +199,11 @@ class BehaviorVisualizer:
 
         # Creates the figure with three subplots sharing the same x-axis
         self._figure, (self._lick_axis, self._valve_axis, self._speed_axis) = plt.subplots(
-            3, 1, figsize=(10, 8), sharex=True,
-            gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1, 3]}  # Third subplot is thrice as tall
+            3,
+            1,
+            figsize=(10, 8),
+            sharex=True,
+            gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1, 3]},  # Third subplot is thrice as tall
         )
 
         # Sets consistent y-label padding for all axes. This aligns y-axis names for all axes, making the figure more
@@ -296,8 +300,8 @@ class BehaviorVisualizer:
             20,  # y position: near top of plot
             f"Target speed: {0:.2f} cm/s",
             fontdict=_fontdict_legend,
-            verticalalignment='top',
-            bbox=dict(facecolor='white', alpha=1.0, edgecolor='none', pad=3)
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=1.0, edgecolor="none", pad=3),
         )
 
         self._duration_threshold_text = self._speed_axis.text(
@@ -305,8 +309,8 @@ class BehaviorVisualizer:
             17.5,  # y position: below speed text
             f"Target duration: {0:.2f} s",
             fontdict=_fontdict_legend,
-            verticalalignment='top',
-            bbox=dict(facecolor='white', alpha=1.0, edgecolor='none', pad=3)
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=1.0, edgecolor="none", pad=3),
         )
 
     def __del__(self) -> None:
