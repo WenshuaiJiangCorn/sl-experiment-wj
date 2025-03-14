@@ -7,9 +7,10 @@ from datetime import (
 
 import click
 import numpy as np
-from water_log import ParseData, _WaterSheetData
-from gs_data_parser import _SurgerySheetData
 from ataraxis_base_utilities import LogLevel, console
+
+from .water_log import ParseData, _WaterSheetData
+from .gs_data_parser import SurgeryData, FilteredSurgeries, _SurgerySheetData
 
 
 def _normalize_date(date: str) -> str:
@@ -88,7 +89,7 @@ def _valid_mouse_id(mouse_id: str, available_ids: set[int]) -> int:
     type=str,
     help="The tab name for the surgery log to fetch data based on the mouse ID.",
 )
-def main(
+def process_gs_log(
     log_choice: str,
     mouse_id: int,
     date: str,
@@ -120,7 +121,7 @@ def main(
         click.echo("Invalid log choice. Enter 1 for Surgery Log or 2 for Water Log.")
 
 
-def process_water_log(mouse_id: int, date: str, list_water_mice: bool) -> None:
+def process_water_log(mouse_id: int | None, date: str | None, list_water_mice: bool) -> None:
     """
     Processes the water log for a given mouse ID and date.
     Handles input validation and forces valid inputs.
@@ -132,9 +133,15 @@ def process_water_log(mouse_id: int, date: str, list_water_mice: bool) -> None:
     mouse_col_index = headers.index("mouse")
 
     available_ids = set()
+
     for row in tab_data[1:]:
         if len(row) > mouse_col_index:
-            available_ids.add(int(row[mouse_col_index]))
+            cell_value = row[mouse_col_index]
+            if isinstance(cell_value, str) and cell_value.strip():
+                try:
+                    available_ids.add(int(cell_value))
+                except ValueError:
+                    continue
 
     if list_water_mice:
         list_water_mouse_ids()
@@ -152,6 +159,7 @@ def process_water_log(mouse_id: int, date: str, list_water_mice: bool) -> None:
 
     if date is None:
         date = click.prompt("Enter the date in the form MM/DD/YY)", type=str)
+
     try:
         date = _normalize_date(date)
     except ValueError:
@@ -172,8 +180,13 @@ def process_surgery_log(tab_name: str, mouse_id: int | None) -> None:
 
     available_ids = set()
     for row in sheet_data.data:
-        if len(row) > mouse_col_index and row[mouse_col_index].strip():
-            available_ids.add(int(row[mouse_col_index]))
+        if len(row) > mouse_col_index:
+            cell_value = row[mouse_col_index]
+            if isinstance(cell_value, str) and cell_value.strip():
+                try:
+                    available_ids.add(int(cell_value))
+                except ValueError:
+                    continue
 
     if not available_ids:
         click.echo(f"No mouse IDs found in tab '{tab_name}'.")
@@ -210,8 +223,12 @@ def list_water_mouse_ids() -> None:
     mouse_ids = set()
     for row in tab_data[1:]:
         if len(row) > water_key:
-            mouse_id = int(row[water_key])
-            mouse_ids.add(mouse_id)
+            cell_value = row[water_key]
+            if isinstance(cell_value, str) and cell_value.strip():
+                try:
+                    mouse_ids.add(int(cell_value))
+                except ValueError:
+                    continue
 
     if mouse_ids:
         click.echo("Available Mouse IDs for Water Log:")
@@ -235,8 +252,13 @@ def list_surgery_mouse_ids(tab_name: str) -> None:
 
     mouse_ids = set()
     for row in sheet_data.data:
-        if len(row) > mouse_col_index and row[mouse_col_index].strip():
-            mouse_ids.add(int(row[mouse_col_index]))
+        if len(row) > mouse_col_index:
+            cell_value = row[mouse_col_index]
+            if isinstance(cell_value, str) and cell_value.strip():
+                try:
+                    mouse_ids.add(int(cell_value))
+                except ValueError:
+                    continue
 
     if mouse_ids:
         click.echo(f"Available Mouse IDs in tab '{tab_name}':\n" + "\n".join(map(str, sorted(mouse_ids))))
@@ -250,7 +272,10 @@ def fetch_water_log_data(mouse_id: int, date: str) -> None:
     data for a given date.
     """
     water_log = ParseData(tab_name="MouseInfo", mouse_id=mouse_id, date=date)
-    mouse_instance = water_log.mouse_instances.get(mouse_id)
+    mouse_instance = water_log.mouse_instances.get(str(mouse_id))
+    if mouse_instance is None:
+        click.echo(f"Mouse ID {mouse_id} not found in the water log.")
+        return
 
     if mouse_instance:
         if date in mouse_instance.daily_log:
@@ -261,23 +286,19 @@ def fetch_water_log_data(mouse_id: int, date: str) -> None:
         click.echo(f"No data found for mouse {mouse_id}.")
 
 
-def fetch_surgery_log_data(tab_name: str, mouse_id: int) -> list:
+def fetch_surgery_log_data(tab_name: str, mouse_id: int) -> FilteredSurgeries:
     """
-    Fetches the protocol data, implant data, injection data, brain data and drug
+    Fetches the protocol data, implant data, injection data, brain data, and drug
     data for the given mouse ID.
     """
     sheet_data = _SurgerySheetData(tab_name=tab_name)
     sheet_data._parse()
-    mouse_col_index = sheet_data.headers["id"]
 
+    filtered_surgeries = FilteredSurgeries(surgeries=[])
     for row in sheet_data.data:
-        if len(row) > mouse_col_index and row[mouse_col_index].strip() and int(row[mouse_col_index]) == mouse_id:
-            click.echo(f"Data for mouse ID {mouse_id}:\n{row}")
-            return row
+        surgery_data = SurgeryData(headers=sheet_data.headers, row=row, tab_name=tab_name)
 
-    click.echo(f"No data found for mouse ID {mouse_id} in tab '{tab_name}'.")
-    return []
+        if surgery_data.protocol_data.id == mouse_id:
+            filtered_surgeries.surgeries.append(surgery_data)
 
-
-if __name__ == "__main__":
-    main()
+    return filtered_surgeries
