@@ -14,7 +14,6 @@ from ataraxis_base_utilities import console
 from ataraxis_data_structures import YamlConfig
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-from googleapiclient._apis.sheets.v4.resources import ValueRange
 
 # Stores schemas for supported date formats.
 _supported_date_formats: set[str] = {"%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"}
@@ -54,7 +53,7 @@ def _convert_date_time(date: str, time: str) -> int:
         console.error(message=message, error=ValueError)
 
     # Precreates date and time object placeholders.
-    date_obj: dt_date = dt_date(0, 0, 0)
+    date_obj: dt_date = dt_date(1990, 1, 1)
     time_obj: dt_time = dt_time(0, 0)
 
     # Parses the time object
@@ -385,107 +384,150 @@ class _SurgerySheetData:
     and grant access to Google APIs for data parsing.
     """
 
-    def __init__(self, project_name: str, animal_id: int):
-        self.sheet_id = "1fOM2SenU7Dcz6Y1fw_cd7g4eJRuxXdjgZUofOuMNo7k"  # Replace with actual sheet ID
-        self.range = "A1:ZZ"
-        self.SERVICE_ACCOUNT_FILE = (
-            "/Users/natalieyeung/Documents/GitHub/sl-mesoscope/mesoscope_data.json"  # Replace with actual credentials
+    def __init__(
+        self,
+        project_name: str,
+        credentials_path: Path,
+        sheet_id: str,
+    ):
+        self._project_name = project_name
+        self._sheet_id = sheet_id
+
+        # Generates the credentials' object to access the target Google Sheet. Since we are only reading the data from
+        # the surgery log, we can use the 'readonly' access mode for added file safety.
+        credentials = Credentials.from_service_account_file(
+            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets.readonly",)
         )
-        self.SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        self.data: list[list[Optional[str]]] = []
-        self.headers: dict[str, int] = {}
-        self._tab_name = project_name
-        self._row_id = animal_id
 
-    def _get_sheet_data(self) -> list[list[str]]:
+        # Uses the credentials' object to build the access service for the target Google Sheet. This service is then
+        # used to fetch the sheet data via HTTP request(s).
+        self._service = build(serviceName="sheets", version="v4", credentials=credentials)
+
+        # Retrieves all values stored in the first row of the target sheet tab. Each tab represents a particular
+        # project. The first row contains the headers for all data columns stored in the sheet.
+        headers = (
+            self._service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"'{self._project_name}'!1:1")  # extracts the entire first row
+            .execute()
+        )
+
+        # Converts headers to a list of strings and raises an error if the header list is empty
+        header_values = headers.get("values", [[]])[0]
+        if not header_values:
+            message = (
+                f"Unable to parse the surgery data for the project {project_name} Google Sheet. The first row of the "
+                f"target tab appears to be empty. Instead, the first row should contain the column headers."
+            )
+            console.error(message, error=RuntimeError)
+
+        # Creates a dictionary mapping header values to Google Sheet column letters
+        self._headers: dict[str, str] = {}
+        for i, header in enumerate(header_values):
+            # Converts column index to column letter (0 -> A, 1 -> B, etc.)
+            column_letter = self._convert_index_to_column_letter(i)
+            self._headers[str(header)] = column_letter
+
+        # Retrieves all animal names (IDs) from the 'ID' column. Each ID is z-filled to a triple-digit string for
+        # sorting to behave predictably. This data is stored as a tuple of IDs.
+        id_column = self._get_column_id("ID")
+        animal_ids = (
+            self._service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=sheet_id,
+                range=f"{self._project_name}!{id_column}2:{id_column}",  # row 2 onward, row 1 stores headers
+                majorDimension="COLUMNS"  # Gets data in column-major order
+            )
+            .execute()
+        )
+        id_list = animal_ids.get("values", [[]])[0]
+        self._animals: tuple[str, ...] = tuple([str(animal_id).zfill(3) for animal_id in id_list])
+        if len(self._animals) == 0:
+            message = (
+                f"Unable to parse the surgery data for the project {project_name} Google Sheet. The ID column of the "
+                f"sheet contains no data, indicating that the log does not contain any animals."
+            )
+            console.error(message, error=RuntimeError)
+
+    def extract_animal_data(self, animal_id: int) -> None:
+        # Converts input ID to the same format as stored IDs for comparison
+        formatted_id = str(animal_id).zfill(3)
+
+        # Checks if the animal ID exists in the tuple of animal IDs generated at class initialization. If not, raises an
+        # error
+        if formatted_id not in self._animals:
+            message = (
+                f"Unable to extract the surgery data for the project {self._project_name} and animal {animal_id}. The "
+                f"specified animal ID is not contained in the 'ID' column of the parsed Google Sheet."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Finds the index of the target animal in the ID value tuple to determine the row number to parse from the
+        # sheet. The index is modified by 2 because: +1 for 0-indexing to 1-indexing, +1 to account for the header row
+        animal_index = self._animals.index(formatted_id)
+        row_number = animal_index + 2
+
+        # Retrieves the entire row of data for the target animal
+        row_data = (
+            self._service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=self._sheet_id,
+                range=f"'{self._project_name}'!{row_number}:{row_number}"
+            )
+            .execute()
+        )
+
+        # Converts the data from dictionary format into a list of strings.
+        row_values = row_data.get("values")[0]
+
+        # Replaces empty cells and value placeholders ('n/a'', '--' or '---') with None.
+        row_values = self._replace_empty_values(row_values)
+
+        # Creates a dictionary mapping headers (column names) to the animal-specific extracted values for these
+        # headers.
+        animal_data = {}
+        for i, header in enumerate(self._headers):
+            animal_data[header] = row_values[i] if i < len(row_values) else None
+
+        print(animal_data)
+
+    @staticmethod
+    def _convert_index_to_column_letter(index):
+        """Converts a 0-based column index to an Excel-style (Google Sheet) column letter (A, B, C, ... Z, AA, AB, ...).
         """
-        Retrieves non-empty rows from the specified tab in the Google Sheet. This method ensures
-        that only populated rows are processed to handle variations in row counts across different tabs.
-        """
-
-        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
-        service = build("sheets", "v4", credentials=creds)
-
-        range_name = f"{self._tab_name}!{self.range}"
-        result: ValueRange = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
-
-        tab_data = result.get("values", [])
-        return [row for row in tab_data if row]
-
-    def _replace_empty(self, row_data: list[list[str]]) -> list[list[Optional[str]]]:
-        """
-        Replaces empty cells and cells containing 'n/a', '--' or '---' with None.
-        """
-        result: list[list[Optional[str]]] = []
-
-        for row in row_data:
-            processed_row: list[Optional[str]] = []
-
-            for cell in row:
-                if cell.strip().lower() in {"n/a", "--", "---"}:
-                    processed_row.append(None)
-                else:
-                    processed_row.append(cell)
-
-            result.append(processed_row)
-
+        result = ""
+        while index >= 0:
+            remainder = index % 26
+            result = chr(65 + remainder) + result  # 65 is ASCII for 'A'
+            index = index // 26 - 1
         return result
 
-    def _parse(self) -> None:
+    def _get_column_id(self, column_name: str) -> str:
+        """Returns the Google Sheet column ID (letter) for the given column name.
+
+        This method assumes that the header name comes from the data extracted from the header row of the processed
+        sheet. It does not contain any guards against retrieving a non-existent column.
+
+        Args:
+            column_name: The name of the column as it appears in the header row.
+
+        Returns:
+            The column ID (e.g., "A", "B", "C") corresponding to the column name.
         """
-        Processes the raw data fetched from the Google Sheet to extract and modify the headers
-        to remove any invalid characters and whitespaces.
+        return self._headers[column_name]
+
+    @staticmethod
+    def _replace_empty_values(row_data: list[str]) -> list[str | None]:
+        """ Replaces empty cells and cells containing 'n/a', '--' or '---' inside the input row_data list with None.
+
+        This internal method is used when retrieving animal data to filter out empty cells and values.
+
+        Args:
+            row_data: The list of cell values from a single Google Sheet row.
         """
-        raw_data = self._get_sheet_data()
-        replaced_data = self._replace_empty(raw_data)
-
-        if replaced_data:
-            first_row = replaced_data[0]
-            self.headers = {}
-
-            for i, column in enumerate(first_row):
-                column_str = str(column).lower().strip()
-                self.headers[column_str] = i
-
-        self.data = replaced_data[1:]
-
-    def _return_all(self) -> list[SurgeryData]:
-        """
-        Parses each row of sheet data into a SurgeryData instance and returns a list of these instances.
-        """
-        surgeries = []
-        for row in self.data:
-            surgery_data = SurgeryData(headers=self.headers, row=row, tab_name=self._tab_name)
-            surgeries.append(surgery_data)
-        return surgeries
-
-
-@dataclass
-class FilteredSurgeries(YamlConfig):
-    """
-    A wrapper class to store filtered surgeries for serialization using the to_yaml method.
-
-    Attributes:
-        surgeries (list[SurgeryData]): A list of SurgeryData objects representing filtered surgeries.
-    """
-
-    surgeries: list[SurgeryData] = field(default_factory=list)
-
-
-def extract_mouse(tab_name: str, mouse_id: int) -> FilteredSurgeries:
-    """
-    Fetches data from the specified tab in the Google Sheet and filters it based on the mouse ID provided.
-    """
-    sheet_data = _SurgerySheetData(tab_name)
-    sheet_data._parse()
-    surgeries = sheet_data._return_all()
-
-    filtered_data = []
-    for surgery in surgeries:
-        if surgery.protocol_data.id == mouse_id and surgery.tab_name == tab_name:
-            filtered_data.append(surgery)
-
-    return FilteredSurgeries(surgeries=filtered_data)
+        return [None if cell.strip().lower() in {"", "n/a", "--", "---"} else cell for cell in row_data]
 
 
 class _WaterSheetData:
@@ -788,7 +830,7 @@ class ParseData:
         self.date = date
         self.sheet_data = _WaterSheetData()
         self.sheet_data._fetch_data_from_tab(tab_name)
-        self.mouse_classes: dict[str, Type[MouseKey]] = {}
+        self.mouse_classes: dict[str, MouseKey] = {}
         self.mouse_instances: dict[str, MouseKey] = {}
         self._create_mouse_subclasses()
         self._link_to_tab()
@@ -856,7 +898,8 @@ class ParseData:
                         daily_log = DailyLog(row, headers)
                         self.mouse_instances[self.mouse_id].daily_log[date] = daily_log
 
-
-# Main
-filtered_surgeries = extract_mouse(tab_name="Sheet1", mouse_id=2)
-filtered_surgeries.to_yaml(file_path=Path("mouse_data.yaml"))
+sheet_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
+project_name = "Practice mice"
+credentials = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
+data = _SurgerySheetData(project_name=project_name, credentials_path=credentials, sheet_id=sheet_id)
+data.extract_animal_data(animal_id=2)
