@@ -89,7 +89,7 @@ def _convert_date_time(date: str, time: str) -> int:
     return int(full_datetime.timestamp() * 1_000_000)
 
 
-@dataclass(frozen=True)
+@dataclass()
 class ProtocolData:
     """Stores the ID and experimental protocol information for the subject (mouse)."""
 
