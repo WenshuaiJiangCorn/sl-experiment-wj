@@ -20,7 +20,7 @@ _supported_date_formats: set[str] = {"%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/
 
 
 def _convert_date_time(date: str, time: str) -> int:
-    """Converts a date and time string to a UTC timestamp.
+    """Converts the input date and time strings into the UTC timestamp.
 
     This function is used to convert date and time strings parsed from the Google Sheet into the microseconds since
     UTC epoch onset, which is the primary time format used by all other library components.
@@ -88,20 +88,38 @@ def _convert_date_time(date: str, time: str) -> int:
     return int(full_datetime.timestamp() * 1_000_000)
 
 
-@dataclass()
-class ProtocolData:
-    """Stores the ID and experimental protocol information for the subject (mouse)."""
+def extract_numerical(substring: str) -> Optional[float]:
+    """
+    Extracts a numerical value from a substring representing a coordinate.
+    """
+    match = re.search(r"([-+]?\d*\.?\d+)\s*(AP|ML|DV)", part)
+    return float(match.group(1)) if match else None
 
+def parse_coordinates(coordinate_string: str) -> tuple[float, float, float]:
+    """
+    Parses and stores the numerical part for each coordinate into the AP, ML and DV
+    attributes of a Coordinates object.
+    """
+    coordinates = Coordinates()
+    if coord_string:
+        for part in coord_string.split(","):
+            part = part.strip()
+            if "AP" in part.upper():
+                coordinates.ap = Coordinates.extract_numerical(part)
+            elif "ML" in part.upper():
+                coordinates.ml = Coordinates.extract_numerical(part)
+            elif "DV" in part.upper():
+                coordinates.dv = Coordinates.extract_numerical(part)
+    return coordinates
+
+@dataclass()
+class SubjectData:
+    """Stores the subject (mouse) ID information."""
     id: int
-    """Stores the unique ID (name) of the subject."""
-    surgery_date_us: int
-    """Stores the date of the surgery."""
-    surgeon: str
-    """Stores the names or ID(s) of the surgeon(s)."""
-    protocol: str
-    """Stores the experimental protocol ID for the surgery."""
+    """Stores the unique ID (name) of the subject. Assumes all mice are given a numeric ID, rather than a string name.
+    """
     cage: int
-    """Stores the cage number used to house the subject post-surgery."""
+    """Stores the number of the latest cage used to house the subject."""
     ear_punch: str
     """Stores the ear tag location of the subject."""
     sex: str
@@ -109,13 +127,27 @@ class ProtocolData:
     genotype: str
     """Stores the genotype of the subject."""
     date_of_birth_us: int
-    """Stores the date of birth of the subject."""
+    """Stores the date of birth of the subject as the number of microseconds elapsed since UTC epoch onset."""
     weight_g: float
-    """Stores the weight of the subject pre-surgery."""
+    """Stores the weight of the subject pre-surgery, in grams."""
     location_housed: str
-    """Stores the location where the subject is housed after the surgery."""
+    """Stores the latest location used to house the subject after the surgery."""
     status: str
-    """Stores the current status of the subject, indicating whether it is alive or deceased."""
+    """Stores the latest status of the subject (alive / deceased)."""
+
+
+@dataclass()
+class ProcedureData:
+    """Stores the general information about the surgical procedure."""
+    surgery_start_us: int
+    """Stores the date and time when the surgery was started as microseconds elapsed since UTC epoch onset."""
+    surgery_end_us: int
+    """Stores the date and time when the surgery has ended as microseconds elapsed since UTC epoch onset."""
+    surgeon: str
+    """Stores the name or ID of the surgeon. If the intervention was carrie out by multiple surgeon, all participating
+    surgeon names and IDs are stored as part of the same string."""
+    protocol: str
+    """Stores the experiment protocol number (ID) used during the surgery."""
 
 
 @dataclass
@@ -131,40 +163,16 @@ class Coordinates:
                       Coordinates object with all attributes set to None.
 
     Attributes:
-        AP: Stores the anteroposterior distance in nm of an implant or injection within a given brain structure.
-        ML: Stores the medial-lateral distance in nm of an implant or injection in a given brain structure.
-        DV: Stores the dorsal-ventral distance in nm of an implant or injection in a given brain structure.
+        ap: Stores the anteroposterior distance in nm of an implant or injection within a given brain structure.
+        ml: Stores the medial-lateral distance in nm of an implant or injection in a given brain structure.
+        dv: Stores the dorsal-ventral distance in nm of an implant or injection in a given brain structure.
     """
 
-    AP: Optional[float] = None
-    ML: Optional[float] = None
-    DV: Optional[float] = None
+    ap: float
+    ml: float
+    dv: float
 
-    @staticmethod
-    def extract_numerical(part: str) -> Optional[float]:
-        """
-        Extracts a numerical value from a substring representing a coordinate.
-        """
-        match = re.search(r"([-+]?\d*\.?\d+)\s*(AP|ML|DV)", part)
-        return float(match.group(1)) if match else None
 
-    @staticmethod
-    def parse_coordinates(coord_string: Optional[str]) -> "Coordinates":
-        """
-        Parses and stores the numerical part for each coordinate into the AP, ML and DV
-        attributes of a Coordinates object.
-        """
-        coordinates = Coordinates()
-        if coord_string:
-            for part in coord_string.split(","):
-                part = part.strip()
-                if "AP" in part.upper():
-                    coordinates.AP = Coordinates.extract_numerical(part)
-                elif "ML" in part.upper():
-                    coordinates.ML = Coordinates.extract_numerical(part)
-                elif "DV" in part.upper():
-                    coordinates.DV = Coordinates.extract_numerical(part)
-        return coordinates
 
 
 @dataclass
@@ -192,25 +200,6 @@ class ImplantData:
     implant2: Optional[str] = None
     implant2_location: Optional[str] = None
     implant2_coordinates: Optional[Coordinates] = None
-
-    def __init__(self, headers: dict[str, int], row: list[Optional[str]]):
-        implants = ("implant1", "implant2")
-
-        for implant in implants:
-            if implant in headers:
-                setattr(self, implant, row[headers[implant]])
-
-            if f"{implant}_location" in headers:
-                setattr(self, f"{implant}_location", row[headers[f"{implant}_location"]])
-
-            implant_coords_key = f"{implant}_coordinates"
-            if implant_coords_key in headers and row[headers[implant_coords_key]]:
-                coords_str = row[headers[implant_coords_key]]
-                if coords_str:
-                    parsed_coords = Coordinates.parse_coordinates(coords_str)
-                else:
-                    parsed_coords = None
-                setattr(self, implant_coords_key, parsed_coords)
 
 
 @dataclass
@@ -350,7 +339,7 @@ class SurgeryData:
 
     def __init__(self, headers: dict[str, int], row: list[Optional[str]], tab_name: str):
         self.tab_name: str = tab_name
-        self.protocol_data = ProtocolData(
+        self.protocol_data = SubjectData(
             id=int(row[headers.get("id", -1)]),
             surgery_date_us=_convert_date_time(date=row[headers.get("date", -1)], time="00:00"),
             surgeon=row[headers.get("surgeon", -1)],
