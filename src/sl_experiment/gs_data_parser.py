@@ -1,5 +1,5 @@
 import re
-from typing import Optional, Any
+from typing import Any
 from pathlib import Path
 from datetime import (
     date as dt_date,
@@ -101,15 +101,16 @@ def _extract_coordinate_value(substring: str) -> float:
     # Finds the coordinate number that precedes the anatomical axis designator (AP, ML, DV) and extracts it as a float.
     match = re.search(r"([-+]?\d*\.?\d+)\s*(AP|ML|DV)", substring)
 
-    # If the coordinate value is not extracted, raises an error
-    if not match:
-        message = (
-            f"Unable to extract the numerical anatomical coordinate value from the input substring {substring}."
-        )
-        console.error(message=message, error=ValueError)
+    # If the coordinate value is extracted, returns the extracted value as a float
+    if match is not None:
+        return float(match.group(1))
 
-    # Otherwise, returns the extracted value as a float
-    return float(match.group(1))
+    # Otherwise, raises an error
+    message = f"Unable to extract the numerical anatomical coordinate value from the input substring {substring}."
+    console.error(message=message, error=ValueError)
+
+    # This should not be reachable, it is a fall-back to appease mypy
+    raise ValueError(message)  # pragma: no cover
 
 
 def _parse_stereotactic_coordinates(coordinate_string: str) -> tuple[float, float, float]:
@@ -144,6 +145,7 @@ def _parse_stereotactic_coordinates(coordinate_string: str) -> tuple[float, floa
 @dataclass()
 class SubjectData:
     """Stores the subject (mouse) ID information."""
+
     id: int
     """Stores the unique ID (name) of the subject. Assumes all mice are given a numeric ID, rather than a string name.
     """
@@ -168,6 +170,7 @@ class SubjectData:
 @dataclass()
 class ProcedureData:
     """Stores the general information about the surgical procedure."""
+
     surgery_start_us: int
     """Stores the date and time when the surgery was started as microseconds elapsed since UTC epoch onset."""
     surgery_end_us: int
@@ -192,16 +195,16 @@ class ImplantData:
 
     implant: str
     """The descriptive name of the implant."""
-    implant_location: str
+    implant_target: str
     """The name of the brain region or cranium section targeted by the implant."""
-    implant_code: str
+    implant_code: int
     """The manufacturer code or internal reference code for the implant. This code is used to identify the implant in 
     additional datasheets and lab ordering documents."""
-    implant_ap_coordinate: float
+    implant_ap_coordinate_mm: float
     """Stores implant's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
-    implant_ml_coordinate: float
+    implant_ml_coordinate_mm: float
     """Stores implant's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
-    implant_dv_coordinate: float
+    implant_dv_coordinate_mm: float
     """Stores implant's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
 
 
@@ -214,18 +217,18 @@ class InjectionData:
 
     injection: str
     """The descriptive name of the injection."""
-    injection_location: str
+    injection_target: str
     """The name of the brain region targeted by the injection."""
-    injection_volume: float
+    injection_volume_nl: float
     """The volume of substance, in nanoliters, delivered during the injection."""
-    injection_code: str
+    injection_code: int
     """The manufacturer code or internal reference code for the injected substance. This code is used to identify the 
     substance in additional datasheets and lab ordering documents."""
-    injection_ap_coordinate: float
+    injection_ap_coordinate_mm: float
     """Stores injection's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
-    injection_ml_coordinate: float
+    injection_ml_coordinate_mm: float
     """Stores injection's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
-    injection_dv_coordinate: float
+    injection_dv_coordinate_mm: float
     """Stores injection's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
 
 
@@ -235,22 +238,22 @@ class DrugData:
     surgery.
     """
 
-    lactated_ringers_solution_volume: float
+    lactated_ringers_solution_volume_ml: float
     """Stores the volume of Lactated Ringer's Solution (LRS) administered during surgery, in ml."""
     lactated_ringers_solution_code: int
     """Stores the manufacturer code or internal reference code for Lactated Ringer's Solution (LRS). This code is used 
     to identify the LRS batch in additional datasheets and lab ordering documents."""
-    ketoprofen_volume: float
+    ketoprofen_volume_ml: float
     """Stores the volume of ketoprofen administered during surgery, in ml."""
     ketoprofen_code: int
     """Stores the manufacturer code or internal reference code for ketoprofen. This code is used to identify the 
     ketoprofen batch in additional datasheets and lab ordering documents."""
-    buprenorphine_volume: float
+    buprenorphine_volume_ml: float
     """Stores the volume of buprenorphine administered during surgery, in ml."""
     buprenorphine_code: int
     """Stores the manufacturer code or internal reference code for buprenorphine. This code is used to identify the 
     buprenorphine batch in additional datasheets and lab ordering documents."""
-    dexamethasone_volume: float
+    dexamethasone_volume_ml: float
     """Stores the volume of dexamethasone administered during surgery, in ml."""
     dexamethasone_code: int
     """Stores the manufacturer code or internal reference code for dexamethasone. This code is used to identify the 
@@ -258,25 +261,49 @@ class DrugData:
 
 
 @dataclass
-class SurgeryData:
+class SurgeryData(YamlConfig):
     """This dataclass aggregates all surgery data for a single procedure.
 
     Notes:
         Primarily, this class binds other dataclasses used in this module to encapsulate the access to all relevant
         data in a single class instance.
     """
-    procedure: ProcedureData
+
     subject: SubjectData
+    procedure: ProcedureData
     drugs: DrugData
-    implants: tuple[ImplantData, ...]
-    injections: tuple[InjectionData, ...]
+    implants: list[ImplantData]
+    injections: list[InjectionData]
 
 
 class _SurgerySheetData:
-    """
-    This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
-    the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
-    and grant access to Google APIs for data parsing.
+    """Encapsulates the access to the target Google Sheet and provides methods for extracting animal surgery data.
+
+    This class binds Google Sheets API to connect and extract the data stored in a Google Sheet. It functions as the
+    central access point for the surgery log for each animal of every lab project.
+
+    Notes:
+        This class is designed to be used internally and should not be used outside the cli and automated methods
+        of this library.
+
+        This class relies on certain assumptions about the sheet layout, organization, data, and header (column) names
+        to work as expected. If the parsed sheet does not conform to the assumptions, this class will likely not work as
+        expected.
+
+    Args:
+        project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
+            target sheet stores all Sun Lab projects as individual tabs.
+        credentials_path: The path to the JSON file containing the service account credentials for accessing the Google
+            Sheet.
+        sheet_id: The ID of the Google Sheet containing the surgery data.
+
+    Attributes:
+        _project_name: Stores the target project name.
+        _sheet_id: Stores the ID of the target Google Sheet.
+        _service: The Google Sheets API service object used to fetch data from the target Google Sheet.
+        _headers: A dictionary that uses headers (column names) as keys and Google Sheet column names (A, B, etc.) as
+            values. This dictionary stores all user-defined headers used by the target Google Sheet tab.
+        _animals: Stores all animal IDs (names) whose data is stored in the target Google Sheet tab.
     """
 
     def __init__(
@@ -291,7 +318,7 @@ class _SurgerySheetData:
 
         # Generates the credentials' object to access the target Google Sheet. Since we are only reading the data from
         # the surgery log, we can use the 'readonly' access mode for added file safety.
-        credentials = Credentials.from_service_account_file(
+        credentials = Credentials.from_service_account_file(  # type: ignore
             filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets.readonly",)
         )
 
@@ -333,7 +360,7 @@ class _SurgerySheetData:
             .get(
                 spreadsheetId=sheet_id,
                 range=f"{self._project_name}!{id_column}2:{id_column}",  # row 2 onward, row 1 stores headers
-                majorDimension="COLUMNS"  # Gets data in column-major order
+                majorDimension="COLUMNS",  # Gets data in column-major order
             )
             .execute()
         )
@@ -346,7 +373,8 @@ class _SurgerySheetData:
             )
             console.error(message, error=RuntimeError)
 
-    def extract_animal_data(self, animal_id: int) -> None:
+    def extract_animal_data(self, animal_id: int) -> SurgeryData:
+        """Extracts the surgery data for the target animal and returns it as a SurgeryData object."""
         # Converts input ID to the same format as stored IDs for comparison
         formatted_id = str(animal_id).zfill(3)
 
@@ -368,15 +396,12 @@ class _SurgerySheetData:
         row_data = (
             self._service.spreadsheets()
             .values()
-            .get(
-                spreadsheetId=self._sheet_id,
-                range=f"'{self._project_name}'!{row_number}:{row_number}"
-            )
+            .get(spreadsheetId=self._sheet_id, range=f"'{self._project_name}'!{row_number}:{row_number}")
             .execute()
         )
 
         # Converts the data from dictionary format into a list of strings.
-        row_values = row_data.get("values")[0]
+        row_values = row_data.get("values")[0]  # type: ignore
 
         # Replaces empty cells and value placeholders ('n/a'', '--' or '---') with None.
         row_values = self._replace_empty_values(row_values)
@@ -401,7 +426,7 @@ class _SurgerySheetData:
             weight_g=float(animal_data["weight (g)"]),
             cage=int(animal_data["cage #"]),
             location_housed=animal_data["location housed"],
-            status=animal_data["status"]
+            status=animal_data["status"],
         )
 
         # Procedure Data. Similar to subject data, we expect all required headers to be present for all procedures.
@@ -414,17 +439,114 @@ class _SurgerySheetData:
             post_op_notes=animal_data["post-op notes"],
         )
 
-        # drug_data = DrugData(
-        #     lactated_ringers_solution_volume=animal_data["surgeon"],
-        #     ketoprofen_volume=animal_data["surgeon"],
-        #     buprenorphine_volume=animal_data["surgeon"],
-        #     dexamethasone_volume=animal_data["surgeon"],
-        # )
+        # Drug Data. Since early surgery log versions did not use drug / injection / implant codes, code parsing has
+        # fall-back default values (o). A code value of 0 should be interpreted as not having a code.
+        drug_data = DrugData(
+            lactated_ringers_solution_volume_ml=animal_data["lrs (ml)"],
+            lactated_ringers_solution_code=animal_data.get("lrs code", 0),
+            ketoprofen_volume_ml=animal_data["ketoprofen (ml)"],
+            ketoprofen_code=animal_data.get("ketoprofen code", 0),
+            buprenorphine_volume_ml=animal_data["buprenorphine (ml)"],
+            buprenorphine_code=animal_data.get("buprenorphine code", 0),
+            dexamethasone_volume_ml=animal_data["dexomethazone (ml)"],
+            dexamethasone_code=animal_data.get("dexomethazone code", 0),
+        )
 
-        print(procedure_data)
+        # Determines the number of implants and injections performed during the processed surgery. This is based on the
+        # assumption that all implants and injections are named like 'Implant1', 'Injection2_location', etc.:
+
+        # Compiles the regex pattern once for efficiency
+        digit_pattern = re.compile(r"\d+")
+
+        # Precreates the lists to store the digits associated with each implant and injection.
+        implant_numbers = []
+        injection_numbers = []
+
+        # Loops over all available headers and determines which implant(s) and injection(s) were performed.
+        for key in animal_data:
+            # This extraction only considers the 'main' column that stores the name of each implant and injection.
+            # Such columns do not contain the '_' separators.
+            if "_" not in key and ("implant" in key or "injection" in key):
+                # Finds the first occurrence of one or more digits and parses the digits as a number
+                match = digit_pattern.search(key)
+                if match:
+                    number = int(match.group())
+                    if "implant" in key:
+                        implant_numbers.append(number)
+                    else:  # If the key is not 'implant,' it must be an injection.
+                        injection_numbers.append(number)
+
+        # Extracts and packages the data for each implant into an ImplantData class instance. If the processed surgery
+        # did not use any implants, no ImplantData instances will be created. This is determined either by the
+        # placeholder list being empty or all implant column values being None (empty).
+        implants = []
+        for number in implant_numbers:
+            base_key = f"implant{number}"  # Precomputes the 'base' implant name, based on the number
+            implant_name = animal_data.get(base_key)  # Gets the name stored in the 'main' implant column
+
+            # If the implant name is 'None', the processed subject does not have this implant, despite the
+            # header being present. If the name is a string, processes the rest of the data
+            if implant_name is not None:
+                # Some surgeries (training ones) do not make use of stereotactic coordinates. In such cases, defaults
+                # to a set of zeroes to indicate no valid coordinates to parse.
+                ap, ml, dv = 0.0, 0.0, 0.0
+
+                # If a valid coordinate string is found, parses ap, ml and dv coordinates from the string.
+                coordinate_string = animal_data.get(f"{base_key}_coordinates")
+                if coordinate_string is not None:
+                    ap, ml, dv = _parse_stereotactic_coordinates(coordinate_string)
+
+                # Packages the data into an ImplantData class and appends it to the storage list.
+                implants.append(
+                    ImplantData(
+                        implant=implant_name,
+                        implant_target=animal_data[f"{base_key}_location"],
+                        implant_code=animal_data.get(f"{base_key}_code", 0),
+                        implant_ap_coordinate_mm=ap,
+                        implant_ml_coordinate_mm=ml,
+                        implant_dv_coordinate_mm=dv,
+                    )
+                )
+
+        # Same as implants, but parses injection data. The only minor difference is that InjectionData has an additional
+        # field to store injection volume in nanoliters.
+        injections = []
+        for num in injection_numbers:
+            base_key = f"injection{num}"
+            injection_name = animal_data.get(base_key)
+
+            if injection_name is not None:
+                ap, ml, dv = 0.0, 0.0, 0.0
+
+                coordinate_string = animal_data.get(f"{base_key}_coordinates")
+                if coordinate_string is not None:
+                    ap, ml, dv = _parse_stereotactic_coordinates(coordinate_string)
+
+                injections.append(
+                    InjectionData(
+                        injection=injection_name,
+                        injection_target=animal_data[f"{base_key}_location"],
+                        injection_volume_nl=animal_data[f"{base_key}_amount"],
+                        injection_code=animal_data.get(f"{base_key}_code", 0),
+                        injection_ap_coordinate_mm=ap,
+                        injection_ml_coordinate_mm=ml,
+                        injection_dv_coordinate_mm=dv,
+                    )
+                )
+
+        # Aggregates all data into a SurgeryData instance and returns it to caller
+        surgery_data = SurgeryData(
+            subject=subject_data, procedure=procedure_data, drugs=drug_data, implants=implants, injections=injections
+        )
+        return surgery_data
+
+    @property
+    def animals(self) -> tuple[str, ...]:
+        """Returns a tuple of animal IDs whose data can be parsed from the target Google Sheet."""
+        return self._animals
 
     @staticmethod
-    def _convert_index_to_column_letter(index):
+    def _convert_index_to_column_letter(index: int) -> str:
         """Converts a 0-based column index to an Excel-style (Google Sheet) column letter (A, B, C, ... Z, AA, AB, ...).
 
         This is used when parsing the available headers from the Google Sheet to generate the initial column to header
@@ -458,7 +580,7 @@ class _SurgerySheetData:
 
     @staticmethod
     def _replace_empty_values(row_data: list[str]) -> list[str | None]:
-        """ Replaces empty cells and cells containing 'n/a', '--' or '---' inside the input row_data list with None.
+        """Replaces empty cells and cells containing 'n/a', '--' or '---' inside the input row_data list with None.
 
         This internal method is used when retrieving animal data to filter out empty cells and values.
 
@@ -684,7 +806,9 @@ class DailyLog(YamlConfig):
     given_by: str | None = None
 
     def __init__(self, row: list[str], headers: list[str]):
-        self.date_time = _convert_date_time_to_timestamp(date=row[headers.index("date")], time=row[headers.index("time")])
+        self.date_time = _convert_date_time_to_timestamp(
+            date=row[headers.index("date")], time=row[headers.index("time")]
+        )
         self.weight = float(row[headers.index("weight (g)")] or self.weight)
         self.baseline_percent = float(row[headers.index("baseline %")] or self.baseline_percent)
         self.water_given = float(row[headers.index("water given (mL)")] or self.water_given)
@@ -839,6 +963,8 @@ class ParseData:
 
 s_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
 p_name = "Practice mice"
-creds = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
-data = _SurgerySheetData(project_name=p_name, credentials_path=creds, sheet_id=s_id)
-data.extract_animal_data(animal_id=2)
+creds = Path("/home/cybermouse/Downloads/sl-surgery-log-f15fefce6c3b.json")
+sheet = _SurgerySheetData(project_name=p_name, credentials_path=creds, sheet_id=s_id)
+data = sheet.extract_animal_data(animal_id=1)
+print(sheet.animals)
+print(data)
