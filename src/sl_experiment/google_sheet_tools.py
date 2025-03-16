@@ -1,3 +1,7 @@
+"""This module provides classes and methods used to interface with Google Sheet files to extract the stored data or
+write new data. primarily, these tools are used to synchronize the data acquired and stored during training and
+experiment runtimes with the data inside the lab's Google Sheets."""
+
 import re
 from typing import Any
 from pathlib import Path
@@ -7,9 +11,8 @@ from datetime import (
     datetime,
     timezone,
 )
-from dataclasses import field, dataclass
+from dataclasses import dataclass
 
-import numpy as np
 from ataraxis_base_utilities import console
 from ataraxis_data_structures import YamlConfig
 from googleapiclient.discovery import build
@@ -84,7 +87,7 @@ def _convert_date_time_to_timestamp(date: str, time: str) -> int:
     full_datetime = datetime.combine(date=date_obj, time=time_obj)
     full_datetime = full_datetime.replace(tzinfo=timezone.utc)
 
-    # Gets and translates second timestamp (float) into microseconds (int). The returns it to caller
+    # Gets and translates second timestamp (float) into microseconds (int). Then, returns it to caller
     return int(full_datetime.timestamp() * 1_000_000)
 
 
@@ -140,6 +143,31 @@ def _parse_stereotactic_coordinates(coordinate_string: str) -> tuple[float, floa
             dv_coordinate = _extract_coordinate_value(substring)
 
     return ap_coordinate, ml_coordinate, dv_coordinate
+
+
+def _convert_index_to_column_letter(index: int) -> str:
+    """Converts a 0-based column index to an Excel-style (Google Sheet) column letter (A, B, C, ... Z, AA, AB, ...).
+
+    This is used when parsing the available headers from the Google Sheet to generate the initial column-to-header
+    mapping dictionary.
+    """
+    result = ""
+    while index >= 0:
+        remainder = index % 26
+        result = chr(65 + remainder) + result  # 65 is ASCII for 'A'
+        index = index // 26 - 1
+    return result
+
+
+def _replace_empty_values(row_data: list[str]) -> list[str | None]:
+    """Replaces empty cells and cells containing 'n/a', '--' or '---' inside the input row_data list with None.
+
+    This is used when retrieving animal data to filter out empty cells and values.
+
+    Args:
+        row_data: The list of cell values from a single Google Sheet row.
+    """
+    return [None if cell.strip().lower() in {"", "n/a", "--", "---"} else cell for cell in row_data]
 
 
 @dataclass()
@@ -262,33 +290,37 @@ class DrugData:
 
 @dataclass
 class SurgeryData(YamlConfig):
-    """This dataclass aggregates all surgery data for a single procedure.
+    """Aggregates all data for a single mouse surgery procedure.
 
-    Notes:
-        Primarily, this class binds other dataclasses used in this module to encapsulate the access to all relevant
-        data in a single class instance.
+    This class aggregates other dataclass instances that store specific data about the surgical procedure. Primarily, it
+    is used to save the data as a .yaml file to the metadata directory of each animal used in every Sun lab project.
+    This way, the surgery data is always stored alongside the behavior and brain activity data collected during training
+    and experiments.
     """
 
     subject: SubjectData
+    """Stores the ID information about the subject (mouse)."""
     procedure: ProcedureData
+    """Stores general data about the surgical procedure."""
     drugs: DrugData
+    """Stores the data about the substances subcutaneously injected into the subject before, during and immediately 
+    after the surgical intervention."""
     implants: list[ImplantData]
+    """Stores the data for all cranial and transcranial implants introduced to the subject during the procedure."""
     injections: list[InjectionData]
+    """Stores the data about all substances infused into the brain of the subject during the surgery."""
 
 
-class _SurgerySheetData:
-    """Encapsulates the access to the target Google Sheet and provides methods for extracting animal surgery data.
+class _SurgerySheet:
+    """Encapsulates and provides access to the target Google Sheet that contains lab surgery logs.
 
-    This class binds Google Sheets API to connect and extract the data stored in a Google Sheet. It functions as the
-    central access point for the surgery log for each animal of every lab project.
+    This class uses Google Sheets API to connect to and extract the data stored in the surgery log Google Sheet file.
+    It functions as the central access point used to extract surgery data for each animal and project combination. The
+    extracted data is stored with the rest of the experiment and training data acquired as part of the project.
 
     Notes:
-        This class is designed to be used internally and should not be used outside the cli and automated methods
-        of this library.
-
-        This class relies on certain assumptions about the sheet layout, organization, data, and header (column) names
-        to work as expected. If the parsed sheet does not conform to the assumptions, this class will likely not work as
-        expected.
+        This class is purpose-built to work with the specific surgery log format used in the Sun lab. If the target
+        sheet or project tab layout does not conform to expectations, this class will likely not perform as intended.
 
     Args:
         project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
@@ -300,7 +332,7 @@ class _SurgerySheetData:
     Attributes:
         _project_name: Stores the target project name.
         _sheet_id: Stores the ID of the target Google Sheet.
-        _service: The Google Sheets API service object used to fetch data from the target Google Sheet.
+        _service: The Google Sheets API service instance used to fetch data from the target Google Sheet.
         _headers: A dictionary that uses headers (column names) as keys and Google Sheet column names (A, B, etc.) as
             values. This dictionary stores all user-defined headers used by the target Google Sheet tab.
         _animals: Stores all animal IDs (names) whose data is stored in the target Google Sheet tab.
@@ -348,8 +380,8 @@ class _SurgerySheetData:
         self._headers: dict[str, str] = {}
         for i, header in enumerate(header_values):
             # Converts column index to column letter (0 -> A, 1 -> B, etc.)
-            column_letter = self._convert_index_to_column_letter(i)
-            self._headers[str(header).lower()] = column_letter
+            column_letter = _convert_index_to_column_letter(i)
+            self._headers[str(header).strip().lower()] = column_letter
 
         # Retrieves all animal names (IDs) from the 'ID' column. Each ID is z-filled to a triple-digit string for
         # sorting to behave predictably. This data is stored as a tuple of IDs.
@@ -365,7 +397,7 @@ class _SurgerySheetData:
             .execute()
         )
         id_list = animal_ids.get("values", [[]])[0]
-        self._animals: tuple[str, ...] = tuple([str(animal_id).zfill(3) for animal_id in id_list])
+        self._animals: tuple[str, ...] = tuple([str(animal_id).zfill(5) for animal_id in id_list])
         if len(self._animals) == 0:
             message = (
                 f"Unable to parse the surgery data for the project {project_name} Google Sheet. The ID column of the "
@@ -374,9 +406,21 @@ class _SurgerySheetData:
             console.error(message, error=RuntimeError)
 
     def extract_animal_data(self, animal_id: int) -> SurgeryData:
-        """Extracts the surgery data for the target animal and returns it as a SurgeryData object."""
+        """Extracts the surgery data for the target animal and returns it as a SurgeryData object.
+
+        Primarily, this method is used by the SessionData class to extract and store the surgery data for each animal in
+        its persistent 'metadata' folder. This ensures that all data relevant for analysis is kept in the same place.
+
+        Args:
+            animal_id: The numeric ID of the animal whose data should be parsed by this method. It is expected that all
+                animals use numeric IDs (either project-specific or unique across all projects) as 'names'.
+
+        Returns:
+            A fully configured SurgeryData instance that stores the extracted data. Use the 'to_yaml' method of the
+            returned instance to save the data to disk as a .yaml file.
+        """
         # Converts input ID to the same format as stored IDs for comparison
-        formatted_id = str(animal_id).zfill(3)
+        formatted_id = str(animal_id).zfill(5)
 
         # Checks if the animal ID exists in the tuple of animal IDs generated at class initialization. If not, raises an
         # error
@@ -404,7 +448,7 @@ class _SurgerySheetData:
         row_values = row_data.get("values")[0]  # type: ignore
 
         # Replaces empty cells and value placeholders ('n/a'', '--' or '---') with None.
-        row_values = self._replace_empty_values(row_values)
+        row_values = _replace_empty_values(row_values)
 
         # Creates a dictionary mapping headers (column names) to the animal-specific extracted values for these
         # headers. This procedure assumes that the headers are contiguous, start from row A and the animal has data for
@@ -542,22 +586,14 @@ class _SurgerySheetData:
 
     @property
     def animals(self) -> tuple[str, ...]:
-        """Returns a tuple of animal IDs whose data can be parsed from the target Google Sheet."""
+        """Returns a tuple of animal IDs whose data is stored inside the managed project tab of the target Google
+        Sheet."""
         return self._animals
 
-    @staticmethod
-    def _convert_index_to_column_letter(index: int) -> str:
-        """Converts a 0-based column index to an Excel-style (Google Sheet) column letter (A, B, C, ... Z, AA, AB, ...).
-
-        This is used when parsing the available headers from the Google Sheet to generate the initial column to header
-        mapping dictionary.
-        """
-        result = ""
-        while index >= 0:
-            remainder = index % 26
-            result = chr(65 + remainder) + result  # 65 is ASCII for 'A'
-            index = index // 26 - 1
-        return result
+    @property
+    def headers(self) -> tuple[str, ...]:
+        """Returns a tuple of headers (column names) used by the managed project tab of the target Google Sheet."""
+        return tuple(self._headers.keys())
 
     def _get_column_id(self, column_name: str) -> str | None:
         """Returns the Google Sheet column ID (letter) for the given column name.
@@ -578,148 +614,249 @@ class _SurgerySheetData:
         else:
             return None
 
-    @staticmethod
-    def _replace_empty_values(row_data: list[str]) -> list[str | None]:
-        """Replaces empty cells and cells containing 'n/a', '--' or '---' inside the input row_data list with None.
-
-        This internal method is used when retrieving animal data to filter out empty cells and values.
-
-        Args:
-            row_data: The list of cell values from a single Google Sheet row.
-        """
-        return [None if cell.strip().lower() in {"", "n/a", "--", "---"} else cell for cell in row_data]
-
 
 class _WaterSheetData:
-    """
-    This class initializes key identifiers for the Google Sheet, including the spreadsheet URL,
-    the cell range, and all tabs within the sheet. OAuth 2.0 scopes are used to link
-    and grant access to Google APIs for data parsing.
+    """Encapsulates and provides access to the target Google Sheet that contains project water-restriction data.
+
+    This class uses Google Sheets API to connect to and update the data stored in the water restriction log Google Sheet
+    file. It functions as the central access point used to update the water restriction data for each animal after
+    training and experiment sessions. Primarily, this is used as a convenience and data synchronization feature that
+    allows experimenters to synchronize runtime data with the Google Sheet tracker, instead of entering it manually.
+
+    Notes:
+        This class is purpose-built to work with the specific water restriction log format used in the Sun lab. If the
+        target sheet layout does not conform to expectations, this class will likely not perform as intended.
+
+        In contrast to the surgery log, the water restriction log does not store project-specific information. While
+        the general assumption is that each project uses a unique water restriction log file, the system also supports
+        experimenters that use unique IDs for all mice, across all projects.
 
     Args:
-        tab name: Stores a list of tab names for the water log, where each tab corresponds to an individual mouse ID.
-        row_data: Stores data from each row when it is processed to replace empty or irrelevant cells.
-        range_name: Stores the range of the sheet to parse data from. The range is set to the entire sheet by default.
+        animal_id: The ID of the animal whose data will be written by this class instance.
+        credentials_path: The path to the JSON file containing the service account credentials for accessing the Google
+            Sheet.
+        sheet_id: The ID of the Google Sheet containing the water restriction data for the target project.
+
+
+    Attributes:
+        _sheet_id: Stores the ID of the target Google Sheet.
+        _service: The Google Sheets API service instance used to write data to the target Google Sheet.
+        _animals: Stores all animal IDs (names) whose data is stored in the target Google Sheet.
+        _headers: A dictionary that uses headers (column names) as keys and Google Sheet column names (A, B, etc.) as
+            values. This dictionary stores all user-defined headers used by the target Google Sheet tab (animal tab).
+        _sheet_id_numeric: The numeric ID of the tab that stores the data for the managed animal. This is used to write
+         the data to the target animal's tab.
     """
 
-    def __init__(self) -> None:
-        self.sheet_id = "1AofPA9J2jqg8lORGfc-rKn5s8YCr6EpH9ZMsUoWzcHQ"
-        self.range = "A1:Z"
-        self.SERVICE_ACCOUNT_FILE = "/Users/natalieyeung/Documents/GitHub/sl-mesoscope/water_log.json"
-        self.SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-        self.data: dict[str, list[list[str | None]]] = {}
+    def __init__(
+        self,
+        animal_id: int,
+        credentials_path: Path,
+        sheet_id: str,
+    ):
+        # Saves ID data to be reused during later instance method calls.
+        self._animal_id = animal_id
+        self._sheet_id = sheet_id
 
-    def _get_service(self) -> build:
+        # Generates the credentials' object to access the target Google Sheet. In contrast to surgery data, this object
+        # requires write access.
+        credentials = Credentials.from_service_account_file(  # type: ignore
+            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets",)
+        )
+
+        # Uses the credentials' object to build the access service for the target Google Sheet. This service is then
+        # used to write the sheet data via HTTP request(s).
+        self._service = build(serviceName="sheets", version="v4", credentials=credentials)
+
+        # Gets all tab names from the sheet metadata
+        sheet_metadata = self._service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        tabs = sheet_metadata.get("sheets", [])
+
+        # Filters for tabs with digit-only names and extract them as animal IDs. This relies on all water restriction
+        # logs following the general lab design, where tabs are named after animal numeric IDs and each tab is used to
+        # store the animals' data.
+        animal_ids = []
+        self._sheet_id_numeric = None  # Initialize the numeric sheet ID
+
+        for tab in tabs:
+            tab_name = tab["properties"]["title"]
+            tab_id = tab["properties"]["sheetId"]
+
+            if tab_name.isdigit():  # Checks if the tab name contains only digits
+                animal_ids.append(tab_name)
+
+                # If this tab matches the target animal ID, stores its numeric sheet ID to the attribute
+                if int(tab_name) == self._animal_id:
+                    self._sheet_id_numeric = tab_id
+
+        # Formats the animal IDs with zero-padding for consistent sorting
+        self._animals: tuple[str, ...] = tuple([str(animal_id).zfill(5) for animal_id in animal_ids])
+
+        # If no IDs are extracted, raises an error. This usually indicates that the target Google Sheet is not formatted
+        # appropriately.
+        if len(self._animals) == 0:
+            message = (
+                "Unable to parse animal IDs from the Google Sheet tab data. No tabs with digit-only names found, "
+                "indicating that the target Google Sheet file does not contain any animal data."
+            )
+            console.error(message, error=RuntimeError)
+
+        # Otherwise, if the target animal ID is not in the extracted IDs list, raises an error.
+        if str(self._animal_id).zfill(5) not in self._animals:
+            message = (
+                f"Unable to interface with the water restriction log file for the animal with id {self._animal_id}. "
+                f"The target Google Sheet only contains the tabs for animals with IDs: "
+                f"{[int(animal) for animal in sorted(self._animals)]}."
+            )
+            console.error(message, error=RuntimeError)
+
+        # Retrieves all values stored in the second row of the Google Sheet tab with the name that matches the target
+        # animal ID. Note, this is in contrast to the Surgery data log, where the headers are stored in the first sheet
+        # row.
+        headers = (
+            self._service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"'{self._animal_id}'!2:2")  # extracts the entire second row
+            .execute()
+        )
+
+        # Converts headers to a list of strings and raises an error if the header list is empty
+        header_values = headers.get("values", [[]])[0]
+        if not header_values:
+            message = (
+                f"Unable to parse the water restriction header data from the Google Sheet for the animal "
+                f"{self._animal_id}. The second row of the target tab appears to be empty. Instead, the second row "
+                f"should contain the column headers."
+            )
+            console.error(message, error=RuntimeError)
+
+        # Creates a dictionary mapping header values to Google Sheet column letters
+        self._headers: dict[str, str] = {}
+        for i, header in enumerate(header_values):
+            # Converts column index to column letter (0 -> A, 1 -> B, etc.)
+            column_letter = _convert_index_to_column_letter(i)
+            self._headers[str(header).strip().lower()] = column_letter
+
+    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str) -> None:
+        """Updates the water restriction log for the managed animal with today's training or experiment data.
+
+        This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water
+        restriction log with the experimenter-provided data, extracted from the descriptor .yaml file. This allows
+        experimenters to only enter 'manually' gathered data once, instead of entering it both in the .yaml file and
+        the Google Sheet log.
+
+        Notes:
+            For this method to work as intended, the target water restriction log tab must be pre-filled with dates
+            at least up to today's data. The method searches the 'date' column for today's date and uses it to determine
+            which row of the table to update with data.
+
+        Args:
+            mouse_weight: The weight of the mouse, in grams, at the beginning of the training or experiment session.
+            water_ml: The volume of water, in milliliters, given to the animal automatically (during runtime) and
+                manually (by the experimenter, after runtime).
+            experimenter_id: The ID of the experimenter running the training or experiment session.
         """
-        Authenticates the Google Sheets API using the service account credentials and the defined API scope.
-        It then builds and returns the Google Sheets API service client to enable the script to interact with
-        the sheet.
+        # Gets today's date
+        today = datetime.now().strftime("%-m/%-d/%y")
+
+        # Finds the row inside the water restriction log file with today's date. This assumes that the log file is
+        # pre-filled with dates.
+        row_index = self._find_date_row(today)
+
+        # Gets the current time in the same format as used in row 3 (baseline row)
+        current_time = datetime.now().strftime("%H:%M")
+
+        # Writes each value to the appropriate column, using the same formatting as used in row 3
+        self._write_value("weight (g)", row_index, str(mouse_weight))
+        self._write_value("given by:", row_index, experimenter_id)
+        self._write_value("water given (ml)", row_index, str(water_ml))
+        self._write_value("time", row_index, current_time)
+
+    def _find_date_row(self, target_date: str) -> int:
+        """Finds the row index inside the manged water restriction log file containing the target date.
+
+        This is used when updating the log with new data to determine which row to write the data to.
+
+        Args:
+            target_date: The date to find in 'mm/dd/yyyy' format.
+
+        Returns:
+            The row index (1-based), containing the target date.
+
+        Raises:
+            ValueError: If the target data is not found inside the managed Google Sheet file.
         """
-        creds = Credentials.from_service_account_file(self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES)  # type: ignore
-        return build("sheets", "v4", credentials=creds)
+        # Gets the date column letter
+        date_column = self._headers["date"]
 
-    def _get_tab_data(self, tab_name: str) -> list[list[str]]:
+        # Retrieves all dates from the date column (row 3 and below)
+        date_data = (
+            self._service.spreadsheets()
+            .values()
+            .get(spreadsheetId=self._sheet_id, range=f"'{self._animal_id}'!{date_column}3:{date_column}")
+            .execute()
+        )
+        date_values = date_data.get("values", [])
+
+        # Finds the row with the target date
+        row_index = -1
+        for i, date_cell in enumerate(date_values):
+            # Checks if the cell has a value matching the target date
+            if date_cell and date_cell[0] == target_date:
+                # Adds 3 to account for 0-indexing and the fact we started from row 3
+                row_index = i + 3
+                break
+        else:
+            message = (
+                f"No row found for date {target_date} in the water restriction log file for the animal "
+                f"{self._animal_id}. The water restriction log must be pre-filled with dates at least up to today's "
+                f"date for this class to function."
+            )
+            console.error(message, error=ValueError)
+
+        return row_index
+
+    def _write_value(self, column_name: str, row_index: int, value: str) -> None:
+        """Writes the input value to the specific cell based on column name and row index.
+
+        This is the primary method used to write new values to the managed water restriction log Google Sheet.
+
+        Args:
+            column_name: The name of the column to write to.
+            row_index: The row index (1-based) to write to.
+            value: The value to write.
         """
-        Retrieves data from the specified tab in the Google Sheet.
-        """
-        service = self._get_service()
-        range_name = f"'{tab_name}'!{self.range}"
-        result = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
-        # return result.get("values", [])
-        values = result.get("values", [])
-        return values
+        # Gets the column letter for the specified column name
+        column_letter = self._headers[column_name.lower()]
 
-    def _fetch_data_from_tab(self, tab_name: str) -> None:
-        """
-        Fetches data from the specified tab, processes it, and stores it in self.data.
-        """
-        tab_data = self._get_tab_data(tab_name)
-        self.data[tab_name] = self._replace_empty(tab_data)
+        # Defines the cell range based on the column letter and row index
+        cell_range = f"{column_letter}{row_index}"
 
-    def _replace_empty(self, row_data: list[list[str]]) -> list[list[str | None]]:
-        """
-        Replaces empty cells and cells containing 'n/a', '--' or '---' with None. This funcation
-        also ensures that cells in the main grid are processed and that all rows  have equal length.
-        """
-        result: list[list[str | None]] = []
-
-        for row in row_data:
-            processed_row: list[str | None] = []
-
-            for cell in row:
-                if cell.strip().lower() in {"n/a", "--", "---", ""}:
-                    processed_row.append(None)
-                else:
-                    processed_row.append(cell)
-            result.append(processed_row)
-
-        max_row_length = max(len(row) for row in result)
-
-        for row in result:
-            row.extend([""] * (max_row_length - len(row)))
-
-        return result
-
-    def _get_tab_names(self) -> list[str]:
-        """
-        Retrieves the metadata including the names of all tabs in the Google Sheet.
-        """
-        service = self._get_service()
-        sheet_metadata = service.spreadsheets().get(spreadsheetId=self.sheet_id).execute()
-        sheets = sheet_metadata.get("sheets", "")
-        return [sheet["properties"]["title"] for sheet in sheets]
-
-
-class _WriteData(_WaterSheetData):
-    """
-    This class provides write access to the water restriction log Google Sheet to update daily water
-    log records. It allows the script to modify specific attributes within the sheet, such as
-    weight (g), water given (mL), the NetID of the water provider, and the time. The cell to update
-    is located based on the mouse ID and date.
-
-    Args:
-        mouseID: Identifies the mouse for which data is being updated. The mouseID is
-                 used to locate the corresponding tab to update.
-        date: Stores the date corresponding to the row that should be updated.
-        attribute: The specific column header to update.
-        value(s): The new value to be written into the cell.
-    """
-
-    def _write_to_sheet(self, tab_name: str, range_name: str, values: list[list[str]]) -> None:
-        """
-        This method handles connection and write access to the Google Sheets API. It allows data
-        to be written to multiple cells within a specified range. It also configures the formatting
-        of the written data to be centered within the cell.
-        """
-
-        service = self._get_service()
-        full_range = f"'{tab_name}'!{range_name}"
-        body = {"values": values}
-        service.spreadsheets().values().update(
-            spreadsheetId=self.sheet_id, range=full_range, valueInputOption="RAW", body=body
+        # Writes the value to the target cell
+        body = {"values": [[value]]}
+        self._service.spreadsheets().values().update(
+            spreadsheetId=self._sheet_id,
+            range=f"'{self._animal_id}'!{cell_range}",
+            valueInputOption="RAW",
+            body=body,  # type: ignore
         ).execute()
 
-        col_letter = range_name[0].upper()
-        row_number = int(range_name[1:])
-        col_index = ord(col_letter) - ord("A")
-        sheet_metadata = service.spreadsheets().get(spreadsheetId=self.sheet_id).execute()
+        # Transforms the column letter and the row index to the format necessary to apply formatting to the newly
+        # written value.
+        col_index = 0
+        for char in column_letter.upper():
+            col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+        col_index -= 1  # Converts to 0-based index
+        row_index_zero_based = row_index - 1
 
-        sheet_id = None
-        for sheet in sheet_metadata["sheets"]:
-            if sheet["properties"]["title"] == tab_name:
-                sheet_id = sheet["properties"]["sheetId"]
-                break
-
-        if sheet_id is None:
-            raise ValueError(f"Tab '{tab_name}' not found in the Google Sheet.")
-
+        # Applies formatting to the newly written value using the cached sheet ID
         requests = [
             {
                 "repeatCell": {
                     "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": row_number - 1,
-                        "endRowIndex": row_number,
+                        "sheetId": self._sheet_id_numeric,
+                        "startRowIndex": row_index_zero_based,
+                        "endRowIndex": row_index_zero_based + 1,
                         "startColumnIndex": col_index,
                         "endColumnIndex": col_index + 1,
                     },
@@ -728,243 +865,17 @@ class _WriteData(_WaterSheetData):
                 }
             }
         ]
+        self._service.spreadsheets().batchUpdate(
+            spreadsheetId=self._sheet_id,
+            body={"requests": requests},  # type: ignore
+        ).execute()
 
-        service.spreadsheets().batchUpdate(spreadsheetId=self.sheet_id, body={"requests": requests}).execute()
+    @property
+    def animals(self) -> tuple[str, ...]:
+        """Returns a tuple of animal IDs whose data is stored inside the target Google Sheet."""
+        return self._animals
 
-    def _write_to_cell(self, mouseID: int, date: str, attribute: str, value: str) -> None:
-        """
-        Writes a specific value to the Google Sheet based on mouse ID, date, and attribute. The
-        correct row is located using the input date and the corresponding attribute in the headers
-        headers list.
-        """
-
-        tab_name = str(mouseID)
-        self._fetch_data_from_tab(tab_name)
-        tab_data = self.data.get(tab_name, [])
-
-        row_index = -1
-        for i, row in enumerate(tab_data):
-            if not row or len(row) <= 1:
-                continue
-            if row[1] == date:
-                row_index = i
-                break
-
-        if row_index == -1:
-            raise ValueError(f"No row found for date {date} in tab {tab_name}.")
-
-        headers = tab_data[1]
-        if attribute == "weight":
-            value = float(value)
-            col_index = headers.index("weight (g)")
-
-        elif attribute == "given by":
-            col_index = headers.index("given by:")
-
-        elif attribute == "water given":
-            col_index = headers.index("water given (mL)")
-
-        elif attribute == "time":
-            _convert_date_time_to_timestamp(date, value)
-            col_index = headers.index("time")
-
-        else:
-            raise ValueError(
-                f"Invalid attribute: {attribute}. Only 'weight', 'given by:', 'water given (mL)', and 'time' can be updated."
-            )
-
-        tab_data[row_index][col_index] = value
-        col_letter = chr(ord("A") + col_index)
-        row_number = row_index + 1
-        cell_range = f"{col_letter}{row_number}"
-
-        self._write_to_sheet(tab_name, cell_range, [[value]])
-
-
-@dataclass
-class DailyLog(YamlConfig):
-    """
-    This class stores the daily tracking data and water intake metrics for a mouse during
-    the water restriction period.
-
-    Args:
-        row: A list of values representing a single row of data from the Google Sheet.
-        headers: A list mapping column names (headers) to their respective indices in the row.
-
-    Attributes:
-        date_time: Stores the date and time water was provided to the mouse.
-        weight: Stores the weight of the mouse.
-        baseline_percent: Stores the percentage relative to the mouse's original weight.
-        water_given: Stores the amount of water provided to water per day in mL.
-        given_by: Stores the netID of the water provider.
-    """
-
-    date_time: np.uint64 = np.uint64(0)
-    weight: float = 0.0
-    baseline_percent: float = 0.0
-    water_given: float = 0.0
-    given_by: str | None = None
-
-    def __init__(self, row: list[str], headers: list[str]):
-        self.date_time = _convert_date_time_to_timestamp(
-            date=row[headers.index("date")], time=row[headers.index("time")]
-        )
-        self.weight = float(row[headers.index("weight (g)")] or self.weight)
-        self.baseline_percent = float(row[headers.index("baseline %")] or self.baseline_percent)
-        self.water_given = float(row[headers.index("water given (mL)")] or self.water_given)
-        self.given_by = row[headers.index("given by:")] or self.given_by
-
-
-@dataclass
-class MouseKey(YamlConfig):
-    """
-    This class stores a mouse's identifying details and daily water restriction data from the
-    DailyLog class.
-
-    Args:
-        row: A list of values representing a single row of data from the Google Sheet.
-        headers: A list mapping column names (headers) to their respective indices in the row.
-
-    Attributes:
-        mouse_id: Stores the mouseID. The mouseID corresponds to the ID on the surgery log.
-        cage: Stores the cage number which the mouse is placed in.
-        ear_punch: Stores whether the mouse has an ear punch in either ear.
-        sex: Stores the gender of the mouse.
-        baseline_weight: Stores the original weight of the mouse.
-        target_weight: Stores the weight goal for the mouse during water restriction.
-        daily_log: A dictionary storing instances of the DailyLog class, where each entry
-                   corresponds to a specific date and contains the water log data on the day.
-    """
-
-    mouse_id: int = 0
-    cage: int = 0
-    ear_punch: str | None = None
-    baseline_weight: float = 0.0
-    target_weight: float = 0.0
-    sex: str | None = None
-    daily_log: dict[str, DailyLog] = field(default_factory=dict)
-
-    def __init__(self, row: list[str], headers: list[str]):
-        self.mouse_id = int(row[headers.index("mouse")])
-        self.cage = int(row[headers.index("cage #")])
-        self.ear_punch = row[headers.index("ID (ear)")]
-        self.sex = row[headers.index("sex")]
-        self.baseline_weight = float(row[headers.index("baseline weight (g)")])
-        self.target_weight = float(row[headers.index("target weight (g)")])
-        self.daily_log = {}
-
-    def __repr__(self) -> str:
-        """
-        Returns a string representation of the MouseKey instance including all attributes
-        from the MouseKey class and data from the DailyLog class.
-        """
-        daily_log_str = ", ".join([f"{date}: {log}" for date, log in self.daily_log.items()])
-        return (
-            f"MouseKey(mouse_id={self.mouse_id}, "
-            f"cage={self.cage}, "
-            f"ear_punch={self.ear_punch}, "
-            f"sex={self.sex}, "
-            f"baseline_weight={self.baseline_weight}, "
-            f"target_weight={self.target_weight}, "
-            f"daily_log={{{daily_log_str}}})"
-        )
-
-
-class ParseData:
-    """
-    Parses data from a Google Sheet for a specific mouse.
-
-    Args:
-        tab_name: Stores the name of the tab containing the key identification information
-                  for all mice.
-        mouse_id: Stores the specific ID of the mouse to retrieve data from.
-        date: Stores the specific date of the water log entry to fetch.
-
-    Attributes:
-        mouse_classes: A dictionary that maps mouse IDs to their respective MouseKey subclasses.
-        mouse_instances: A dictionary that maps mouse IDs to their initialized MouseKey instances containing
-                         the mouse's data and corresponding daily logs.
-    """
-
-    def __init__(self, tab_name: str, mouse_id: int, date: str):
-        self.tab_name = tab_name
-        self.mouse_id = mouse_id
-        self.date = date
-        self.sheet_data = _WaterSheetData()
-        self.sheet_data._fetch_data_from_tab(tab_name)
-        self.mouse_classes: dict[str, MouseKey] = {}
-        self.mouse_instances: dict[str, MouseKey] = {}
-        self._create_mouse_subclasses()
-        self._link_to_tab()
-
-    def _extract_mouse_id(self, tab_data: list[list[str]], mouse_col_index: int) -> list[int]:
-        """
-        Extracts unique mouse IDs from the main tab containing key identification information
-        for each mice.
-        """
-        mouse_ids = []
-
-        for row in tab_data[1:]:
-            if len(row) > mouse_col_index:
-                try:
-                    mouse_id = int(row[mouse_col_index])
-                    if mouse_id not in mouse_ids:
-                        mouse_ids.append(mouse_id)
-                except ValueError:
-                    print(f"Invalid mouse ID: {row[mouse_col_index]}")
-        return mouse_ids
-
-    def _create_mouse_subclasses(self) -> None:
-        """
-        Creates a subclass for the specified mouse and initializes its instance with data.
-
-        This method checks if the given mouse ID exists in the sheet. If found, it creates
-        a subclass of MouseKey named Mouse_<mouse_id> and finds the corresponding row in the dataset
-        and initializes it.
-        """
-
-        tab_data = self.sheet_data.data.get(self.tab_name, [])
-        headers = tab_data[0]
-        mouse_col_index = headers.index("mouse")
-
-        if self.mouse_id in self._extract_mouse_id(tab_data, mouse_col_index):
-            subclass_name = f"Mouse_{self.mouse_id}"
-            self.mouse_classes[self.mouse_id] = type(subclass_name, (MouseKey,), {})
-
-            for row in tab_data[1:]:
-                if int(row[mouse_col_index]) == self.mouse_id:
-                    self.mouse_instances[self.mouse_id] = MouseKey(row, headers)
-                    break
-
-    def _link_to_tab(self) -> None:
-        """
-        This method links the mouse ID to its corresponding tab and initializes DailyLog subclasses.
-        If the tab corresponding to the mouseID is found, it creates a DailyLog instance for
-        every date and stores it in the daily_log dictionary of the corresponding mouse instance.
-        """
-
-        all_tabs = self.sheet_data._get_tab_names()
-        tab_name = str(self.mouse_id)
-
-        if tab_name in all_tabs:
-            self.sheet_data._fetch_data_from_tab(tab_name)
-
-            linked_tab_data = self.sheet_data.data[tab_name]
-            headers = linked_tab_data[1]
-            data_rows = linked_tab_data[2:]
-
-            for row in data_rows:
-                if len(row) > 1:
-                    date = row[headers.index("date")]
-                    if date and (self.date in [None, date]):
-                        daily_log = DailyLog(row, headers)
-                        self.mouse_instances[self.mouse_id].daily_log[date] = daily_log
-
-
-s_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
-p_name = "Practice mice"
-creds = Path("/home/cybermouse/Downloads/sl-surgery-log-f15fefce6c3b.json")
-sheet = _SurgerySheetData(project_name=p_name, credentials_path=creds, sheet_id=s_id)
-data = sheet.extract_animal_data(animal_id=1)
-print(sheet.animals)
-print(data)
+    @property
+    def headers(self) -> tuple[str, ...]:
+        """Returns a tuple of headers (column names) used by the managed animal tab of the target Google Sheet."""
+        return tuple(self._headers.keys())

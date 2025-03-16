@@ -1516,7 +1516,7 @@ class MesoscopeExperiment:
         )
 
 
-class _BehavioralTraining:
+class BehaviorTraining:
     """The base class for all behavioral training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
@@ -2046,7 +2046,7 @@ class _BehavioralTraining:
 
 
 def lick_training_logic(
-    runtime: _BehavioralTraining,
+    runtime: BehaviorTraining,
     average_reward_delay: int = 12,
     maximum_deviation_from_mean: int = 6,
     maximum_water_volume: float = 1.0,
@@ -2411,7 +2411,7 @@ def calibrate_valve_logic(
 
 
 def run_train_logic(
-    runtime: _BehavioralTraining,
+    runtime: BehaviorTraining,
     initial_speed_threshold: float = 0.05,
     initial_duration_threshold: float = 0.05,
     speed_increase_step: float = 0.05,
