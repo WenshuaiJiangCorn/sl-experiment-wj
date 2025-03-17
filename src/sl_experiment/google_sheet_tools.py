@@ -492,8 +492,8 @@ class _SurgerySheet:
             ketoprofen_code=animal_data.get("ketoprofen code", 0),
             buprenorphine_volume_ml=animal_data["buprenorphine (ml)"],
             buprenorphine_code=animal_data.get("buprenorphine code", 0),
-            dexamethasone_volume_ml=animal_data["dexomethazone (ml)"],
-            dexamethasone_code=animal_data.get("dexomethazone code", 0),
+            dexamethasone_volume_ml=animal_data["dexamethasone (ml)"],
+            dexamethasone_code=animal_data.get("dexamethasone code", 0),
         )
 
         # Determines the number of implants and injections performed during the processed surgery. This is based on the
@@ -509,8 +509,8 @@ class _SurgerySheet:
         # Loops over all available headers and determines which implant(s) and injection(s) were performed.
         for key in animal_data:
             # This extraction only considers the 'main' column that stores the name of each implant and injection.
-            # Such columns do not contain the '_' separators.
-            if "_" not in key and ("implant" in key or "injection" in key):
+            # Such columns do not contain the whitespace separators between multiple words.
+            if " " not in key.strip() and ("implant" in key or "injection" in key):
                 # Finds the first occurrence of one or more digits and parses the digits as a number
                 match = digit_pattern.search(key)
                 if match:
@@ -535,8 +535,8 @@ class _SurgerySheet:
                 # to a set of zeroes to indicate no valid coordinates to parse.
                 ap, ml, dv = 0.0, 0.0, 0.0
 
-                # If a valid coordinate string is found, parses ap, ml and dv coordinates from the string.
-                coordinate_string = animal_data.get(f"{base_key}_coordinates")
+                # If a valid coordinate string is found, parses ap, ml, and dv coordinates from the string.
+                coordinate_string = animal_data.get(f"{base_key} coordinates")
                 if coordinate_string is not None:
                     ap, ml, dv = _parse_stereotactic_coordinates(coordinate_string)
 
@@ -544,8 +544,8 @@ class _SurgerySheet:
                 implants.append(
                     ImplantData(
                         implant=implant_name,
-                        implant_target=animal_data[f"{base_key}_location"],
-                        implant_code=animal_data.get(f"{base_key}_code", 0),
+                        implant_target=animal_data[f"{base_key} location"],
+                        implant_code=animal_data.get(f"{base_key} code", 0),
                         implant_ap_coordinate_mm=ap,
                         implant_ml_coordinate_mm=ml,
                         implant_dv_coordinate_mm=dv,
@@ -562,16 +562,16 @@ class _SurgerySheet:
             if injection_name is not None:
                 ap, ml, dv = 0.0, 0.0, 0.0
 
-                coordinate_string = animal_data.get(f"{base_key}_coordinates")
+                coordinate_string = animal_data.get(f"{base_key} coordinates")
                 if coordinate_string is not None:
                     ap, ml, dv = _parse_stereotactic_coordinates(coordinate_string)
 
                 injections.append(
                     InjectionData(
                         injection=injection_name,
-                        injection_target=animal_data[f"{base_key}_location"],
-                        injection_volume_nl=animal_data[f"{base_key}_amount"],
-                        injection_code=animal_data.get(f"{base_key}_code", 0),
+                        injection_target=animal_data[f"{base_key} location"],
+                        injection_volume_nl=animal_data[f"{base_key} volume (nl)"],
+                        injection_code=animal_data.get(f"{base_key} code", 0),
                         injection_ap_coordinate_mm=ap,
                         injection_ml_coordinate_mm=ml,
                         injection_dv_coordinate_mm=dv,
@@ -879,3 +879,4 @@ class _WaterSheetData:
     def headers(self) -> tuple[str, ...]:
         """Returns a tuple of headers (column names) used by the managed animal tab of the target Google Sheet."""
         return tuple(self._headers.keys())
+    

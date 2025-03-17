@@ -730,7 +730,7 @@ def run_experiment() -> None:
 )
 def get_surgery_data(animal: str, project: str) -> None:
     surgery_sheet_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
-    credentials_path = Path("/home/cybermouse/Downloads/sl-surgery-log-f15fefce6c3b.json")
+    credentials_path = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
     sheet = _SurgerySheet(project_name=project, credentials_path=credentials_path, sheet_id=surgery_sheet_id)
     data = sheet.extract_animal_data(animal_id=int(animal))
     console.echo(message=f"{data}", level=LogLevel.SUCCESS)
@@ -746,7 +746,7 @@ def get_surgery_data(animal: str, project: str) -> None:
 )
 def write_water_restriction_data(animal: str) -> None:
     water_restriction_sheet_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
-    credentials_path = Path("/home/cybermouse/Downloads/sl-surgery-log-f15fefce6c3b.json")
+    credentials_path = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
     sheet = _WaterSheetData(
         animal_id=int(animal), credentials_path=credentials_path, sheet_id=water_restriction_sheet_id
     )
