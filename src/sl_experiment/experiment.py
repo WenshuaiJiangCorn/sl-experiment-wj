@@ -29,17 +29,19 @@ from .binding_classes import _HeadBar, _LickPort, _VideoSystems, _ZaberPositions
 from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import ValveInterface
 from .data_preprocessing import process_log_data, process_mesoscope_directory
+from .google_sheet_tools import SurgeryData, _SurgerySheet, _WaterSheetData
 
 
 @dataclass()
 class _LickTrainingDescriptor(YamlConfig):
     """This class is used to save the description information specific to lick training sessions as a .yaml file."""
 
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
     session_type: str = "lick_training"
-    """
-    The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
-    "mesoscope_experiment". This field is hardcoded and should not be modified.
-    """
+    """The type of the session."""
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
     average_reward_delay_s: int = 12
@@ -54,17 +56,21 @@ class _LickTrainingDescriptor(YamlConfig):
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
     notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
 
 
 @dataclass()
 class _RunTrainingDescriptor(YamlConfig):
     """This class is used to save the description information specific to run training sessions as a .yaml file."""
 
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
     session_type: str = "run_training"
-    """
-    The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
-    "mesoscope_experiment". This field is hardcoded and should not be modified.
-    """
+    """The type of the session."""
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
     final_running_speed_cm_s: float = 0.0
@@ -96,22 +102,29 @@ class _RunTrainingDescriptor(YamlConfig):
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
     notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
 
 
 @dataclass()
 class _MesoscopeExperimentDescriptor(YamlConfig):
     """This class is used to save the description information specific to experiment sessions as a .yaml file."""
 
-    session_type: str = "mesoscope_experiment"
-    """
-    The type of the session. Currently, the following options are supported: "lick_training", "run_training", and 
-    "mesoscope_experiment". This field is hardcoded and should not be modified.
-    """
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    session_type: str = "experiment"
+    """The type of the session."""
     dispensed_water_volume_ul: float = 0.0
     """Stores the total water volume, in microliters, dispensed during runtime."""
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
     notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
 
 
 class KeyboardListener:
@@ -123,10 +136,6 @@ class KeyboardListener:
     rewards via the lick-tube.
 
     Notes:
-        While our training logic functions automatically make use of this class, it is NOT explicitly part of the
-        MesoscopeExperiment class runtime. We highly encourage incorporating this class into all experiment runtimes to
-        provide similar APi as done by our training runtimes.
-
         This monitor may pick up keyboard strokes directed at other applications during runtime. While our unique key
         combination is likely to not be used elsewhere, exercise caution when using other applications alongside the
         runtime code.
@@ -300,7 +309,7 @@ class SessionData:
 
     Notes:
         Do not call methods from this class directly. This class is intended to be used through the MesoscopeExperiment
-        and BehavioralTraining classes. The only reason the class is defined as public is to support reconfiguring major
+        and BehaviorTraining classes. The only reason the class is defined as public is to support reconfiguring major
         source / destination paths (NAS, BioHPC, etc.).
 
         It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
@@ -320,6 +329,14 @@ class SessionData:
         generate_mesoscope_paths: Determines whether the managed session uses ScanImage (mesoscope) PC. Training
             sessions that do not use the Mesoscope do not need to resolve paths to mesoscope data folders and storage
             directories.
+        surgery_sheet_id: The ID for the Google Sheet file used to store surgery information for the animals used in the
+            currently managed project. This is used to parse and write the surgery data for each managed animal into
+            its 'metadata' folder.
+        water_log_sheet_id: The ID for the Google Sheet file used to store water restriction information for the animals
+            used in the currently managed project. This is used to automatically update water restriction logs for each
+            animal during training or experiment sessions.
+        credentials_path: The path to the locally stored .JSON file that stores the service account credentials used to
+            read and write Google Sheet data.
         local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
             this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
         server_root_directory: The path to the root directory where all projects are stored on the BioHPC server
@@ -332,7 +349,13 @@ class SessionData:
             runtime, so it is highly advised to make sure it does not contain any important non-session-related data.
 
     Attributes:
-        _local: The path to the host-machine directory for the managed project, animal and session combination.
+        _surgery_sheet_id: Stores the ID for the Google Sheet file used to store surgery information for the animals
+            used in the currently managed project.
+        _water_log_sheet_id: Stores the ID for the Google Sheet file used to store water restriction information for
+           the animals in the currently managed project.
+        _credentials_path: The path to the .JSON file that stores the service account credentials used to read and
+            write data from the surgery and water restriction Google Sheets.
+        _local: The path to the host-machine directory for the managed project, animal, and session combination.
             This path points to the 'raw_data' subdirectory that stores all acquired and preprocessed session data.
         _server: The path to the BioHPC server directory for the managed project, animal, and session
             combination.
@@ -342,6 +365,11 @@ class SessionData:
         _persistent: The path to the host-machine directory used to retain persistent data from previous session(s) of
             the managed project and animal combination. For example, this directory is used to persist Zaber positions
             and mesoscope motion estimator files when the original session directory is moved to nas and server.
+        _metadata: The path to the host-machine directory used to store the metadata information about the managed
+            project and animal combination. This information typically does not change across sessions, but it is also
+            exported to the nas and server, like the raw data.
+        _server_metadata: Same as above, but on the BioHPC server.
+        _nas_metadata: Same as above, but on the Synology NAS.
         _mesoscope_persistent: Similar to above, but stores the path to the mesoscope (ScanImage) PC persistent
             directory. This directory ios used to persist motion estimator files between experimental sessions.
         _project_name: Stores the name of the project whose data is managed by the class.
@@ -353,12 +381,20 @@ class SessionData:
         self,
         project_name: str,
         animal_name: str,
+        surgery_sheet_id: str,
+        water_log_sheet_id: str,
         generate_mesoscope_paths: bool = True,
+        credentials_path: Path = Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
         local_root_directory: Path = Path("/media/Data/Experiments"),
         server_root_directory: Path = Path("/media/cbsuwsun/storage/sun_data"),
         nas_root_directory: Path = Path("/home/cybermouse/nas/rawdata"),
         mesoscope_data_directory: Path = Path("/home/cybermouse/scanimage/mesodata"),
     ) -> None:
+        # Saves Google Sheet credentials and sheet id information to attributes:
+        self._surgery_sheet_id: str = surgery_sheet_id
+        self._water_log_sheet_id: str = water_log_sheet_id
+        self._credentials_path: Path = credentials_path
+
         # Computes the project + animal directory paths for the local machine (VRPC)
         self._local: Path = local_root_directory.joinpath(project_name, animal_name)
 
@@ -368,6 +404,12 @@ class SessionData:
         # Generates a separate directory to store persistent data. This has to be done early as _local is later
         # overwritten with the path to the raw_data directory of the created session.
         self._persistent: Path = self._local.joinpath("persistent_data")
+
+        # Also generates the 'metadata' directory. The primary difference between this directory and the persistent
+        # directory is that the metadata directory moves with the data and stores the information which does not change
+        # over sessions. The persistent directory, on the other hand, is used to back up data between sessions that
+        # needs to stay on the host PC.
+        self._metadata: Path = self._local.joinpath("metadata")
 
         # Also generates the mesoscope persistent path
         self._mesoscope_persistent: Path = self._mesoscope.joinpath("persistent_data", project_name, animal_name)
@@ -411,6 +453,8 @@ class SessionData:
         # data movement method runtime, so the folder is not precreated for destinations.
         self._server: Path = server_root_directory.joinpath(self._project_name, self._animal_name, self._session_name)
         self._nas: Path = nas_root_directory.joinpath(self._project_name, self._animal_name, self._session_name)
+        self._server_metadata: Path = self._server.joinpath("metadata")
+        self._nas_metadata: Path = self._nas.joinpath("metadata")
 
         # Ensures that root paths exist for all destinations and sources. Note
         ensure_directory_exists(self._local)
@@ -420,6 +464,9 @@ class SessionData:
             ensure_directory_exists(self._mesoscope)
             ensure_directory_exists(self._mesoscope_persistent)
         ensure_directory_exists(self._persistent)
+        ensure_directory_exists(self._metadata)
+        ensure_directory_exists(self._server_metadata)
+        ensure_directory_exists(self._nas_metadata)
 
     @property
     def raw_data_path(self) -> Path:
@@ -509,7 +556,7 @@ class SessionData:
 
     @property
     def behavior_data_path(self) -> Path:
-        """Returns the path to the behavioral_data directory of the managed session.
+        """Returns the path to the behavior_data directory of the managed session.
 
         This path is used during module data processing to extract the data acquired by various hardware modules from
         .npz log archives and save it as feather files.
@@ -542,6 +589,64 @@ class SessionData:
         sessions to correct for the natural motion of the brain relative to the cranial window.
         """
         return self._mesoscope_persistent.joinpath("MotionEstimator.me")
+
+    @property
+    def surgery_metadata_paths(self) -> tuple[Path, Path, Path]:
+        """Returns the paths to the surgery_metadata.yaml file for the managed project and animal combination.
+
+        This file is used to store the data extracted from the lab's surgery log Google Sheet. Typically, this is only
+        done once, when processing the first training session for the animal. This method returns the paths to the
+        target file on all destinations: VRPC, BioHPC server, and the NAS.
+        """
+        return (
+            self._metadata.joinpath("surgery_metadata.yaml"),
+            self._server_metadata.joinpath("surgery_metadata.yaml"),
+            self._nas_metadata.joinpath("surgery_metadata.yaml"),
+        )
+
+    def write_water_restriction_data(self, experimenter_id: str, animal_weight: float, water_volume: float) -> None:
+        """Updates the water restriction log tab for the currently managed project and animal with the provided data.
+
+        This method should be called at the end of each training and experiment runtime to automatically update the
+        water restriction log with the data provided by experimenter and gathered automatically during runtime.
+        Primarily, this method is intended to streamline experiments by synchronizing the Google Sheet logs with the
+        data acquired during runtime.
+
+        Args:
+            experimenter_id: The ID of the experimenter who collected the data.
+            animal_weight: The weight of the animal in grams at the beginning of the runtime.
+            water_volume: The total volume of water delivered during the experimental session in milliliters. This
+                includes the water dispensed during runtime and the water given manually by the experimenter after
+                runtime.
+        """
+        sheet = _WaterSheetData(
+            animal_id=int(self._animal_name), credentials_path=self._credentials_path, sheet_id=self._water_log_sheet_id
+        )
+        sheet.update_water_log(mouse_weight=animal_weight, water_ml=water_volume, experimenter_id=experimenter_id)
+
+    def write_surgery_data(self) -> None:
+        """Extracts the surgery data for the currently managed project and animal combination from the surgery log
+        Google Sheet and saves it to the local, server and the NAS metadata directories.
+
+        This method is used to actualize the surgery data stored in the 'metadata' directories after each training or
+        experiment runtime. Although it is not necessary to always overwrite the metadata, since this takes very little
+        time, the current mode of operation is to always update this data.
+        """
+        # Resolves the paths to the surgery data file for the current animal and project combination
+        local_surgery_path, server_surgery_path, nas_surgery_path = self.surgery_metadata_paths
+
+        # Loads and parses the data from the surgery log Google Sheet file
+        sheet = _SurgerySheet(
+            project_name=self._project_name,
+            credentials_path=self._credentials_path,
+            sheet_id=self._surgery_sheet_id,
+        )
+        data: SurgeryData = sheet.extract_animal_data(animal_id=int(self._animal_name))
+
+        # Saves the data as a .yaml file locally, to the server, and the NAS.
+        data.to_yaml(local_surgery_path)
+        data.to_yaml(server_surgery_path)
+        data.to_yaml(nas_surgery_path)
 
     def pull_mesoscope_data(
         self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
@@ -703,6 +808,7 @@ class SessionData:
             verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
                 performed before source folder is removed from the VRPC, if remove_sources is True.
         """
+
         # Resolves source and destination paths
         source = self.raw_data_path
 
@@ -1268,9 +1374,8 @@ class MesoscopeExperiment:
             remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
         )
 
-        # Parses behavioral data from the compressed logs and uses it to generate the behavioral_dataset.parquet file.
-        # Also, extracts camera frame timestamps for each camera and saves them as a separate .parquet file to optimize
-        # further camera frame processing.
+        # Parses behavior data and camera timestamps from the compressed logs. All data is saved at native acquisition
+        # rates as lz4-compressed .feather files.
         process_log_data(
             log_directory=self._logger.output_directory,
             behavior_data_directory=self._session_data.behavior_data_path,
@@ -1517,7 +1622,7 @@ class MesoscopeExperiment:
 
 
 class BehaviorTraining:
-    """The base class for all behavioral training runtimes.
+    """The base class for all behavior training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
     system. It abstracts most low-level interactions with the VR system and the mesoscope via a simple
@@ -1615,7 +1720,7 @@ class BehaviorTraining:
         # Input verification:
         if not isinstance(session_data, SessionData):
             message = (
-                f"Unable to initialize the BehavioralTraining class. Expected a SessionData instance for "
+                f"Unable to initialize the BehaviorTraining class. Expected a SessionData instance for "
                 f"'session_data' argument, but instead encountered {session_data} of type "
                 f"{type(session_data).__name__}."
             )
@@ -1712,13 +1817,13 @@ class BehaviorTraining:
         cpu_count = os.cpu_count()
         if cpu_count is None or not cpu_count >= 11:
             message = (
-                f"Unable to start the BehavioralTraining runtime. The host PC must have at least 11 logical CPU "
+                f"Unable to start the BehaviorTraining runtime. The host PC must have at least 11 logical CPU "
                 f"cores available for this class to work as expected, but only {os.cpu_count()} cores are "
                 f"available."
             )
             console.error(message=message, error=RuntimeError)
 
-        message = "Initializing BehavioralTraining assets..."
+        message = "Initializing BehaviorTraining assets..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Starts the data logger
@@ -1814,11 +1919,11 @@ class BehaviorTraining:
         # The setup procedure is complete.
         self._started = True
 
-        message = "BehavioralTraining assets: Initialized."
+        message = "BehaviorTraining assets: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self) -> None:
-        """Stops and terminates the BehavioralTraining runtime.
+        """Stops and terminates the BehaviorTraining runtime.
 
         This method achieves two main purposes. First, releases the hardware resources used during the training runtime
         by various system components. Second, it runs the preprocessing pipeline on the data to prepare it for long-term
@@ -1829,7 +1934,7 @@ class BehaviorTraining:
         if not self._started:
             return
 
-        message = "Terminating BehavioralTraining runtime..."
+        message = "Terminating BehaviorTraining runtime..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Resets the _started tracker
@@ -1926,8 +2031,9 @@ class BehaviorTraining:
             remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
         )
 
-        # Parses behavioral data from the compressed logs into independent Apache Arrow Feather files. Note,
-        # lick training does not use the encoder and run training does not use the torque sensor.
+        # Parses behavior data and camera timestamps from the compressed logs. All data is saved at native acquisition
+        # rates as lz4-compressed .feather files. Note, lick training does not use the encoder and run training does
+        # not use the torque sensor.
         if self._lick_training:
             process_log_data(
                 log_directory=self._logger.output_directory,
@@ -1968,7 +2074,7 @@ class BehaviorTraining:
         # Pushes the processed data to the NAS and BioHPC server.
         self._session_data.push_data()
 
-        message = "Data preprocessing: complete. BehavioralTraining runtime: terminated."
+        message = "Data preprocessing: complete. BehaviorTraining runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def lick_train_state(self) -> None:
@@ -2046,7 +2152,13 @@ class BehaviorTraining:
 
 
 def lick_training_logic(
-    runtime: BehaviorTraining,
+    project: str,
+    animal: str,
+    experimenter: str,
+    animal_weight: float,
+    surgery_log_id: str,
+    water_restriction_log_id: str,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     average_reward_delay: int = 12,
     maximum_deviation_from_mean: int = 6,
     maximum_water_volume: float = 1.0,
@@ -2061,9 +2173,25 @@ def lick_training_logic(
     'maximum_deviation_from_mean'. The training continues either until the valve delivers the 'maximum_water_volume' in
     milliliters or until the 'maximum_training_time' in minutes is reached, whichever comes first.
 
+    Notes:
+        All delays fall in the range of average_reward_delay +- maximum_deviation_from_mean.
+
+        This function acts on top of the BehaviorTraining class and provides the overriding logic for the lick
+        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
+        functions are only required when training the animals without Unity.
+
     Args:
-        runtime: The initialized _BehavioralTraining instance that manages all Mesoscope-VR components used by this
-            training runtime.
+        project: The name of the project the animal belongs to.
+        animal: The id (name) of the animal being trained.
+        experimenter: The name of the experimenter conducting the training.
+        animal_weight: The weight of the animal, in grams, at the beginning of the training session.
+        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
+        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
+            trained animal.
+        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
+            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
+            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
+            water used during training and experiments to reward the animal.
         average_reward_delay: The average time, in seconds, that separates two reward deliveries. This is used to
             generate the reward delay sequence as the center of the uniform distribution from which delays are sampled.
         maximum_deviation_from_mean: The maximum deviation from the average reward delay, in seconds. This determines
@@ -2071,14 +2199,58 @@ def lick_training_logic(
             average_reward_delay.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
-
-    Notes:
-        All delays fall in the range of average_reward_delay +- maximum_deviation_from_mean.
-
-        This function acts on top of the BehavioralTraining class and provides the overriding logic for the lick
-        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
-        functions are only required when training the animals without Unity.
     """
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    message = f"Initializing lick training runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_name=animal,
+        project_name=project,
+        surgery_sheet_id=surgery_log_id,
+        water_log_sheet_id=water_restriction_log_id,
+        generate_mesoscope_paths=False,  # No need for mesoscope when running lick training.
+        credentials_path=Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
+        local_root_directory=Path("/media/Data/Experiments"),
+        server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
+        nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
+    )
+
+    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file.
+    session_data.write_surgery_data()
+
+    # Pre-generates the SessionDescriptor class and populates it with training data
+    descriptor = _LickTrainingDescriptor(
+        average_reward_delay_s=average_reward_delay,
+        maximum_deviation_from_average_s=maximum_deviation_from_mean,
+        maximum_training_time_m=maximum_training_time,
+        maximum_water_volume_ml=maximum_water_volume,
+        experimenter=experimenter,
+        mouse_weight_g=animal_weight,
+    )
+
+    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
+    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
+    runtime = BehaviorTraining(
+        session_data=session_data,
+        descriptor=descriptor,
+        actor_port="/dev/ttyACM0",
+        sensor_port="/dev/ttyACM1",
+        encoder_port="/dev/ttyACM2",
+        headbar_port="/dev/ttyUSB0",
+        lickport_port="/dev/ttyUSB1",
+        face_camera_index=0,
+        left_camera_index=0,
+        right_camera_index=2,
+        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        screens_on=False,
+        valve_calibration_data=valve_calibration_data,
+    )
+
     # Initializes the timer used to enforce reward delays
     delay_timer = PrecisionTimer("us")
 
@@ -2208,6 +2380,18 @@ def lick_training_logic(
     # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
     # destinations.
     runtime.stop()
+
+    # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
+    # water restriction log. This reduces the amount of manual logging the experimenter has to do each day.
+    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+
+    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
+    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    session_data.write_water_restriction_data(
+        experimenter_id=experimenter,
+        animal_weight=descriptor.mouse_weight_g,
+        water_volume=training_water + experimenter_water,
+    )
 
 
 def calibrate_valve_logic(
@@ -2436,12 +2620,12 @@ def run_train_logic(
         designing the function was to go away from the arbitrary, experimenter-determined reward brackets in favor of
         a more principled approach to training.
 
-        This function acts on top of the BehavioralTraining class and provides the overriding logic for the run
+        This function acts on top of the BehaviorTraining class and provides the overriding logic for the run
         training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
         functions are only required when training the animals without Unity.
 
     Args:
-        runtime: The initialized _BehavioralTraining instance that manages all Mesoscope-VR components used by this
+        runtime: The initialized _BehaviorTraining instance that manages all Mesoscope-VR components used by this
             training runtime.
         initial_speed_threshold: The initial speed threshold, in centimeters per second, that the animal must maintain
             to receive water rewards.

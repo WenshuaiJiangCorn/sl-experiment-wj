@@ -879,4 +879,3 @@ class _WaterSheetData:
     def headers(self) -> tuple[str, ...]:
         """Returns a tuple of headers (column names) used by the managed animal tab of the target Google Sheet."""
         return tuple(self._headers.keys())
-    

@@ -8,25 +8,8 @@ from ataraxis_base_utilities import LogLevel, console
 
 from sl_experiment.experiment import SessionData
 
-from .experiment import (
-    BehaviorTraining,
-    run_train_logic,
-    lick_training_logic,
-    run_experiment_logic,
-    calibrate_valve_logic,
-    _RunTrainingDescriptor,
-    _LickTrainingDescriptor,
-)
+from .experiment import run_train_logic, lick_training_logic, run_experiment_logic, calibrate_valve_logic
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
-from .google_sheet_tools import _SurgerySheet, _WaterSheetData
-
-# Precalculated default valve calibration data. This is used as the 'default' field for our valve interface cli
-DEFAULT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.8556),
-    (30000, 3.4844),
-    (45000, 7.1846),
-    (60000, 10.0854),
-)
 
 
 @click.command()
@@ -56,18 +39,25 @@ def list_devices(errors: bool) -> None:
 
 @click.command()
 @click.option(
-    "-p",
-    "--project",
+    "-e",
+    "--experimenter",
     type=str,
     required=True,
-    help="The name of the project for which to run the lick training session.",
+    help="The ID of the experimenter supervising the training session.",
 )
 @click.option(
     "-a",
     "--animal",
     type=str,
     required=True,
-    help="The name of the animal for which to run the lick training session.",
+    help="The name of the animal undergoing the lick training session.",
+)
+@click.option(
+    "-w",
+    "--animal_weight",
+    type=float,
+    required=True,
+    help="The weight of the animal, in grams, at the beginning of the training session.",
 )
 @click.option(
     "-ad",
@@ -75,7 +65,7 @@ def list_devices(errors: bool) -> None:
     type=int,
     show_default=True,
     default=12,
-    help="The average number of seconds the has to pass between two consecutive reward deliveries during training.",
+    help="The average number of seconds that has to pass between two consecutive reward deliveries during training.",
 )
 @click.option(
     "-md",
@@ -85,8 +75,8 @@ def list_devices(errors: bool) -> None:
     default=6,
     help=(
         "The maximum number of seconds that can be used to increase or decrease the delay between two consecutive "
-        "reward deliveries during training. This is used to generate delays using a pseudorandom sampling, to remove "
-        "trends in reward delivery patterns."
+        "reward deliveries during training. This is used to generate reward delays using a pseudorandom sampling to "
+        "remove trends in reward delivery patterns."
     ),
 )
 @click.option(
@@ -105,203 +95,53 @@ def list_devices(errors: bool) -> None:
     default=20,
     help="The maximum time to run the training, in minutes.",
 )
-@click.option(
-    "-ap",
-    "--actor_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM0",
-    help="The USB port used by the actor MicroController.",
-)
-@click.option(
-    "-sp",
-    "--sensor_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM1",
-    help="The USB port used by the sensor MicroController.",
-)
-@click.option(
-    "-ep",
-    "--encoder_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM2",
-    help="The USB port used by the encoder MicroController.",
-)
-@click.option(
-    "-hp",
-    "--headbar_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB0",
-    help="The USB port used by the HeadBar controller.",
-)
-@click.option(
-    "-lp",
-    "--lickport_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB1",
-    help="The USB port used by the LickPort controller.",
-)
-@click.option(
-    "-fc",
-    "--face_camera",
-    type=int,
-    default=0,
-    show_default=True,
-    help="The index of the face camera in the list of all available Harvester-managed cameras.",
-)
-@click.option(
-    "-fc",
-    "--left_camera",
-    type=int,
-    default=0,
-    show_default=True,
-    help="The index of the left camera in the list of all available OpenCV-managed cameras.",
-)
-@click.option(
-    "-fc",
-    "--right_camera",
-    type=int,
-    default=2,
-    show_default=True,
-    help="The index of the right camera in the list of all available OpenCV-managed cameras.",
-)
-@click.option(
-    "-cp",
-    "--cti_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
-    show_default=True,
-    help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
-)
-@click.option(
-    "-s",
-    "--screens_on",
-    is_flag=True,
-    default=False,
-    help="Communicates whether the VR screens are currently ON.",
-)
-@click.option(
-    "-vd",
-    "--valve_calibration_data",
-    type=(int, float),
-    multiple=True,
-    default=DEFAULT_VALVE_CALIBRATION_DATA,
-    show_default=True,
-    help=(
-        "Supplies the data used by the solenoid valve module to determine how long to keep the valve open to "
-        "deliver requested water volumes. Provides calibration data as pairs of numbers, for example: "
-        "--valve-calibration-data 15000 1.8556."
-    ),
-)
-@click.option(
-    "-lr",
-    "--local_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/media/Data/Experiments",
-    show_default=True,
-    help="The path to the root directory on the local machine (VRPC) that stores experiment project folders.",
-)
-@click.option(
-    "-sp",
-    "--server_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/media/cbsuwsun/storage/sun_data",
-    show_default=True,
-    help="The path to the root directory on the BioHPC lab server that stores experiment project folders.",
-)
-@click.option(
-    "-np",
-    "--nas_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/home/cybermouse/nas/rawdata",
-    show_default=True,
-    help="The path to the root directory on the NAS that stores experiment project folders.",
-)
 def lick_training(
+    experimenter: str,
     animal: str,
-    project: str,
+    animal_weight: float,
     average_delay: int,
     maximum_deviation: int,
     maximum_volume: float,
     maximum_time: int,
-    actor_port: str,
-    sensor_port: str,
-    encoder_port: str,
-    headbar_port: str,
-    lickport_port: str,
-    face_camera: int,
-    left_camera: int,
-    right_camera: int,
-    cti_path: Path | str,
-    screens_on: bool,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    local_root_path: Path | str,
-    server_root_path: Path | str,
-    nas_root_path: Path | str,
 ) -> None:
-    """Runs a single lick training session for the specified animal and project combination, using the input
-    parameters.
+    """Runs a reference lick training session for the specified animal, using the input parameters.
 
-    This CLI command allows running lick training sessions via the terminal. The only parameters that have to be
-    provided at each runtime are the animal and project name. Every other parameter can be overwritten, but has been
-    statically configured to work for our current Mesoscope-VR system configuration.
+    The CLI is primarily designed to calibrate and test the Sun lab Mesoscope-VR system and to demonstrate how to
+    implement lick training for custom projects. Depending on the animal id, this CLI statically uses 'TestMice' or
+    'Template' project.
     """
 
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
-    message = f"Initializing lick training runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Converts input paths to Pth instances.
-    cti_path = Path(cti_path)
-    local_root_path = Path(local_root_path)
-    server_root_path = Path(server_root_path)
-    nas_root_path = Path(nas_root_path)
-
-    # Initializes the session data manager class.
-    session_data = SessionData(
-        animal_name=animal,
-        project_name=project,
-        generate_mesoscope_paths=False,  # No need for mesoscope when running lick training.
-        local_root_directory=local_root_path,
-        server_root_directory=server_root_path,
-        nas_root_directory=nas_root_path,
+    # Precalculated default valve calibration data. This should be defined separately for each project, as the valve
+    # is replaced and recalibrated fairly frequently.
+    valve_calibration_data = (
+        (15000, 1.8556),
+        (30000, 3.4844),
+        (45000, 7.1846),
+        (60000, 10.0854),
     )
 
-    # Pre-generates the SessionDescriptor class and populates it with training data
-    descriptor = _LickTrainingDescriptor(
-        average_reward_delay_s=average_delay,
-        maximum_deviation_from_average_s=maximum_deviation,
-        maximum_training_time_m=maximum_time,
-        maximum_water_volume_ml=maximum_volume,
-    )
+    # To distinguish real test mice used to calibrate sun lab equipment from the 'virtual' mouse used to test the
+    # hardware, they use two different projects. Real project implementations of this CLI should statically set the
+    # project name for their project
+    if int(animal) == 666:
+        project = "Template"
+    else:
+        project = "TestMice"
 
-    # Initializes the main runtime interface class.
-    runtime = BehaviorTraining(
-        session_data=session_data,
-        descriptor=descriptor,
-        actor_port=actor_port,
-        sensor_port=sensor_port,
-        encoder_port=encoder_port,
-        headbar_port=headbar_port,
-        lickport_port=lickport_port,
-        face_camera_index=face_camera,
-        left_camera_index=left_camera,
-        right_camera_index=right_camera,
-        harvesters_cti_path=cti_path,
-        screens_on=screens_on,
-        valve_calibration_data=valve_calibration_data,
-    )
+    # Surgery and water restriction log data has to be defined separately for each project, as each may use separate
+    # Google Sheet files. Here, we use the two standard sheets used in the lab to test and calibrate this library.
+    surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
+    water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
     # Runs the lick training session.
     lick_training_logic(
-        runtime=runtime,
+        project=project,
+        animal=animal,
+        experimenter=experimenter,
+        animal_weight=animal_weight,
+        surgery_log_id=surgery_id,
+        water_restriction_log_id=water_restriction_id,
+        valve_calibration_data=valve_calibration_data,
         average_reward_delay=average_delay,
         maximum_deviation_from_mean=maximum_deviation,
         maximum_water_volume=maximum_volume,
@@ -310,49 +150,7 @@ def lick_training(
 
 
 @click.command()
-@click.option(
-    "-ap",
-    "--actor_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM0",
-    help="The USB port used by the actor MicroController.",
-)
-@click.option(
-    "-hp",
-    "--headbar_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB0",
-    help="The USB port used by the HeadBar controller.",
-)
-@click.option(
-    "-lp",
-    "--lickport_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB1",
-    help="The USB port used by the LickPort controller.",
-)
-@click.option(
-    "-vd",
-    "--valve_calibration_data",
-    type=(int, float),
-    multiple=True,
-    default=DEFAULT_VALVE_CALIBRATION_DATA,
-    show_default=True,
-    help=(
-        "Supplies the data used by the solenoid valve module to determine how long to keep the valve open to "
-        "deliver requested water volumes. Provides calibration data as pairs of numbers, for example: "
-        "--valve-calibration-data 15000 1.8556."
-    ),
-)
-def calibrate_valve_cli(
-    actor_port: str,
-    headbar_port: str,
-    lickport_port: str,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-) -> None:
+def calibrate_valve_cli() -> None:
     """Instantiates a terminal-driven interface to interact with the water delivery solenoid valve.
 
     This CLI command is designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve used to
@@ -377,18 +175,25 @@ def calibrate_valve_cli(
 
 @click.command()
 @click.option(
-    "-p",
-    "--project",
+    "-e",
+    "--experimenter",
     type=str,
     required=True,
-    help="The name of the project for which to run the run training session.",
+    help="The ID of the experimenter supervising the training session.",
 )
 @click.option(
     "-a",
     "--animal",
     type=str,
     required=True,
-    help="The name of the animal for which to run the run training session.",
+    help="The name of the animal undergoing the lick training session.",
+)
+@click.option(
+    "-w",
+    "--animal_weight",
+    type=float,
+    required=True,
+    help="The weight of the animal, in grams, at the beginning of the training session.",
 )
 @click.option(
     "-is",
@@ -613,20 +418,6 @@ def run_training(
     maximum_duration: float,
     maximum_volume: float,
     maximum_time: int,
-    actor_port: str,
-    sensor_port: str,
-    encoder_port: str,
-    headbar_port: str,
-    lickport_port: str,
-    face_camera: int,
-    left_camera: int,
-    right_camera: int,
-    cti_path: Path | str,
-    screens_on: bool,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    local_root_path: Path | str,
-    server_root_path: Path | str,
-    nas_root_path: Path | str,
 ) -> None:
     """Runs a single run training session for the specified animal and project combination, using the input
     parameters.
@@ -711,43 +502,3 @@ def run_experiment() -> None:
     This CLI is intended EXCLUSIVELY to test the Mesoscope-Vr system. Do not use this for real projects.
     """
     run_experiment_logic()
-
-
-@click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project for which to retrieve the surgical data.",
-)
-@click.option(
-    "-a",
-    "--animal",
-    type=str,
-    required=True,
-    help="The name of the animal for which to retrieve the surgical data.",
-)
-def get_surgery_data(animal: str, project: str) -> None:
-    surgery_sheet_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
-    credentials_path = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
-    sheet = _SurgerySheet(project_name=project, credentials_path=credentials_path, sheet_id=surgery_sheet_id)
-    data = sheet.extract_animal_data(animal_id=int(animal))
-    console.echo(message=f"{data}", level=LogLevel.SUCCESS)
-
-
-@click.command()
-@click.option(
-    "-a",
-    "--animal",
-    type=str,
-    required=True,
-    help="The name of the animal for which to retrieve the surgical data.",
-)
-def write_water_restriction_data(animal: str) -> None:
-    water_restriction_sheet_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
-    credentials_path = Path("/home/cyberaxolotl/Downloads/sl-surgery-log-0f651e492767.json")
-    sheet = _WaterSheetData(
-        animal_id=int(animal), credentials_path=credentials_path, sheet_id=water_restriction_sheet_id
-    )
-    sheet.update_water_log(mouse_weight=234, water_ml=30, experimenter_id="ik278")
