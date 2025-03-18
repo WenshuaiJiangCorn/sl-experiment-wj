@@ -2421,12 +2421,13 @@ def lick_training_logic(
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
-    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    total_water = training_water + experimenter_water
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
-        water_volume=training_water + experimenter_water,
+        water_volume=total_water,
     )
 
 
@@ -2864,7 +2865,7 @@ def run_train_logic(
         # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
         # threshold trackers with new data.
         if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)  # Converts back to seconds
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
             previous_speed_threshold = speed_threshold
             previous_duration_threshold = duration_threshold
 
@@ -2946,12 +2947,13 @@ def run_train_logic(
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
-    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    total_water = training_water + experimenter_water
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
-        water_volume=training_water + experimenter_water,
+        water_volume=total_water,
     )
 
 
@@ -2966,11 +2968,27 @@ def run_experiment_logic(
     cue_length_map: dict[int, float],
     experiment_state_sequence: tuple[ExperimentState, ...],
 ) -> None:
-    """Provides the reference implementation of experimental runtime that uses the Mesoscope-VR system.
+    """ Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
-    This function is not intended to be used during real experiments. Instead, it demonstrates how to implement and
-    experiment and is used during testing and calibration of the Mesoscope-VR system. It uses hardcoded default runtime
-    parameters and should not be modified or called by end-users.
+    This function can be used to execute any valid experiment using the Mesoscope-VR system. Each experiment should be
+    broken into one or more experiment states (phases), such as 'baseline', 'task' and 'cooldown'. Furthermore, each
+    experiment state can use one or more VR system states. Currently, the VR system has two states: rest (1) and run
+    (2). The states are used to broadly configure the Mesoscope-VR system, and they determine which systems are active
+    and what data is collected (see library ReadMe for more details on VR states).
+
+    Primarily, this function is concerned with iterating over the states stored inside the experiment_state_sequence
+    tuple. Each experiment and VR state combination is maintained for the requested duration of seconds. Once all states
+    have been executed, the experiment runtime ends. Under this design pattern, each experiment is conceptualized as
+    a sequence of states.
+
+    Notes:
+        During experiment runtimes, the task logic and the Virtual Reality world are resolved via the Unity game engine.
+        This function itself does not resolve the task logic, it is only concerned with iterating over experiment
+        states, controlling the VR system, and monitoring user command issued via keyboard.
+
+        Similar to all other runtime functions, this function contains all necessary bindings to setup, execute and
+        terminate an experiment runtime. Custom projects should implement a cli that calls this function with
+        project-specific parameters.
 
     Args:
         project: The name of the project the animal belongs to.
@@ -2984,6 +3002,12 @@ def run_experiment_logic(
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
             microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
             water used during training and experiments to reward the animal.
+        cue_length_map: A dictionary that maps each integer-code associated with a wall cue used in the Virtual Reality
+            experiment environment to its length in real-world centimeters. Ity is used to map each VR cue to the
+            distance the animal needs to travel to fully traverse the wall cue region from start to end.
+        experiment_state_sequence: A tuple of ExperimentState instances, each representing a phase of the experiment.
+            The function executes each experiment state provided via this tuple in the order they appear. Once the last
+            state has been executed, the experiment runtime ends.
     """
 
     # Enables the console
@@ -3112,10 +3136,11 @@ def run_experiment_logic(
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
-    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    total_water = training_water + experimenter_water
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
-        water_volume=training_water + experimenter_water,
+        water_volume=total_water,
     )

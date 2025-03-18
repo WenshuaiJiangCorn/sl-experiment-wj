@@ -767,9 +767,9 @@ class _WaterSheetData:
         current_time = datetime.now().strftime("%H:%M")
 
         # Writes each value to the appropriate column, using the same formatting as used in row 3
-        self._write_value("weight (g)", row_index, str(mouse_weight))
+        self._write_value("weight (g)", row_index, mouse_weight)
         self._write_value("given by:", row_index, experimenter_id)
-        self._write_value("water given (ml)", row_index, str(water_ml))
+        self._write_value("water given (ml)", row_index, water_ml)
         self._write_value("time", row_index, current_time)
 
     def _find_date_row(self, target_date: str) -> int:
@@ -816,7 +816,7 @@ class _WaterSheetData:
 
         return row_index
 
-    def _write_value(self, column_name: str, row_index: int, value: str) -> None:
+    def _write_value(self, column_name: str, row_index: int, value: int | float | str) -> None:
         """Writes the input value to the specific cell based on column name and row index.
 
         This is the primary method used to write new values to the managed water restriction log Google Sheet.
@@ -832,12 +832,19 @@ class _WaterSheetData:
         # Defines the cell range based on the column letter and row index
         cell_range = f"{column_letter}{row_index}"
 
+        # Formats value based on its type and column
+        formatted_value = value
+        if column_name.lower() == "weight (g)" and isinstance(value, (int, float)):
+            formatted_value = round(float(value), 1)
+        elif column_name.lower() == "water given (ml)" and isinstance(value, (int, float)):
+            formatted_value = round(float(value), 1)
+
         # Writes the value to the target cell
-        body = {"values": [[value]]}
+        body = {"values": [[formatted_value]]}
         self._service.spreadsheets().values().update(
             spreadsheetId=self._sheet_id,
             range=f"'{self._animal_id}'!{cell_range}",
-            valueInputOption="RAW",
+            valueInputOption="USER_ENTERED",
             body=body,  # type: ignore
         ).execute()
 
