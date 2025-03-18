@@ -764,7 +764,7 @@ def process_log_data(
                     )
 
                 # Screens
-                if initially_on:
+                if initially_on is not None:
                     futures.add(
                         executor.submit(ScreenInterface.parse_logged_data, file, behavior_data_directory, initially_on)
                     )

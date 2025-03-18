@@ -405,6 +405,10 @@ class _SurgerySheet:
             )
             console.error(message, error=RuntimeError)
 
+    def __del__(self):
+        """Terminates the Google Sheets API service when the class is garbage-collected."""
+        self._service.close()
+
     def extract_animal_data(self, animal_id: int) -> SurgeryData:
         """Extracts the surgery data for the target animal and returns it as a SurgeryData object.
 
@@ -737,6 +741,10 @@ class _WaterSheetData:
             column_letter = _convert_index_to_column_letter(i)
             self._headers[str(header).strip().lower()] = column_letter
 
+    def __del__(self):
+        """Terminates the Google Sheets API service when the class is garbage-collected."""
+        self._service.close()
+
     def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str) -> None:
         """Updates the water restriction log for the managed animal with today's training or experiment data.
 
@@ -834,10 +842,10 @@ class _WaterSheetData:
 
         # Formats value based on its type and column
         formatted_value = value
-        if column_name.lower() == "weight (g)" and isinstance(value, (int, float)):
-            formatted_value = round(float(value), 1)
-        elif column_name.lower() == "water given (ml)" and isinstance(value, (int, float)):
-            formatted_value = round(float(value), 1)
+        if column_name.lower() == "weight (g)":
+            formatted_value = round(float(value), ndigits=1)
+        elif column_name.lower() == "water given (ml)":
+            formatted_value = round(float(value), ndigits=1)
 
         # Writes the value to the target cell
         body = {"values": [[formatted_value]]}

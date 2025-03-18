@@ -163,7 +163,6 @@ sl-calibrate-valve = "sl_experiment.cli:calibrate_valve_cli"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
-sl-parse-gs = "sl_experiment.cli:process_gs_log"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

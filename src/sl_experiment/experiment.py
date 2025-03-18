@@ -2258,7 +2258,11 @@ def lick_training_logic(
     # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
     # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
     # headbar.
+    message = f"Updating animal surgery data file..."
+    console.echo(message=message, level=LogLevel.INFO)
     session_data.write_surgery_data()
+    message = f"Surgery data: saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = _LickTrainingDescriptor(
@@ -2420,16 +2424,21 @@ def lick_training_logic(
     # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
-    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
-    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    message = f"Writing water restriction log entry..."
+    console.echo(message=message, level=LogLevel.INFO)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
+
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
         water_volume=total_water,
     )
 
+    message = f"Writing water restriction log entry: written."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
 def calibrate_valve_logic(
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
@@ -2701,10 +2710,9 @@ def run_train_logic(
         maximum_speed_threshold: The maximum speed threshold, in centimeters per second, that the animal must maintain
             to receive water rewards. Once this threshold is reached, it will not be increased further regardless of how
             much water is delivered to the animal.
-        maximum_duration_threshold:
-            The maximum duration threshold, in seconds, that the animal must maintain above-threshold running speed to
-            receive water rewards. Once this threshold is reached, it will not be increased further regardless of
-            how much water is delivered to the animal.
+        maximum_duration_threshold: The maximum duration threshold, in seconds, that the animal must maintain
+            above-threshold running speed to receive water rewards. Once this threshold is reached, it will not be
+            increased further regardless of how much water is delivered to the animal.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
     """
@@ -2731,7 +2739,11 @@ def run_train_logic(
     # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
     # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
     # headbar.
+    message = f"Updating animal surgery data file..."
+    console.echo(message=message, level=LogLevel.INFO)
     session_data.write_surgery_data()
+    message = f"Surgery data: saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = _RunTrainingDescriptor(
@@ -2946,15 +2958,24 @@ def run_train_logic(
     # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
-    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
-    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    message = f"Writing water restriction log entry..."
+    console.echo(message=message, level=LogLevel.INFO)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
+
+
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
         water_volume=total_water,
     )
+
+    message = f"Writing water restriction log entry: written."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+
 
 
 def run_experiment_logic(
@@ -3031,10 +3052,12 @@ def run_experiment_logic(
         nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
     )
 
-    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
-    # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
-    # headbar.
+    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file.
+    message = f"Updating animal surgery data file..."
+    console.echo(message=message, level=LogLevel.INFO)
     session_data.write_surgery_data()
+    message = f"Surgery data: saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Pre-generates the SessionDescriptor class and populates it with experiment data.
     descriptor = _MesoscopeExperimentDescriptor(
@@ -3135,12 +3158,18 @@ def run_experiment_logic(
     # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
     # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
-    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-    training_water = round(descriptor.dispensed_water_volume_ul / 1000, 3)  # Converts from uL to ml
-    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, 3)
+    message = f"Writing water restriction log entry..."
+    console.echo(message=message, level=LogLevel.INFO)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
+
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
         animal_weight=descriptor.mouse_weight_g,
         water_volume=total_water,
     )
+
+    message = f"Writing water restriction log entry: written."
+    console.echo(message=message, level=LogLevel.SUCCESS)
