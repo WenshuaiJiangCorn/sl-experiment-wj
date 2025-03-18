@@ -127,6 +127,33 @@ class _MesoscopeExperimentDescriptor(YamlConfig):
     """
 
 
+@dataclass()
+class ExperimentState:
+    """Encapsulates the information used to set and maintain the Mesoscope-VR state-machine according to the desired
+    experiment state.
+
+    Primarily, experiment runtime logic is resolved by the Unity game engine. However, the Mesoscope-VR system
+    configuration may need to change throughout the experiment, for example, between the run and rest configurations.
+    Overall, the Mesoscope-VR system functions like a state-machine, with multiple statically configured states that
+    can be activated and maintained throughout the experiment. During runtime, the main function expects a sequence of
+    ExperimentState instances that will be traversed, start-to-end, to determine the flow of the experiment runtime.
+    """
+
+    experiment_state_code: int
+    """The integer code of the experiment state. Experiment states do not have a predefined meaning, Instead, each 
+    project is expected to define and follow its own experiment state code mapping. Typically, the experiment state 
+    code is used to denote major experiment stages, such as 'baseline', 'task1', 'cooldown', etc. Note, the same 
+    experiment state code can be used by multiple sequential ExperimentState instances to change the VR system states 
+    while maintaining the same experiment state."""
+    vr_state_code: int
+    """One of the supported VR system state-codes. Currently, the Mesoscope-VR system supports 2 state codes. State 
+    code 1 denotes 'REST' state and code 2 denotes 'RUN' state. In the rest state, the running wheel is locked and the
+    screens are off. In the run state, the screens are on and the wheel is unlocked. Note, multiple consecutive 
+    ExperimentState instances with different experiment state codes can reuse the same VR state code."""
+    state_duration_s: float
+    """The time, in seconds, to maintain the current combination of the experiment and VR states."""
+
+
 class KeyboardListener:
     """Monitors the keyboard input for various runtime control signals and changes internal flags to communicate
     detected signals.
@@ -1426,6 +1453,10 @@ class MesoscopeExperiment:
         By default, the VR system starts all experimental runtimes using the REST state.
         """
 
+        # Prevents changing the VR state if the VR system is already in REST state.
+        if self._vr_state == 1:
+            return
+
         # Ensures VR screens are turned OFF
         self._microcontrollers.disable_vr_screens()
 
@@ -1450,6 +1481,11 @@ class MesoscopeExperiment:
         enabled to record and share live running data with Unity, and the torque sensor is disabled. The VR screens are
         switched on to render the VR environment.
         """
+
+        # Prevents changing the VR state if the VR system is already in RUN state.
+        if self._vr_state == 2:
+            return
+
         # Initializes encoder monitoring.
         self._microcontrollers.enable_encoder_monitoring()
 
@@ -1570,10 +1606,6 @@ class MesoscopeExperiment:
         """
         self._vr_state = new_state  # Updates the VR state
 
-        # Notifies the user about the new VR state.
-        message = f"VR State: {self._state_map[self._vr_state]}."
-        console.echo(message=message, level=LogLevel.INFO)
-
         # Logs the VR state update. Uses header-code 1 to indicate that the logged value is the VR state-code.
         log_package = LogPackage(
             source_id=self._source_id,
@@ -1592,11 +1624,12 @@ class MesoscopeExperiment:
             new_state: The integer byte-code for the new experiment state. The code will be serialized as an uint8
                 value, so only values between 0 and 255 inclusive are supported.
         """
-        self._experiment_state = new_state  # Updates the tracked experiment state value
 
-        # Notifies the user about the new Experiment state.
-        message = f"Experiment State: {new_state}."
-        console.echo(message=message, level=LogLevel.INFO)
+        # Prevents changing the experiment state if the experiment is already in the desired state.
+        if self._experiment_state == new_state:
+            return
+
+        self._experiment_state = new_state  # Updates the tracked experiment state value
 
         # Logs the VR state update. Uses header-code 2 to indicate that the logged value is the experiment state-code.
         log_package = LogPackage(
@@ -2166,24 +2199,26 @@ def lick_training_logic(
 ) -> None:
     """Encapsulates the logic used to train animals how to operate the lick port.
 
-    The lick training consists of delivering randomly spaced 5 uL water rewards via the Valve module to teach the
-    animal that water comes out of the lick port. Each reward is delivered at a pseudorandom delay after the previous
-    reward or training onset. Reward delay sequence is generated before training runtime by sampling a uniform
-    distribution centered at 'average_reward_delay' with lower and upper bounds defined by
-    'maximum_deviation_from_mean'. The training continues either until the valve delivers the 'maximum_water_volume' in
-    milliliters or until the 'maximum_training_time' in minutes is reached, whichever comes first.
+    The lick training consists of delivering randomly spaced 5 uL water rewards via the solenoid valve to teach the
+    animal that water comes out of the lick port. Each reward is delivered after a pseudorandom delay. Reward delay
+    sequence is generated before training runtime by sampling a uniform distribution centered at 'average_reward_delay'
+    with lower and upper bounds defined by 'maximum_deviation_from_mean'. The training continues either until the valve
+    delivers the 'maximum_water_volume' in milliliters or until the 'maximum_training_time' in minutes is reached,
+    whichever comes first.
 
     Notes:
-        All delays fall in the range of average_reward_delay +- maximum_deviation_from_mean.
-
         This function acts on top of the BehaviorTraining class and provides the overriding logic for the lick
         training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
         functions are only required when training the animals without Unity.
 
+        This function contains all necessary logic to set up, execute, and terminate the training. This includes data
+        acquisition, preprocessing, and distribution. All lab projects should implement a CLI that calls this function
+        to run lick training with parameters specific to each project.
+
     Args:
         project: The name of the project the animal belongs to.
         animal: The id (name) of the animal being trained.
-        experimenter: The name of the experimenter conducting the training.
+        experimenter: The id of the experimenter conducting the training.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
         surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
         water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
@@ -2213,17 +2248,19 @@ def lick_training_logic(
         project_name=project,
         surgery_sheet_id=surgery_log_id,
         water_log_sheet_id=water_restriction_log_id,
-        generate_mesoscope_paths=False,  # No need for mesoscope when running lick training.
+        generate_mesoscope_paths=False,  # No need for mesoscope when training.
         credentials_path=Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
         local_root_directory=Path("/media/Data/Experiments"),
         server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
         nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
     )
 
-    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file.
+    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
+    # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
+    # headbar.
     session_data.write_surgery_data()
 
-    # Pre-generates the SessionDescriptor class and populates it with training data
+    # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = _LickTrainingDescriptor(
         average_reward_delay_s=average_reward_delay,
         maximum_deviation_from_average_s=maximum_deviation_from_mean,
@@ -2291,14 +2328,13 @@ def lick_training_logic(
     )
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Since we preset the descriptor class before passing the runtime to this function, the maximum training time may
-    # actually not be accurate. This would be the case if the training runtime is limited by the maximum allowed water
-    # delivery volume and not time. In this case, updates the training time to reflect the factual training time. This
-    # would be the case if the reward delays array size is the same as the cumulative time array size, indicating no
-    # slicing was performed due to session time constraints.
+    # Since we preset the descriptor class before determining the time necessary to deliver the maximum allowed water
+    # volume, the maximum training time may actually not be accurate. This would be the case if the training runtime is
+    # limited by the maximum allowed water delivery volume and not time. In this case, updates the training time to
+    # reflect the factual training time. This would be the case if the reward_delays array size is the same as the
+    # cumulative time array size, indicating no slicing was performed due to session time constraints.
     if len(reward_delays) == len(cumulative_time):
         # Actual session time is the accumulated delay converted from seconds to minutes at the last index.
-        # noinspection PyProtectedMember
         runtime.descriptor.maximum_training_time_m = np.ceil(cumulative_time[-1] / 60)
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
@@ -2382,9 +2418,9 @@ def lick_training_logic(
     runtime.stop()
 
     # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
-    # water restriction log. This reduces the amount of manual logging the experimenter has to do each day.
+    # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
+    # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     descriptor.from_yaml(file_path=session_data.session_descriptor_path)
-
     training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
     experimenter_water = descriptor.experimenter_given_water_volume_ml
     session_data.write_water_restriction_data(
@@ -2395,21 +2431,16 @@ def lick_training_logic(
 
 
 def calibrate_valve_logic(
-    actor_port: str,
-    headbar_port: str,
-    lickport_port: str,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
 ) -> None:
     """Encapsulates the logic used to fill, empty, check, and calibrate the water valve.
 
-    This runtime allows interfacing with the water valve outside of training and experiment runtime contexts. Usually,
-    this is done at the beginning and the end of each experimental / training day to ensure the valve operates smoothly
-    during runtimes.
+    This runtime allows interfacing with the water valve outside training and experiment runtime contexts. Usually,
+    this is done at the beginning and the end of each experiment / training day to ensure the valve operates smoothly
+    during runtimes. Specifically, at the beginning of each day the valve is filled with water and 'referenced' to
+    verify it functions as expected. At the end of each day, the valve is emptied.
 
     Args:
-        actor_port: The USB port to which the Actor Ataraxis Micro Controller (AMC) is connected.
-        headbar_port: The USB port used by the headbar Zaber motor controllers (devices).
-        lickport_port: The USB port used by the lickport Zaber motor controllers (devices).
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
             microliters.
@@ -2420,6 +2451,9 @@ def calibrate_valve_logic(
     # Enables the console
     if not console.enabled:
         console.enable()
+
+    message = f"Initializing valve calibration runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
@@ -2447,8 +2481,8 @@ def calibrate_valve_logic(
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Initializes HeadBar and LickPort binding classes
-        headbar = _HeadBar(headbar_port, output_path.joinpath("zaber_positions.yaml"))
-        lickport = _LickPort(lickport_port, output_path.joinpath("zaber_positions.yaml"))
+        headbar = _HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
+        lickport = _LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
 
         message = f"Zaber controllers: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2458,7 +2492,7 @@ def calibrate_valve_logic(
         controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
             microcontroller_serial_buffer_size=8192,
-            microcontroller_usb_port=actor_port,
+            microcontroller_usb_port="/dev/ttyACM0",
             data_logger=logger,
             module_interfaces=(valve,),
         )
@@ -2595,7 +2629,13 @@ def calibrate_valve_logic(
 
 
 def run_train_logic(
-    runtime: BehaviorTraining,
+    project: str,
+    animal: str,
+    experimenter: str,
+    animal_weight: float,
+    surgery_log_id: str,
+    water_restriction_log_id: str,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     initial_speed_threshold: float = 0.05,
     initial_duration_threshold: float = 0.05,
     speed_increase_step: float = 0.05,
@@ -2609,24 +2649,42 @@ def run_train_logic(
     """Encapsulates the logic used to train animals how to run on the VR wheel.
 
     The run training consists of making the animal run on the wheel with a desired speed, in centimeters per second,
-    maintained for the desired duration of seconds. This is used train the animal to exhibit good running speed and
-    endurance. Each time the animal satisfies the speed and duration threshold, it receives 5 uL of water reward, and
-    the speed and durations trackers reset for the next 'epoch'. If the animal performs well and receives many water
-    rewards, the speed and duration thresholds increase to make the task more challenging. This is used to progressively
-    train the animal to run better and to prevent the animal from completing the training too early.
+    maintained for the desired duration of seconds. Each time the animal satisfies the speed and duration threshold, it
+    receives 5 uL of water reward, and the speed and durations trackers reset for the next 'epoch'. If the animal
+    performs well and receives many water rewards, the speed and duration thresholds increase to make the task more
+    challenging. This is used to progressively train the animal to run better and to prevent the animal from completing
+    the training too early. Overall, the goal of the training is to both teach the animal to run decently fast and to
+    train its stamina to sustain hour-long experiment sessions.
 
     Notes:
-        This function is highly configurable and can be adapted to a wide range of training scenarios. A central aim for
-        designing the function was to go away from the arbitrary, experimenter-determined reward brackets in favor of
-        a more principled approach to training.
+        Primarily, this function is designed to increment the initial speed and duration thresholds by the
+        speed_increase_step and duration_increase_step each time the animal receives increase_threshold milliliters of
+        water. The speed and duration thresholds incremented in this way cannot exceed the maximum_speed_threshold and
+        maximum_duration_threshold. The training ends either when the training time exceeds the maximum_training_time,
+        or when the animal receives the maximum_water_volume of water, whichever happens earlier. During runtime, it is
+        possible to manually increase or decrease both thresholds via 'ESC' and arrow keys.
 
-        This function acts on top of the BehaviorTraining class and provides the overriding logic for the run
-        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
-        functions are only required when training the animals without Unity.
+        This function is highly configurable and can be adapted to a wide range of training scenarios. It acts on top
+        of the BehaviorTraining class and provides the overriding logic for the run training process. During
+        experiments, runtime logic is handled by Unity game engine, so specialized control functions are only required
+        when training the animals without Unity.
+
+        This function contains all necessary logic to set up, execute, and terminate the training. This includes data
+        acquisition, preprocessing, and distribution. All lab projects should implement a CLI that calls this function
+        to run lick training with parameters specific to each project.
 
     Args:
-        runtime: The initialized _BehaviorTraining instance that manages all Mesoscope-VR components used by this
-            training runtime.
+        project: The name of the project the animal belongs to.
+        animal: The id (name) of the animal being trained.
+        experimenter: The id of the experimenter conducting the training.
+        animal_weight: The weight of the animal, in grams, at the beginning of the training session.
+        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
+        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
+            trained animal.
+        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
+            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
+            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
+            water used during training and experiments to reward the animal.
         initial_speed_threshold: The initial speed threshold, in centimeters per second, that the animal must maintain
             to receive water rewards.
         initial_duration_threshold: The initial duration threshold, in seconds, that the animal must maintain
@@ -2649,6 +2707,64 @@ def run_train_logic(
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
     """
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    message = f"Initializing run training runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_name=animal,
+        project_name=project,
+        surgery_sheet_id=surgery_log_id,
+        water_log_sheet_id=water_restriction_log_id,
+        generate_mesoscope_paths=False,  # No need for mesoscope when training.
+        credentials_path=Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
+        local_root_directory=Path("/media/Data/Experiments"),
+        server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
+        nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
+    )
+
+    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
+    # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
+    # headbar.
+    session_data.write_surgery_data()
+
+    # Pre-generates the SessionDescriptor class and populates it with training data
+    descriptor = _RunTrainingDescriptor(
+        initial_running_speed_cm_s=initial_speed_threshold,
+        initial_speed_duration_s=initial_duration_threshold,
+        increase_threshold_ml=increase_threshold,
+        increase_running_speed_cm_s=speed_increase_step,
+        increase_speed_duration_s=duration_increase_step,
+        maximum_running_speed_cm_s=maximum_speed_threshold,
+        maximum_speed_duration_s=maximum_duration_threshold,
+        maximum_training_time_m=maximum_training_time,
+        maximum_water_volume_ml=maximum_water_volume,
+        experimenter=experimenter,
+        mouse_weight_g=animal_weight,
+    )
+
+    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
+    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
+    runtime = BehaviorTraining(
+        session_data=session_data,
+        descriptor=descriptor,
+        actor_port="/dev/ttyACM0",
+        sensor_port="/dev/ttyACM1",
+        encoder_port="/dev/ttyACM2",
+        headbar_port="/dev/ttyUSB0",
+        lickport_port="/dev/ttyUSB1",
+        face_camera_index=0,
+        left_camera_index=0,
+        right_camera_index=2,
+        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        screens_on=False,
+        valve_calibration_data=valve_calibration_data,
+    )
+
     # Initializes the timers used during runtime
     runtime_timer = PrecisionTimer("s")
     speed_timer = PrecisionTimer("ms")
@@ -2826,28 +2942,102 @@ def run_train_logic(
     # destinations.
     runtime.stop()
 
+    # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
+    # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
+    # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
+    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
+    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    session_data.write_water_restriction_data(
+        experimenter_id=experimenter,
+        animal_weight=descriptor.mouse_weight_g,
+        water_volume=training_water + experimenter_water,
+    )
 
-def run_experiment_logic() -> None:
+
+def run_experiment_logic(
+    project: str,
+    animal: str,
+    experimenter: str,
+    animal_weight: float,
+    surgery_log_id: str,
+    water_restriction_log_id: str,
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+    cue_length_map: dict[int, float],
+    experiment_state_sequence: tuple[ExperimentState, ...],
+) -> None:
     """Provides the reference implementation of experimental runtime that uses the Mesoscope-VR system.
 
     This function is not intended to be used during real experiments. Instead, it demonstrates how to implement and
     experiment and is used during testing and calibration of the Mesoscope-VR system. It uses hardcoded default runtime
     parameters and should not be modified or called by end-users.
+
+    Args:
+        project: The name of the project the animal belongs to.
+        animal: The id (name) of the animal running the experiment.
+        experimenter: The id of the experimenter conducting the experiment.
+        animal_weight: The weight of the animal, in grams, at the beginning of the training session.
+        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
+        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
+            trained animal.
+        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
+            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
+            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
+            water used during training and experiments to reward the animal.
     """
 
-    rest_duration = 0.5 * 60  # Duration of rest phase
-    run_duration = 5 * 60  # Duration of run phrase
-    total_duration = rest_duration + run_duration  # Total duration of the experiment
-    runtime_timer = PrecisionTimer("s")  # TImer to enforce phase durations
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    message = f"Initializing lick training runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
 
     # Generates the runtime class and other assets
-    session_data = SessionData(project_name="TestMice", animal_name="666")
-    descriptor = _MesoscopeExperimentDescriptor()
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_name=animal,
+        project_name=project,
+        surgery_sheet_id=surgery_log_id,
+        water_log_sheet_id=water_restriction_log_id,
+        generate_mesoscope_paths=False,  # No need for mesoscope when training.
+        credentials_path=Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
+        local_root_directory=Path("/media/Data/Experiments"),
+        server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
+        nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
+    )
+
+    # Updates the surgery data for the trained animal, stored inside the metadata folders as a .yaml file. It is
+    # expected that every animal that undergoes training has undergone a surgical intervention to at least implant the
+    # headbar.
+    session_data.write_surgery_data()
+
+    # Pre-generates the SessionDescriptor class and populates it with experiment data.
+    descriptor = _MesoscopeExperimentDescriptor(
+        experimenter=experimenter,
+        mouse_weight_g=animal_weight,
+    )
+
+    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
+    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = MesoscopeExperiment(
         session_data=session_data,
         descriptor=descriptor,
-        cue_length_map={0: 30, 1: 30, 2: 30, 3: 30, 4: 30},  # Ivan's task, version with 4 cues and 4 gray regions
+        cue_length_map=cue_length_map,
+        actor_port="/dev/ttyACM0",
+        sensor_port="/dev/ttyACM1",
+        encoder_port="/dev/ttyACM2",
+        headbar_port="/dev/ttyUSB0",
+        lickport_port="/dev/ttyUSB1",
+        face_camera_index=0,
+        left_camera_index=0,
+        right_camera_index=2,
+        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        screens_on=False,
+        valve_calibration_data=valve_calibration_data,
     )
+
+    runtime_timer = PrecisionTimer("s")  # Initializes the timer to enforce experiment state durations
 
     # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
     lick_tracker, valve_tracker, speed_tracker = runtime.trackers
@@ -2864,25 +3054,48 @@ def run_experiment_logic() -> None:
     # Initializes the keyboard listener to support aborting test runtimes.
     listener = KeyboardListener()
 
-    # Main runtime loop
-    once = True
-    runtime.change_experiment_state(1)
-    runtime_timer.reset()
-    console.echo(message="Delaying for the resting phase.", level=LogLevel.INFO)
-    while runtime_timer.elapsed < total_duration:
-        visualizer.update()  # Continuously updates the visualizer
+    # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
+    # state
+    for state in experiment_state_sequence:
+        runtime_timer.reset()  # Resets the timer
 
-        if once and runtime_timer.elapsed > rest_duration:
-            once = False
-            console.echo(message="Delaying for the running phase.", level=LogLevel.INFO)
+        # Sets the Experiment state
+        runtime.change_experiment_state(state.experiment_state_code)
+
+        # Resolves and sets the VR state
+        if state.vr_state_code == 1:
+            runtime.vr_rest()
+        elif state.vr_state_code == 2:
             runtime.vr_run()
-            runtime.change_experiment_state(2)
+        else:
+            warning_text = (
+                f"Invalid VR state code {state.vr_state_code} encountered when executing experiment runtime. "
+                f"Currently, only codes 1 (rest) and 2 (run) are supported. Skipping the unsupported state."
+            )
+            console.echo(message=warning_text, level=LogLevel.ERROR)
+            continue
 
-        # If the user sent the abort command, terminates the runtime early with an error message.
-        if listener.exit_signal:
-            message = "Experiment runtime: aborted due to user request."
-            console.echo(message=message, level=LogLevel.ERROR)
-            break
+        # Creates a tqdm progress bar for the current experiment state
+        with tqdm(total=state.state_duration_s, desc=f"Executing experiment state {state.experiment_state_code}",
+                  bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s") as pbar:
+
+            previous_seconds = 0
+
+            while runtime_timer.elapsed < state.state_duration_s:
+                visualizer.update()  # Continuously updates the visualizer
+
+                # Updates the progress bar every second. While the current implementation is not safe, we know that
+                # the loop will cycle much faster than 1 second, so it should not be possible for the delta to ever
+                # exceed 1 second.
+                if runtime_timer.elapsed != previous_seconds:
+                    pbar.update(1)
+                    previous_seconds = runtime_timer.elapsed
+
+                # If the user sent the abort command, terminates the runtime early with an error message.
+                if listener.exit_signal:
+                    message = "Experiment runtime: aborted due to user request."
+                    console.echo(message=message, level=LogLevel.ERROR)
+                    break
 
     # Shutdown sequence:
     message = f"Experiment runtime: Complete."
@@ -2894,3 +3107,15 @@ def run_experiment_logic() -> None:
     # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
     # destinations.
     runtime.stop()
+
+    # Loads the session descriptor saved as a .yaml file during the runtime stop() method and uses it to update the
+    # water restriction log. This reduces the amount of manual logging the experimenter has to do each day. Note, this
+    # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
+    descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    training_water = descriptor.dispensed_water_volume_ul / 1000  # Converts from uL to ml
+    experimenter_water = descriptor.experimenter_given_water_volume_ml
+    session_data.write_water_restriction_data(
+        experimenter_id=experimenter,
+        animal_weight=descriptor.mouse_weight_g,
+        water_volume=training_water + experimenter_water,
+    )

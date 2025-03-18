@@ -1,15 +1,25 @@
 """This module provides click-based Command-Line Interface (CLI) scripts that allow using various features from this
 library through the terminal."""
 
-from pathlib import Path
-
 import click
-from ataraxis_base_utilities import LogLevel, console
 
-from sl_experiment.experiment import SessionData
-
-from .experiment import run_train_logic, lick_training_logic, run_experiment_logic, calibrate_valve_logic
+from .experiment import (
+    ExperimentState,
+    run_train_logic,
+    lick_training_logic,
+    run_experiment_logic,
+    calibrate_valve_logic,
+)
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
+
+# Precalculated default valve calibration data. This should be defined separately for each project, as the valve
+# is replaced and recalibrated fairly frequently.
+valve_calibration_data = (
+    (15000, 1.8556),
+    (30000, 3.4844),
+    (45000, 7.1846),
+    (60000, 10.0854),
+)
 
 
 @click.command()
@@ -111,15 +121,6 @@ def lick_training(
     'Template' project.
     """
 
-    # Precalculated default valve calibration data. This should be defined separately for each project, as the valve
-    # is replaced and recalibrated fairly frequently.
-    valve_calibration_data = (
-        (15000, 1.8556),
-        (30000, 3.4844),
-        (45000, 7.1846),
-        (60000, 10.0854),
-    )
-
     # To distinguish real test mice used to calibrate sun lab equipment from the 'virtual' mouse used to test the
     # hardware, they use two different projects. Real project implementations of this CLI should statically set the
     # project name for their project
@@ -151,26 +152,15 @@ def lick_training(
 
 @click.command()
 def calibrate_valve_cli() -> None:
-    """Instantiates a terminal-driven interface to interact with the water delivery solenoid valve.
+    """Exposes a terminal interface to interact with the water delivery solenoid valve.
 
     This CLI command is designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve used to
     deliver water to animals during training and experiment runtimes. This CLI is typically used twice per day: before
-    the first runtime and after the last runtime.
+    the first runtime and after the last runtime. While this CLI is not intended to be reimplemented, projects
+    using this library may need to reimplement it to update the valve calibration data.
     """
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
-    message = f"Initializing valve calibration runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Runs the calibration runtime.
-    calibrate_valve_logic(
-        actor_port=actor_port,
-        headbar_port=headbar_port,
-        lickport_port=lickport_port,
-        valve_calibration_data=valve_calibration_data,
-    )
+    calibrate_valve_logic(valve_calibration_data=valve_calibration_data)
 
 
 @click.command()
@@ -186,7 +176,7 @@ def calibrate_valve_cli() -> None:
     "--animal",
     type=str,
     required=True,
-    help="The name of the animal undergoing the lick training session.",
+    help="The name of the animal undergoing the run training session.",
 )
 @click.option(
     "-w",
@@ -290,125 +280,10 @@ def calibrate_valve_cli() -> None:
     default=40,
     help="The maximum time to run the training, in minutes.",
 )
-@click.option(
-    "-ap",
-    "--actor_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM0",
-    help="The USB port used by the actor MicroController.",
-)
-@click.option(
-    "-sp",
-    "--sensor_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM1",
-    help="The USB port used by the sensor MicroController.",
-)
-@click.option(
-    "-ep",
-    "--encoder_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyACM2",
-    help="The USB port used by the encoder MicroController.",
-)
-@click.option(
-    "-hp",
-    "--headbar_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB0",
-    help="The USB port used by the HeadBar controller.",
-)
-@click.option(
-    "-lp",
-    "--lickport_port",
-    type=str,
-    show_default=True,
-    default="/dev/ttyUSB1",
-    help="The USB port used by the LickPort controller.",
-)
-@click.option(
-    "-fc",
-    "--face_camera",
-    type=int,
-    default=0,
-    show_default=True,
-    help="The index of the face camera in the list of all available Harvester-managed cameras.",
-)
-@click.option(
-    "-fc",
-    "--left_camera",
-    type=int,
-    default=0,
-    show_default=True,
-    help="The index of the left camera in the list of all available OpenCV-managed cameras.",
-)
-@click.option(
-    "-fc",
-    "--right_camera",
-    type=int,
-    default=2,
-    show_default=True,
-    help="The index of the right camera in the list of all available OpenCV-managed cameras.",
-)
-@click.option(
-    "-cp",
-    "--cti_path",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    default="/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti",
-    show_default=True,
-    help="The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.",
-)
-@click.option(
-    "-s",
-    "--screens_on",
-    is_flag=True,
-    default=False,
-    help="Communicates whether the VR screens are currently ON.",
-)
-@click.option(
-    "-vd",
-    "--valve_calibration_data",
-    type=(int, float),
-    multiple=True,
-    default=DEFAULT_VALVE_CALIBRATION_DATA,
-    show_default=True,
-    help=(
-        "Supplies the data used by the solenoid valve module to determine how long to keep the valve open to "
-        "deliver requested water volumes. Provides calibration data as pairs of numbers, for example: "
-        "--valve-calibration-data 15000 1.8556."
-    ),
-)
-@click.option(
-    "-lr",
-    "--local_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/media/Data/Experiments",
-    show_default=True,
-    help="The path to the root directory on the local machine (VRPC) that stores experiment project folders.",
-)
-@click.option(
-    "-sp",
-    "--server_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/media/cbsuwsun/storage/sun_data",
-    show_default=True,
-    help="The path to the root directory on the BioHPC lab server that stores experiment project folders.",
-)
-@click.option(
-    "-np",
-    "--nas_root_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    default="/home/cybermouse/nas/rawdata",
-    show_default=True,
-    help="The path to the root directory on the NAS that stores experiment project folders.",
-)
 def run_training(
+    experimenter: str,
     animal: str,
-    project: str,
+    animal_weight: float,
     initial_speed: float,
     initial_duration: float,
     increase_threshold: float,
@@ -419,70 +294,35 @@ def run_training(
     maximum_volume: float,
     maximum_time: int,
 ) -> None:
-    """Runs a single run training session for the specified animal and project combination, using the input
-    parameters.
+    """Runs a reference run training session for the specified animal, using the input parameters.
 
-    This CLI command allows running 'run' training sessions via the terminal. The only parameters that have to be
-    provided at each runtime are the animal and project name. Every other parameter can be overwritten, but has been
-    statically configured to work for our current Mesoscope-VR system configuration.
+    The CLI is primarily designed to calibrate and test the Sun lab Mesoscope-VR system and to demonstrate how to
+    implement run training for custom projects. Depending on the animal id, this CLI statically uses 'TestMice' or
+    'Template' project.
     """
 
-    # Enables the console
-    if not console.enabled:
-        console.enable()
+    # To distinguish real test mice used to calibrate sun lab equipment from the 'virtual' mouse used to test the
+    # hardware, they use two different projects. Real project implementations of this CLI should statically set the
+    # project name for their project
+    if int(animal) == 666:
+        project = "Template"
+    else:
+        project = "TestMice"
 
-    message = f"Initializing run training runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Converts input paths to Pth instances.
-    cti_path = Path(cti_path)
-    local_root_path = Path(local_root_path)
-    server_root_path = Path(server_root_path)
-    nas_root_path = Path(nas_root_path)
-
-    # Initializes the session data manager class.
-    session_data = SessionData(
-        animal_name=animal,
-        project_name=project,
-        generate_mesoscope_paths=False,  # No need for mesoscope during run training.
-        local_root_directory=local_root_path,
-        server_root_directory=server_root_path,
-        nas_root_directory=nas_root_path,
-    )
-
-    # Pre-generates the SessionDescriptor class and populates it with training data
-    descriptor = _RunTrainingDescriptor(
-        initial_running_speed_cm_s=initial_speed,
-        initial_speed_duration_s=initial_duration,
-        increase_threshold_ml=increase_threshold,
-        increase_running_speed_cm_s=speed_step,
-        increase_speed_duration_s=duration_step,
-        maximum_running_speed_cm_s=maximum_speed,
-        maximum_speed_duration_s=maximum_duration,
-        maximum_training_time_m=maximum_time,
-        maximum_water_volume_ml=maximum_volume,
-    )
-
-    # Initializes the main runtime interface class.
-    runtime = BehaviorTraining(
-        session_data=session_data,
-        descriptor=descriptor,
-        actor_port=actor_port,
-        sensor_port=sensor_port,
-        encoder_port=encoder_port,
-        headbar_port=headbar_port,
-        lickport_port=lickport_port,
-        face_camera_index=face_camera,
-        left_camera_index=left_camera,
-        right_camera_index=right_camera,
-        harvesters_cti_path=cti_path,
-        screens_on=screens_on,
-        valve_calibration_data=valve_calibration_data,
-    )
+    # Surgery and water restriction log data has to be defined separately for each project, as each may use separate
+    # Google Sheet files. Here, we use the two standard sheets used in the lab to test and calibrate this library.
+    surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
+    water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
     # Runs the training session.
     run_train_logic(
-        runtime=runtime,
+        project=project,
+        animal=animal,
+        experimenter=experimenter,
+        animal_weight=animal_weight,
+        surgery_log_id=surgery_id,
+        water_restriction_log_id=water_restriction_id,
+        valve_calibration_data=valve_calibration_data,
         initial_speed_threshold=initial_speed,
         initial_duration_threshold=initial_duration,
         speed_increase_step=increase_threshold,
@@ -496,9 +336,74 @@ def run_training(
 
 
 @click.command()
-def run_experiment() -> None:
-    """Runs the reference experiment runtime.
+@click.option(
+    "-e",
+    "--experimenter",
+    type=str,
+    required=True,
+    help="The ID of the experimenter supervising the experiment session.",
+)
+@click.option(
+    "-a",
+    "--animal",
+    type=str,
+    required=True,
+    help="The name of the animal undergoing the experiment session.",
+)
+@click.option(
+    "-w",
+    "--animal_weight",
+    type=float,
+    required=True,
+    help="The weight of the animal, in grams, at the beginning of the experiment session.",
+)
+def run_experiment(
+    experimenter: str,
+    animal: str,
+    animal_weight: float,
+) -> None:
+    """Runs a reference experiment session for the specified animal, using the input parameters.
 
-    This CLI is intended EXCLUSIVELY to test the Mesoscope-Vr system. Do not use this for real projects.
+    The CLI is primarily designed to calibrate and test the Sun lab Mesoscope-VR system and to demonstrate how to
+    implement experiment runtimes for custom projects. Depending on the animal id, this CLI statically uses 'TestMice'
+    or 'Template' project.
     """
-    run_experiment_logic()
+
+    # Statically defines the cue length map for the test Unity task
+    cue_length_map = {0: 30.0, 1: 30.0, 2: 30.0, 3: 30.0, 4: 30.0}  # Ivan's task: 4 cues and 4 gray regions
+
+    # Defines the sequence of experiment 'states'
+    baseline = ExperimentState(experiment_state_code=1, vr_state_code=1, state_duration_s=30.0)
+    run = ExperimentState(
+        experiment_state_code=2,
+        vr_state_code=2,
+        state_duration_s=120.0,  # 2 minutes
+    )
+    cooldown = ExperimentState(experiment_state_code=3, vr_state_code=1, state_duration_s=15.0)
+    experiment_state_sequence = (baseline, run, cooldown)
+
+    # To distinguish real test mice used to calibrate sun lab equipment from the 'virtual' mouse used to test the
+    # hardware, they use two different projects. Real project implementations of this CLI should statically set the
+    # project name for their project
+    if int(animal) == 666:
+        project = "Template"
+    else:
+        project = "TestMice"
+
+    # Surgery and water restriction log data has to be defined separately for each project, as each may use separate
+    # Google Sheet files. Here, we use the two standard sheets used in the lab to test and calibrate this library.
+    surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
+    water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
+
+    # Runs the experiment session using the input parameters.
+    run_experiment_logic(
+        project=project,
+        animal=animal,
+        experimenter=experimenter,
+        animal_weight=animal_weight,
+        surgery_log_id=surgery_id,
+        water_restriction_log_id=water_restriction_id,
+        valve_calibration_data=valve_calibration_data,
+        cue_length_map=cue_length_map,
+        experiment_state_sequence=experiment_state_sequence,
+    )
