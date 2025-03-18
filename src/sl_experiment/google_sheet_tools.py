@@ -405,7 +405,7 @@ class _SurgerySheet:
             )
             console.error(message, error=RuntimeError)
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
@@ -741,7 +741,7 @@ class _WaterSheetData:
             column_letter = _convert_index_to_column_letter(i)
             self._headers[str(header).strip().lower()] = column_letter
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 

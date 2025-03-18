@@ -2,12 +2,12 @@
 import importlib_metadata
 
 # -- Project information -----------------------------------------------------
-project = 'ataraxis-communication-interface'
+project = 'sl-experiment'
 # noinspection PyShadowingBuiltins
 copyright = '2024, Ivan Kondratyev & Sun Lab'
-authors = ['Ivan Kondratyev (Inkaros)', 'Jacob Groner']
+authors = ['Ivan Kondratyev (Inkaros)', 'Natalie Yeung', 'Katlynn Ryu', 'Jasmine Si']
 # Extracts the project version from the .toml file.
-release = importlib_metadata.version("ataraxis-communication-interface")
+release = importlib_metadata.version("sl-experiment")
 
 # -- General configuration ---------------------------------------------------
 extensions = [

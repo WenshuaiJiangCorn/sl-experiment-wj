@@ -2426,7 +2426,7 @@ def lick_training_logic(
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     message = f"Writing water restriction log entry..."
     console.echo(message=message, level=LogLevel.INFO)
-    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)  # type: ignore
     training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
     experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
@@ -2437,8 +2437,9 @@ def lick_training_logic(
         water_volume=total_water,
     )
 
-    message = f"Writing water restriction log entry: written."
+    message = f"Water restriction log entry: written."
     console.echo(message=message, level=LogLevel.SUCCESS)
+
 
 def calibrate_valve_logic(
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
@@ -2960,11 +2961,10 @@ def run_train_logic(
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     message = f"Writing water restriction log entry..."
     console.echo(message=message, level=LogLevel.INFO)
-    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)  # type: ignore
     training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
     experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
-
 
     session_data.write_water_restriction_data(
         experimenter_id=experimenter,
@@ -2972,10 +2972,8 @@ def run_train_logic(
         water_volume=total_water,
     )
 
-    message = f"Writing water restriction log entry: written."
+    message = f"Water restriction log entry: written."
     console.echo(message=message, level=LogLevel.SUCCESS)
-
-
 
 
 def run_experiment_logic(
@@ -2989,7 +2987,7 @@ def run_experiment_logic(
     cue_length_map: dict[int, float],
     experiment_state_sequence: tuple[ExperimentState, ...],
 ) -> None:
-    """ Encapsulates the logic used to run experiments via the Mesoscope-VR system.
+    """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
     This function can be used to execute any valid experiment using the Mesoscope-VR system. Each experiment should be
     broken into one or more experiment states (phases), such as 'baseline', 'task' and 'cooldown'. Furthermore, each
@@ -3007,7 +3005,7 @@ def run_experiment_logic(
         This function itself does not resolve the task logic, it is only concerned with iterating over experiment
         states, controlling the VR system, and monitoring user command issued via keyboard.
 
-        Similar to all other runtime functions, this function contains all necessary bindings to setup, execute and
+        Similar to all other runtime functions, this function contains all necessary bindings to set up, execute, and
         terminate an experiment runtime. Custom projects should implement a cli that calls this function with
         project-specific parameters.
 
@@ -3123,9 +3121,11 @@ def run_experiment_logic(
             continue
 
         # Creates a tqdm progress bar for the current experiment state
-        with tqdm(total=state.state_duration_s, desc=f"Executing experiment state {state.experiment_state_code}",
-                  bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s") as pbar:
-
+        with tqdm(
+            total=state.state_duration_s,
+            desc=f"Executing experiment state {state.experiment_state_code}",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
+        ) as pbar:
             previous_seconds = 0
 
             while runtime_timer.elapsed < state.state_duration_s:
@@ -3160,7 +3160,7 @@ def run_experiment_logic(
     # assumes that session data is NOT automatically removed from the VRPC as part of the data preprocessing.
     message = f"Writing water restriction log entry..."
     console.echo(message=message, level=LogLevel.INFO)
-    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)
+    descriptor = descriptor.from_yaml(file_path=session_data.session_descriptor_path)  # type: ignore
     training_water = round(descriptor.dispensed_water_volume_ul / 1000, ndigits=3)  # Converts from uL to ml
     experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
     total_water = training_water + experimenter_water
@@ -3171,5 +3171,5 @@ def run_experiment_logic(
         water_volume=total_water,
     )
 
-    message = f"Writing water restriction log entry: written."
+    message = f"Water restriction log entry: written."
     console.echo(message=message, level=LogLevel.SUCCESS)

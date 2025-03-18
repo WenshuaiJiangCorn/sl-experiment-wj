@@ -1,6 +1,5 @@
 """This module provides Visualizer classes to render animal training and experiment task performance data in real
 time."""
-import copy
 
 import numpy as np
 import matplotlib
