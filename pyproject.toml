@@ -108,7 +108,7 @@ conda = [
     "importlib_metadata>=8,<9",
     "sphinx-rtd-theme>=3,<4",
     "sphinx-click>=6,<7",
-    "sphinx-autodoc-typehints>=2,<3",
+    "sphinx-autodoc-typehints>=3,<4",
 
     # Linting and Stub-generation
     "mypy>=1,<2",
@@ -159,7 +159,7 @@ dev = [
 [project.scripts]
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
-sl-calibrate-valve = "sl_experiment.cli:calibrate_valve_cli"
+sl-maintain-vr = "sl_experiment.cli:maintain_vr"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"

@@ -27,7 +27,7 @@ from .visualizers import BehaviorVisualizer
 from .transfer_tools import transfer_directory
 from .binding_classes import _HeadBar, _LickPort, _VideoSystems, _ZaberPositions, _MicroControllerInterfaces
 from .packaging_tools import calculate_directory_checksum
-from .module_interfaces import ValveInterface
+from .module_interfaces import BreakInterface, ValveInterface
 from .data_preprocessing import process_log_data, process_mesoscope_directory
 from .google_sheet_tools import SurgeryData, _SurgerySheet, _WaterSheetData
 
@@ -712,30 +712,53 @@ class SessionData:
         files: tuple[Path, ...] = tuple([path for path in source.glob("*")])
         file_names: tuple[str, ...] = tuple([file.name for file in files])
 
-        # Ensures the folder contains motion estimator data files
-        if "MotionEstimator.me" not in file_names:
-            message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The 'mesoscope_frames' "
-                f"ScanImage PC directory does not contain the MotionEstimator.me file, which is required for further "
-                f"frame data processing."
-            )
-            console.error(message=message, error=RuntimeError)
-        if "zstack.mat" not in file_names:
-            message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The 'mesoscope_frames' "
-                f"ScanImage PC directory does not contain the zstack.mat file, which is required for further "
-                f"frame data processing."
-            )
-            console.error(message=message, error=RuntimeError)
+        # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
+        # all files are present.
+        while True:
+            error = False
+            # Ensures the folder contains motion estimator data files
+            if "MotionEstimator.me" not in file_names:
+                message = (
+                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                    f"'mesoscope_frames' ScanImage PC directory does not contain the MotionEstimator.me file, "
+                    f"which is required for further frame data processing."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                error = True
 
-        # Prevents 'pulling' an empty folder. At a minimum, we expect 2 motion estimation files and one TIFF stack file
-        if len(files) < 3:
+            if "zstack.mat" not in file_names:
+                message = (
+                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                    f"'mesoscope_frames' ScanImage PC directory does not contain the zstack.mat file, which is "
+                    f"required for further frame data processing."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                error = True
+
+            # Prevents 'pulling' an empty folder. At a minimum, we expect 2 motion estimation files and one TIFF stack
+            # file
+            if len(files) < 3:
+                message = (
+                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                    f"'mesoscope_frames' ScanImage PC directory does not contain the minimum expected number of files "
+                    f"(3). This indicates that no frames were acquired during runtime or that the frames were saved at "
+                    f"a different location."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                error = True
+
+            # Breaks the loop if all files are present
+            if not error:
+                break
+
+            # Waits for the user to move the files into the requested directory and continues the runtime
             message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The 'mesoscope_frames' "
-                f"ScanImage PC directory does not contain the minimum expected number of files (3). This indicates "
-                f"that no frames were acquired during runtime or that the frames were saved at a different location."
+                f"Unable to locate all required Mesoscope data files when pulling the data to the VRPC. "
+                f"Move all requested files to the mesoscope_frames directory on the ScanImage PC before "
+                f"continuing the runtime."
             )
-            console.error(message=message, error=RuntimeError)
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
         # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
         # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
@@ -1077,8 +1100,7 @@ class MesoscopeExperiment:
             "control the HeadBar and LickPort motor positions until you reset the runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self._headbar: _HeadBar = _HeadBar(
@@ -1162,8 +1184,7 @@ class MesoscopeExperiment:
             "mesoscope and / or HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
         # with each other, so it is safe to move both assemblies at the same time.
@@ -1187,8 +1208,7 @@ class MesoscopeExperiment:
             "objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably run the task."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         message = "LickPort: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1203,8 +1223,7 @@ class MesoscopeExperiment:
             "manual checkpoint, entering 'y' after this message will begin the experiment."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
         # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
@@ -1377,8 +1396,7 @@ class MesoscopeExperiment:
             f"session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
@@ -1434,7 +1452,7 @@ class MesoscopeExperiment:
         )
 
         # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
-        self._session_data.pull_mesoscope_data(remove_sources=True)
+        self._session_data.pull_mesoscope_data(verify_transfer_integrity=True, remove_sources=True)
 
         # Preprocesses the pulled mesoscope data.
         self._session_data.process_mesoscope_data()
@@ -1806,8 +1824,7 @@ class BehaviorTraining:
             "control the HeadBar and LickPort motor positions until you reset the runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self._headbar: _HeadBar = _HeadBar(
@@ -1877,8 +1894,7 @@ class BehaviorTraining:
             "mounted on the rig. Failure to fulfill these steps may HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         message = "HeadBar: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1902,8 +1918,7 @@ class BehaviorTraining:
             "HeadBar position to make sure the animal can comfortably run the task."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         message = "LickPort: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1918,8 +1933,7 @@ class BehaviorTraining:
             "begin the training."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
         # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
@@ -2040,8 +2054,7 @@ class BehaviorTraining:
             f"session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
@@ -2441,15 +2454,16 @@ def lick_training_logic(
     console.echo(message=message, level=LogLevel.SUCCESS)
 
 
-def calibrate_valve_logic(
+def vr_maintenance_logic(
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
 ) -> None:
-    """Encapsulates the logic used to fill, empty, check, and calibrate the water valve.
+    """Encapsulates the logic used to interface with the hardware modules to maintain the solenoid valve and the
+    running wheel.
 
-    This runtime allows interfacing with the water valve outside training and experiment runtime contexts. Usually,
-    this is done at the beginning and the end of each experiment / training day to ensure the valve operates smoothly
-    during runtimes. Specifically, at the beginning of each day the valve is filled with water and 'referenced' to
-    verify it functions as expected. At the end of each day, the valve is emptied.
+    This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
+    contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
+    'referenced' to verify it functions as expected. At the end of each day, the valve is emptied. Similarly, the wheel
+    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly interval.
 
     Args:
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
@@ -2457,24 +2471,24 @@ def calibrate_valve_logic(
             microliters.
 
     Notes:
-        This runtime will position the Zaber motors to facilitate working with the valve.
+        This runtime will position the Zaber motors to facilitate working with the valve and the wheel.
     """
     # Enables the console
     if not console.enabled:
         console.enable()
 
-    message = f"Initializing valve calibration runtime..."
+    message = f"Initializing valve interface runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
     delay_timer = PrecisionTimer("s")
 
-    message = f"Initializing calibration assets..."
+    message = f"Initializing interface assets..."
     console.echo(message=message, level=LogLevel.INFO)
 
     # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
-    with tempfile.TemporaryDirectory(prefix="sl_valve_") as output_dir:
+    with tempfile.TemporaryDirectory(prefix="sl_maintenance_") as output_dir:
         output_path: Path = Path(output_dir)
 
         # Initializes the data logger. Due to how the MicroControllerInterface class is implemented, this is required
@@ -2488,9 +2502,6 @@ def calibrate_valve_logic(
         )
         logger.start()
 
-        message = f"DataLogger: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
         # Initializes HeadBar and LickPort binding classes
         headbar = _HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
         lickport = _LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
@@ -2498,20 +2509,22 @@ def calibrate_valve_logic(
         message = f"Zaber controllers: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Initializes the Actor MicroController with the valve module. Ignores all other modules at this time.
+        # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
+        # time.
         valve: ValveInterface = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+        wheel: BreakInterface = BreakInterface(debug=True)
         controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
             microcontroller_serial_buffer_size=8192,
             microcontroller_usb_port="/dev/ttyACM0",
             data_logger=logger,
-            module_interfaces=(valve,),
+            module_interfaces=(valve, wheel),
         )
         controller.start()
         controller.unlock_controller()
 
-        # Delays for 2 seconds for the valve to initialize and send the state message. This avoids the visual clash
-        # with he zaber positioning dialog
+        # Delays for 1 second for the valve to initialize and send the state message. This avoids the visual clash
+        # with the zaber positioning dialog
         delay_timer.delay_noblock(delay=1)
 
         message = f"Actor MicroController: Started."
@@ -2525,8 +2538,7 @@ def calibrate_valve_logic(
             "mesoscope and / or HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
         # with each other, so it is safe to move both assemblies at the same time.
@@ -2544,8 +2556,8 @@ def calibrate_valve_logic(
 
         # Notifies the user about supported calibration commands
         message = (
-            "Supported Calibration commands: open, close, reference, reward, "
-            "calibrate_15, calibrate_30, calibrate_45, calibrate__60. Use 'q' command to terminate the runtime."
+            "Supported valve commands: open, close, reference, reward, calibrate_15, calibrate_30, calibrate_45, "
+            "calibrate_60. Supported break (wheel) commands: lock, unlock. Use 'q' command to terminate the runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -2600,6 +2612,16 @@ def calibrate_valve_logic(
                 valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
                 valve.calibrate()
 
+            if command == "lock":
+                message = f"Locking wheel break."
+                console.echo(message=message, level=LogLevel.INFO)
+                wheel.toggle(state=True)
+
+            if command == "unlock":
+                message = f"Unlocking wheel break."
+                console.echo(message=message, level=LogLevel.INFO)
+                wheel.toggle(state=False)
+
             if command == "q":
                 message = f"Terminating valve calibration runtime."
                 console.echo(message=message, level=LogLevel.INFO)
@@ -2607,12 +2629,11 @@ def calibrate_valve_logic(
 
         # Instructs the user to remove the objective and the animal before resetting all zaber motors.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Remove all objects sued during calibration, such as "
+            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during calibration, such as "
             "water collection flasks, from the Mesoscope-VR cage."
         )
         console.echo(message=message, level=LogLevel.WARNING)
-        while input("Enter 'y' to continue: ") != "y":
-            continue
+        input("Enter anything to continue: ")
 
         # Shuts down zaber bindings
         headbar.park_position(wait_until_idle=False)
@@ -2633,7 +2654,7 @@ def calibrate_valve_logic(
         # Stops the data logger
         logger.stop()
 
-        message = f"DataLogger: Terminated."
+        message = f"Runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # The logs will be cleaned up by deleting the temporary directory when this runtime exits.

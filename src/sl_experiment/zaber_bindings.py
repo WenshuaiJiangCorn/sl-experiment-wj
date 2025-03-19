@@ -273,11 +273,6 @@ class _ZaberUnits:
     Notes:
         This class is intended exclusively for within-library use and should only be initialized by ZaberAxis instances.
         Do not call or use this class directly!
-
-    Attributes:
-        zaber_units_conversion: The dictionary that maps colloquial unit names to Zaber unit classes.
-        unit_type: Tracks the 'family' of the units (e.g: millimeters) being used. Currently, this class only supports
-            two families of units: millimeters and degrees.
     """
 
     # This dictionary conditionally maps Zaber units to colloquial names, factoring in the type of the motor.
@@ -295,7 +290,11 @@ class _ZaberUnits:
             },
         },
     )
+    """The dictionary that maps colloquial unit names to Zaber unit classes."""
     unit_type: str = "millimeters"
+    """Tracks the 'family' of the units (e.g: millimeters) being used. Currently, this class only supports two 
+    families of units: millimeters and degrees.
+    """
 
     @property
     def displacement_units(self) -> Units:

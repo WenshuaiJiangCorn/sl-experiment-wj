@@ -6,11 +6,11 @@ API documentation: https://sl-experiment.netlify.app/
 Authors: Ivan Kondratyev (Inkaros), Natalie Yeung, Katlynn Ryu, Jasmine Si
 """
 
-from .experiment import run_train_logic, lick_training_logic, run_experiment_logic, calibrate_valve_logic
+from .experiment import run_train_logic, lick_training_logic, run_experiment_logic, vr_maintenance_logic
 
 __all__ = [
     "lick_training_logic",
-    "calibrate_valve_logic",
+    "vr_maintenance_logic",
     "run_train_logic",
     "run_experiment_logic",
 ]

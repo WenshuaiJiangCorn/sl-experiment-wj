@@ -8,7 +8,7 @@ from .experiment import (
     run_train_logic,
     lick_training_logic,
     run_experiment_logic,
-    calibrate_valve_logic,
+    vr_maintenance_logic,
 )
 from .zaber_bindings import _CRCCalculator, discover_zaber_devices
 
@@ -151,16 +151,19 @@ def lick_training(
 
 
 @click.command()
-def calibrate_valve_cli() -> None:
-    """Exposes a terminal interface to interact with the water delivery solenoid valve.
+def maintain_vr() -> None:
+    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
 
     This CLI command is designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve used to
-    deliver water to animals during training and experiment runtimes. This CLI is typically used twice per day: before
-    the first runtime and after the last runtime. While this CLI is not intended to be reimplemented, projects
-    using this library may need to reimplement it to update the valve calibration data.
+    deliver water to animals during training and experiment runtimes. Also, it is capable of locking or unlocking the
+    wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap around the
+    wheel surface (weekly to monthly).
+
+    Since valve maintenance requires accurate valve calibration data which may change frequently, it is advised to
+    reimplement this CLI for each project, similar to all other 'reference' CLI commands from this library.
     """
     # Runs the calibration runtime.
-    calibrate_valve_logic(valve_calibration_data=valve_calibration_data)
+    vr_maintenance_logic(valve_calibration_data=valve_calibration_data)
 
 
 @click.command()

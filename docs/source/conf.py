@@ -4,7 +4,7 @@ import importlib_metadata
 # -- Project information -----------------------------------------------------
 project = 'sl-experiment'
 # noinspection PyShadowingBuiltins
-copyright = '2024, Ivan Kondratyev & Sun Lab'
+copyright = '2025, Ivan Kondratyev & Sun Lab'
 authors = ['Ivan Kondratyev (Inkaros)', 'Natalie Yeung', 'Katlynn Ryu', 'Jasmine Si']
 # Extracts the project version from the .toml file.
 release = importlib_metadata.version("sl-experiment")
@@ -48,3 +48,6 @@ typehints_use_signature_return = False
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = 'sphinx_rtd_theme'  # Directs sphinx to use RTD theme
+
+# Mocks pynput import as real pynput import interferes with documentation process on Linux systems.
+autodoc_mock_imports = ["pynput"]
