@@ -21,7 +21,7 @@ from .module_interfaces import (
 )
 
 @dataclass()
-class _ZaberPositions(YamlConfig):
+class ZaberPositions(YamlConfig):
     """This class is used to save and restore Zaber motor positions between sessions by saving them as .yaml file.
 
     The class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
@@ -49,7 +49,7 @@ class _ZaberPositions(YamlConfig):
     lickport_x: int = ...
     lickport_y: int = ...
 
-class _HeadBar:
+class HeadBar:
     """Interfaces with Zaber motors that control the position of the HeadBar manipulator arm.
 
     This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes. It is used
@@ -86,7 +86,7 @@ class _HeadBar:
     _headbar_z: ZaberAxis
     _headbar_pitch: ZaberAxis
     _headbar_roll: ZaberAxis
-    _previous_positions: None | _ZaberPositions
+    _previous_positions: None | ZaberPositions
     def __init__(self, headbar_port: str, zaber_positions_path: Path) -> None: ...
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
@@ -197,7 +197,7 @@ class _HeadBar:
             removed from the rig before executing this command.
         """
 
-class _LickPort:
+class LickPort:
     """Interfaces with Zaber motors that control the position of the LickPort manipulator arm.
 
     This class abstracts working with Zaber motors that move the LickPort in Z, X, and Y axes. It is used
@@ -234,7 +234,7 @@ class _LickPort:
     _lickport_z: ZaberAxis
     _lickport_x: ZaberAxis
     _lickport_y: ZaberAxis
-    _previous_positions: None | _ZaberPositions
+    _previous_positions: None | ZaberPositions
     def __init__(self, lickport_port: str, zaber_positions_path: Path) -> None: ...
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
@@ -347,7 +347,7 @@ class _LickPort:
             removed from the rig before executing this command.
         """
 
-class _MicroControllerInterfaces:
+class MicroControllerInterfaces:
     """Interfaces with all Ataraxis Micro Controller (AMC) devices that control and record non-video behavioral data
     from the Mesoscope-VR system.
 
@@ -610,7 +610,7 @@ class _MicroControllerInterfaces:
         reward delivery plots.
         """
 
-class _VideoSystems:
+class VideoSystems:
     """Interfaces with all cameras managed by Ataraxis Video System (AVS) classes that acquire and save camera frames
     as .mp4 video files.
 

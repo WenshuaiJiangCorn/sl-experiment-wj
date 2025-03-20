@@ -25,11 +25,11 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 
 from .visualizers import BehaviorVisualizer
 from .transfer_tools import transfer_directory
-from .binding_classes import _HeadBar, _LickPort, _VideoSystems, _ZaberPositions, _MicroControllerInterfaces
+from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
+from .data_processing import RuntimeHardwareConfiguration, process_video_names, process_mesoscope_directory
 from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import BreakInterface, ValveInterface
-from .data_preprocessing import process_log_data, process_mesoscope_directory
-from .google_sheet_tools import SurgeryData, _SurgerySheet, _WaterSheetData
+from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
 
 
 @dataclass()
@@ -154,7 +154,7 @@ class ExperimentState:
     """The time, in seconds, to maintain the current combination of the experiment and VR states."""
 
 
-class KeyboardListener:
+class _KeyboardListener:
     """Monitors the keyboard input for various runtime control signals and changes internal flags to communicate
     detected signals.
 
@@ -487,13 +487,13 @@ class SessionData:
         ensure_directory_exists(self._local)
         ensure_directory_exists(self._nas)
         ensure_directory_exists(self._server)
-        if generate_mesoscope_paths:
-            ensure_directory_exists(self._mesoscope)
-            ensure_directory_exists(self._mesoscope_persistent)
         ensure_directory_exists(self._persistent)
         ensure_directory_exists(self._metadata)
         ensure_directory_exists(self._server_metadata)
         ensure_directory_exists(self._nas_metadata)
+        if generate_mesoscope_paths:
+            ensure_directory_exists(self._mesoscope)
+            ensure_directory_exists(self._mesoscope_persistent)
 
     @property
     def raw_data_path(self) -> Path:
@@ -504,49 +504,6 @@ class SessionData:
         formats. After runtime, SessionData pulls all mesoscope frames into this directory.
         """
         return self._local
-
-    @property
-    def mesoscope_frames_path(self) -> Path:
-        """Returns the path to the mesoscope_frames directory of the managed session.
-
-        This path is used during mesoscope data preprocessing to store compressed (preprocessed) mesoscope frames.
-        """
-        directory_path = self._local.joinpath("mesoscope_frames")
-
-        # Since this is a directory, we need to ensure it exists before this path is returned to caller
-        ensure_directory_exists(directory_path)
-        return directory_path
-
-    @property
-    def ops_path(self) -> Path:
-        """Returns the path to the ops.json file of the managed session.
-
-        This path is used to save the ops.json generated from the mesoscope TIFF metadata during preprocessing. This is
-        a configuration file used by the suite2p during mesoscope data registration.
-        """
-        return self.mesoscope_frames_path.joinpath("ops.json")
-
-    @property
-    def frame_invariant_metadata_path(self) -> Path:
-        """Returns the path to the frame_invariant_metadata.json file of the managed session.
-
-        This path is used to save the metadata shared by all frames in all TIFF stacks acquired by the mesoscope.
-        Currently, this data is not used during processing.
-        """
-        return self.mesoscope_frames_path.joinpath("frame_invariant_metadata.json")
-
-    @property
-    def frame_variant_metadata_path(self) -> Path:
-        """Returns the path to the frame_variant_metadata.npz file of the managed session.
-
-        This path is used to save the metadata unique for each frame in all TIFF stacks acquired by the mesoscope.
-        Currently, this data is not used during processing.
-
-        Notes:
-            Unlike frame-invariant metadata, this file is stored as a compressed NumPy archive (NPZ) file to optimize
-            storage space usage.
-        """
-        return self.mesoscope_frames_path.joinpath("frame_variant_metadata.npz")
 
     @property
     def camera_frames_path(self) -> Path:
@@ -582,17 +539,12 @@ class SessionData:
         return self._local.joinpath("session_descriptor.yaml")
 
     @property
-    def behavior_data_path(self) -> Path:
-        """Returns the path to the behavior_data directory of the managed session.
+    def hardware_configuration_path(self) -> Path:
+        """Returns the path to the hardware_configuration.yaml file of the managed session.
 
-        This path is used during module data processing to extract the data acquired by various hardware modules from
-        .npz log archives and save it as feather files.
+        This file stores hardware module parameters used to read and parse .npz log files during data processing.
         """
-        directory_path = self._local.joinpath("behavior_data")
-
-        # Since this is a directory, we need to ensure it exists before this path is returned to caller
-        ensure_directory_exists(directory_path)
-        return directory_path
+        return self.raw_data_path.joinpath("hardware_configuration.yaml")
 
     @property
     def previous_zaber_positions_path(self) -> Path:
@@ -605,31 +557,6 @@ class SessionData:
         """
         file_path = self._persistent.joinpath("zaber_positions.yaml")
         return file_path
-
-    @property
-    def persistent_motion_estimator_path(self) -> Path:
-        """Returns the path to the MotionEstimator.me file for the managed animal and project combination stored on the
-        ScanImagePC.
-
-        This path is used during the first training session to save the 'reference' MotionEstimator.me file established
-        during the initial mesoscope ROI selection to the ScanImagePC. The same reference file is used for all following
-        sessions to correct for the natural motion of the brain relative to the cranial window.
-        """
-        return self._mesoscope_persistent.joinpath("MotionEstimator.me")
-
-    @property
-    def surgery_metadata_paths(self) -> tuple[Path, Path, Path]:
-        """Returns the paths to the surgery_metadata.yaml file for the managed project and animal combination.
-
-        This file is used to store the data extracted from the lab's surgery log Google Sheet. Typically, this is only
-        done once, when processing the first training session for the animal. This method returns the paths to the
-        target file on all destinations: VRPC, BioHPC server, and the NAS.
-        """
-        return (
-            self._metadata.joinpath("surgery_metadata.yaml"),
-            self._server_metadata.joinpath("surgery_metadata.yaml"),
-            self._nas_metadata.joinpath("surgery_metadata.yaml"),
-        )
 
     def write_water_restriction_data(self, experimenter_id: str, animal_weight: float, water_volume: float) -> None:
         """Updates the water restriction log tab for the currently managed project and animal with the provided data.
@@ -646,7 +573,7 @@ class SessionData:
                 includes the water dispensed during runtime and the water given manually by the experimenter after
                 runtime.
         """
-        sheet = _WaterSheetData(
+        sheet = WaterSheetData(
             animal_id=int(self._animal_name), credentials_path=self._credentials_path, sheet_id=self._water_log_sheet_id
         )
         sheet.update_water_log(mouse_weight=animal_weight, water_ml=water_volume, experimenter_id=experimenter_id)
@@ -660,10 +587,12 @@ class SessionData:
         time, the current mode of operation is to always update this data.
         """
         # Resolves the paths to the surgery data file for the current animal and project combination
-        local_surgery_path, server_surgery_path, nas_surgery_path = self.surgery_metadata_paths
+        local_surgery_path = self._metadata.joinpath("surgery_metadata.yaml")
+        server_surgery_path = self._server_metadata.joinpath("surgery_metadata.yaml")
+        nas_surgery_path = self._nas_metadata.joinpath("surgery_metadata.yaml")
 
         # Loads and parses the data from the surgery log Google Sheet file
-        sheet = _SurgerySheet(
+        sheet = SurgerySheet(
             project_name=self._project_name,
             credentials_path=self._credentials_path,
             sheet_id=self._surgery_sheet_id,
@@ -675,14 +604,14 @@ class SessionData:
         data.to_yaml(server_surgery_path)
         data.to_yaml(nas_surgery_path)
 
-    def pull_mesoscope_data(
-        self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
+    def _pull_mesoscope_data(
+        self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = True
     ) -> None:
         """Pulls the frames acquired by the mesoscope from the ScanImage PC to the VRPC.
 
         This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
         before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
-        contains only the frames acquired during the current session runtime, and the MotionEstimator.me and
+        contains only the frames acquired during the current session runtime, the MotionEstimator.me and
         zstack.mat used for motion registration.
 
         Notes:
@@ -693,29 +622,45 @@ class SessionData:
             'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
             reference for all further motion estimation procedures carried out during future sessions.
 
+            Before pulling the data, the method renames the current mesoscope_frames folder to include the managed
+            session name and recreates the mesoscope_frames folder. This effectively 'caches' the data on the
+            ScanImagePC to avoid delays in running the next session if the processing fails for any reason.
+
         Args:
             num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
                 the local machine. Depending on the connection speed between the PCs, it may be useful to set this
                 number to the number of available CPU cores - 4.
             remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
-                Generally, it is recommended to remove source data to keep ScanImagePC disk usage low.
+                Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
+                this to True will only mark the data for removal. The data will not be removed until 'purge-data' CLI is
+                called.
             verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
                 performed before source folder is removed from the ScanImagePC, if remove_sources is True.
-        Raises:
-            RuntimeError: If the mesoscope source directory does not contain motion estimator files or mesoscope frames.
         """
         # Resolves source and destination paths
         source = self._mesoscope.joinpath("mesoscope_frames")
-        destination = self.raw_data_path  # The path to the raw_data subdirectory of the current session
 
-        # Extracts the names of files stored in the source folder
-        files: tuple[Path, ...] = tuple([path for path in source.glob("*")])
-        file_names: tuple[str, ...] = tuple([file.name for file in files])
+        # Before transferring the data, renames the mesoscope_frames folder to include the session name. This is used
+        # to 'clear' the mesoscope_frames name for the next session, so that the next session can run without delay if
+        # mesoscope frame pulling or processing fails for any reason. The processing can then be repeated using the
+        # cached data.
+        source = source.rename(self._mesoscope.joinpath(f"{self._session_name}_mesoscope_frames"))
+        ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
+
+        destination = self.raw_data_path.joinpath("raw_mesoscope_frames")  # Temporary local storage directory
+        ensure_directory_exists(destination)
+
+        # Defines the set of extensions to look for when verifying source folder contents
+        extensions = {"*.me", "*.mat", "*.tiff", "*.tif"}
 
         # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
         # all files are present.
-        while True:
+        for attempt in range(5):  # A maximum of 5 reattempts is allowed
+            # Extracts the names of files stored in the source folder
+            files: tuple[Path, ...] = tuple([path for ext in extensions for path in source.glob(ext)])
+            file_names: tuple[str, ...] = tuple([file.name for file in files])
             error = False
+
             # Ensures the folder contains motion estimator data files
             if "MotionEstimator.me" not in file_names:
                 message = (
@@ -755,16 +700,26 @@ class SessionData:
             message = (
                 f"Unable to locate all required Mesoscope data files when pulling the data to the VRPC. "
                 f"Move all requested files to the mesoscope_frames directory on the ScanImage PC before "
-                f"continuing the runtime."
+                f"continuing the runtime. Note, cycling through this message 5 times in a row will abort the "
+                f"preprocessing with a RuntimeError"
             )
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
 
+            # If the user has repeatedly failed 10 attempts in a row, exits with a runtime error
+            if attempt >= 4:
+                message = (
+                    f"Failed 4 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
+                    f"data processing and terminating the preprocessing runtime."
+                )
+                console.error(message=message, error=RuntimeError)
+
         # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
         # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
         # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-        if not self.persistent_motion_estimator_path.exists():
-            shutil.copy2(src=source.joinpath("MotionEstimator.me"), dst=self.persistent_motion_estimator_path)
+        persistent_motion_estimator_path = self._mesoscope_persistent.joinpath("MotionEstimator.me")
+        if not persistent_motion_estimator_path.exists():
+            shutil.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
         # Generates the checksum for the source folder if transfer integrity verification is enabled.
         if verify_transfer_integrity:
@@ -780,53 +735,37 @@ class SessionData:
         if verify_transfer_integrity:
             destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
 
-        # After the transfer completes successfully (including integrity verification), recreates the mesoscope_frames
-        # folder to remove the transferred data from the ScanImage PC.
+        # After the transfer completes successfully (including integrity verification), tags (marks) the source
+        # directory for removal. Specifically, deposits an 'ubiquitin' marker, which is used by our data purging
+        # runtime to discover and remove directories that are no longer necessary.
         if remove_sources:
-            shutil.rmtree(source)
-            ensure_directory_exists(source)
+            marker_path = source.joinpath("ubiquitin.bin")
+            marker_path.touch()
 
     def process_mesoscope_data(self) -> None:
-        """Preprocesses the (pulled) mesoscope data.
+        """Pulls the mesoscope-acquired data to the VRPC and preprocesses the frame data.
 
-        This is a wrapper around the process_mesoscope_directory() function. It compressed all mesoscope frames using
-        LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file for future
-        suite2p registration. This method also ensures that after processing all mesoscope data, including motion
-        estimation files, are found under the mesoscope_frames directory.
-
-        Notes:
-            Additional processing for camera data is carried out by the stop() method of each experimental class. This
-            is intentional, as not all classes use all cameras.
+        Primarily, this is a wrapper around the process_mesoscope_directory() function. It compresses all mesoscope
+        frames using LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file
+        for future suite2p registration. This method also ensures that after processing all mesoscope data, including
+        motion estimation files, are found under the mesoscope_frames directory.
         """
+
+        # Pulls the mesoscope data from the ScanImagePC to the VRPC
+        self._pull_mesoscope_data(num_threads=30, remove_sources=True, verify_transfer_integrity=True)
+
         # Preprocesses the pulled mesoscope frames.
         process_mesoscope_directory(
-            image_directory=self.raw_data_path,
-            output_directory=self.mesoscope_frames_path,
-            ops_path=self.ops_path,
-            frame_invariant_metadata_path=self.frame_invariant_metadata_path,
-            frame_variant_metadata_path=self.frame_variant_metadata_path,
-            num_processes=28,
+            data_directory=self.raw_data_path,
+            num_processes=30,
             remove_sources=True,
             verify_integrity=True,
-        )
-
-        # Cleans up some data inconsistencies. Moves motion estimator files to the mesoscope_frames directory generated
-        # during mesoscope data preprocessing. This way, ALL mesoscope-related data is stored under mesoscope_frames.
-        shutil.move(
-            src=self.raw_data_path.joinpath("MotionEstimator.me"),
-            dst=self.mesoscope_frames_path.joinpath("MotionEstimator.me"),
-        )
-        shutil.move(
-            src=self.raw_data_path.joinpath("zstack.mat"),
-            dst=self.mesoscope_frames_path.joinpath("zstack.mat"),
         )
 
     def push_data(
         self,
         parallel: bool = True,
         num_threads: int = 10,
-        remove_sources: bool = False,
-        verify_transfer_integrity: bool = False,
     ) -> None:
         """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
 
@@ -852,11 +791,6 @@ class SessionData:
                 the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
                 advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
                 number of CPU cores - 4.
-            remove_sources: Determines whether to remove the raw_data directory from the VRPC once it has been copied
-                to the NAS and Server. Depending on the overall load of the VRPC, we recommend keeping source data on
-                the VRPC at least until the integrity of the transferred data is verified on the server.
-            verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
-                performed before source folder is removed from the VRPC, if remove_sources is True.
         """
 
         # Resolves source and destination paths
@@ -880,7 +814,7 @@ class SessionData:
                         source=source,
                         destination=destination,
                         num_threads=num_threads,
-                        verify_integrity=verify_transfer_integrity,
+                        verify_integrity=False,  # This is now done on the server directly
                     ): destination
                     for destination in destinations
                 }
@@ -896,12 +830,8 @@ class SessionData:
                     source=source,
                     destination=destination,
                     num_threads=num_threads,
-                    verify_integrity=verify_transfer_integrity,
+                    verify_integrity=False,  # This is now done on the server directly
                 )
-
-        # After all transfers complete successfully, removes the source directory, if requested
-        if remove_sources:
-            shutil.rmtree(source)
 
 
 class MesoscopeExperiment:
@@ -962,12 +892,12 @@ class MesoscopeExperiment:
         _descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
-        _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
+        _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
-        _cameras: Stores the _VideoSystems instance that interfaces with video systems (cameras) used during
+        _cameras: Stores the VideoSystems instance that interfaces with video systems (cameras) used during
             runtime.
-        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
-        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
+        HeadBar: Stores the HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        LickPort: Stores the LickPort class instance that interfaces with all LickPort manipulator motors.
         _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _state_map: Maps the integer state-codes used to represent VR system states to human-readable string-names.
@@ -1065,7 +995,7 @@ class MesoscopeExperiment:
         )
 
         # Initializes the binding class for all MicroController Interfaces.
-        self._microcontrollers: _MicroControllerInterfaces = _MicroControllerInterfaces(
+        self._microcontrollers: MicroControllerInterfaces = MicroControllerInterfaces(
             data_logger=self._logger,
             screens_on=screens_on,
             actor_port=actor_port,
@@ -1083,7 +1013,7 @@ class MesoscopeExperiment:
         )
 
         # Initializes the binding class for all VideoSystems.
-        self._cameras: _VideoSystems = _VideoSystems(
+        self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
             output_directory=self._session_data.camera_frames_path,
             face_camera_index=face_camera_index,
@@ -1103,10 +1033,10 @@ class MesoscopeExperiment:
         input("Enter anything to continue: ")
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
-        self._headbar: _HeadBar = _HeadBar(
+        self.HeadBar: HeadBar = HeadBar(
             headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
         )
-        self._lickport: _LickPort = _LickPort(
+        self.LickPort: LickPort = LickPort(
             lickport_port=lickport_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
         )
 
@@ -1188,16 +1118,16 @@ class MesoscopeExperiment:
 
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
         # with each other, so it is safe to move both assemblies at the same time.
-        self._headbar.prepare_motors(wait_until_idle=False)
-        self._lickport.prepare_motors(wait_until_idle=True)
-        self._headbar.wait_until_idle()
+        self.HeadBar.prepare_motors(wait_until_idle=False)
+        self.LickPort.prepare_motors(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
 
         # Sets the motors into the mounting position. The HeadBar is either restored to the previous session position or
         # is set to the default mounting position stored in non-volatile memory. The LickPort is moved to a position
         # optimized for putting the animal on the VR rig.
-        self._headbar.restore_position(wait_until_idle=False)
-        self._lickport.mount_position(wait_until_idle=True)
-        self._headbar.wait_until_idle()
+        self.HeadBar.restore_position(wait_until_idle=False)
+        self.LickPort.mount_position(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
 
         message = "HeadBar: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1210,12 +1140,12 @@ class MesoscopeExperiment:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
+        # Restores the lickPort to the previous session's position or to the default parking position. This positions
+        # the LickPort in a way that is easily accessible by the animal.
+        self.LickPort.restore_position()
         message = "LickPort: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Restores the lickPort to the previous session's position or to the default parking position. This positions
-        # the LickPort in a way that is easily accessible by the animal.
-        self._lickport.restore_position()
         message = (
             "If necessary, adjust LickPort position to be easily reachable by the animal and position the mesoscope "
             "objective above the imaging field. Take extra care when moving the LickPort towards the animal! Run any "
@@ -1228,9 +1158,9 @@ class MesoscopeExperiment:
         # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
         # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
         # the calibrated zaber positions.
-        head_bar_positions = self._headbar.get_positions()
-        lickport_positions = self._lickport.get_positions()
-        zaber_positions = _ZaberPositions(
+        head_bar_positions = self.HeadBar.get_positions()
+        lickport_positions = self.LickPort.get_positions()
+        zaber_positions = ZaberPositions(
             headbar_z=head_bar_positions[0],
             headbar_pitch=head_bar_positions[1],
             headbar_roll=head_bar_positions[2],
@@ -1357,9 +1287,9 @@ class MesoscopeExperiment:
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
-        head_bar_positions = self._headbar.get_positions()
-        lickport_positions = self._lickport.get_positions()
-        zaber_positions = _ZaberPositions(
+        head_bar_positions = self.HeadBar.get_positions()
+        lickport_positions = self.LickPort.get_positions()
+        zaber_positions = ZaberPositions(
             headbar_z=head_bar_positions[0],
             headbar_pitch=head_bar_positions[1],
             headbar_roll=head_bar_positions[2],
@@ -1373,7 +1303,7 @@ class MesoscopeExperiment:
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
-        self._lickport.mount_position()
+        self.LickPort.mount_position()
 
         # Notifies the user about the volume of water dispensed during runtime, so that they can ensure the mouse
         # get any leftover daily water limit.
@@ -1400,31 +1330,18 @@ class MesoscopeExperiment:
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
-        self._headbar.park_position(wait_until_idle=False)
-        self._lickport.park_position(wait_until_idle=True)
-        self._headbar.wait_until_idle()
-        self._headbar.disconnect()
-        self._lickport.disconnect()
+        self.HeadBar.park_position(wait_until_idle=False)
+        self.LickPort.park_position(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
+        self.HeadBar.disconnect()
+        self.LickPort.disconnect()
 
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = "Initializing data preprocessing..."
-        console.echo(message=message, level=LogLevel.INFO)
-
-        # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
-        # allow parsing the data. Note, to minimize the time taken by data preprocessing, we disable integrity
-        # verification and compression. The data is just aggregated into an uncompressed .npz file for each source.
-        self._logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
-        )
-
-        # Parses behavior data and camera timestamps from the compressed logs. All data is saved at native acquisition
-        # rates as lz4-compressed .feather files.
-        process_log_data(
-            log_directory=self._logger.output_directory,
-            behavior_data_directory=self._session_data.behavior_data_path,
-            camera_frame_directory=self._session_data.camera_frames_path,
+        # Generates a snapshot of the runtime hardware configuration. In turn, this data is used to parse the .npz log
+        # files during processing.
+        hardware_configuration = RuntimeHardwareConfiguration(
             cue_map=self._cue_map,
             cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
             maximum_break_strength=self._microcontrollers.wheel_break.maximum_break_strength,
@@ -1436,23 +1353,21 @@ class MesoscopeExperiment:
             initially_on=self._microcontrollers.screens.initially_on,
             has_ttl=True,
         )
+        hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
+        message = "Hardware configuration snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("051.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("face_camera.mp4"),
-        )
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("062.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("left_camera.mp4"),
-        )
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("073.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
+        message = "Initializing data preprocessing..."
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
+        # allow parsing the data during server-side processing.
+        self._logger.compress_logs(
+            remove_sources=True, memory_mapping=False, verbose=True, compress=True, verify_integrity=True
         )
 
-        # Pulls the frames and motion estimation data from the ScanImagePC into the local data directory.
-        self._session_data.pull_mesoscope_data(verify_transfer_integrity=True, remove_sources=True)
+        # Renames video files to use human-friendly names
+        process_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Preprocesses the pulled mesoscope data.
         self._session_data.process_mesoscope_data()
@@ -1721,12 +1636,12 @@ class BehaviorTraining:
         descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers and video
             cameras.
-        _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
+        _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
-        _cameras: Stores the _VideoSystems instance that interfaces with video systems (cameras) used during
+        _cameras: Stores the VideoSystems instance that interfaces with video systems (cameras) used during
             runtime.
-        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
-        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
+        HeadBar: Stores the HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        LickPort: Stores the LickPort class instance that interfaces with all LickPort manipulator motors.
         _screen_on: Tracks whether the VR displays are currently ON.
         _session_data: Stores the SessionData instance used to manage the acquired data.
 
@@ -1797,7 +1712,7 @@ class BehaviorTraining:
         )
 
         # Initializes the binding class for all MicroController Interfaces.
-        self._microcontrollers: _MicroControllerInterfaces = _MicroControllerInterfaces(
+        self._microcontrollers: MicroControllerInterfaces = MicroControllerInterfaces(
             data_logger=self._logger,
             actor_port=actor_port,
             sensor_port=sensor_port,
@@ -1807,7 +1722,7 @@ class BehaviorTraining:
         )
 
         # Initializes the binding class for all VideoSystems.
-        self._cameras: _VideoSystems = _VideoSystems(
+        self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
             output_directory=self._session_data.camera_frames_path,
             face_camera_index=face_camera_index,
@@ -1827,10 +1742,10 @@ class BehaviorTraining:
         input("Enter anything to continue: ")
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
-        self._headbar: _HeadBar = _HeadBar(
+        self.HeadBar: HeadBar = HeadBar(
             headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
         )
-        self._lickport: _LickPort = _LickPort(
+        self.LickPort: LickPort = LickPort(
             lickport_port=lickport_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
         )
 
@@ -1896,21 +1811,21 @@ class BehaviorTraining:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        message = "HeadBar: Positioned."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
         # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
         # with each other, so it is safe to move both assemblies at the same time.
-        self._headbar.prepare_motors(wait_until_idle=False)
-        self._lickport.prepare_motors(wait_until_idle=True)
-        self._headbar.wait_until_idle()
+        self.HeadBar.prepare_motors(wait_until_idle=False)
+        self.LickPort.prepare_motors(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
 
         # Sets the motors into the mounting position. The HeadBar is either restored to the previous session position or
         # is set to the default mounting position stored in non-volatile memory. The LickPort is moved to a position
         # optimized for putting the animal on the VR rig.
-        self._headbar.restore_position(wait_until_idle=False)
-        self._lickport.mount_position(wait_until_idle=True)
-        self._headbar.wait_until_idle()
+        self.HeadBar.restore_position(wait_until_idle=False)
+        self.LickPort.mount_position(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
+
+        message = "HeadBar: Positioned."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
@@ -1920,12 +1835,12 @@ class BehaviorTraining:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        message = "LickPort: Positioned."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
         # Restores the lickPort to the previous session's position or to the default parking position. This positions
         # the LickPort in a way that is easily accessible by the animal.
-        self._lickport.restore_position()
+        self.LickPort.restore_position()
+
+        message = "LickPort: Positioned."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         message = (
             "If necessary, adjust LickPort position to be easily reachable by the animal. Take extra care when moving "
@@ -1938,9 +1853,9 @@ class BehaviorTraining:
         # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
         # aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart with
         # the calibrated zaber positions.
-        head_bar_positions = self._headbar.get_positions()
-        lickport_positions = self._lickport.get_positions()
-        zaber_positions = _ZaberPositions(
+        head_bar_positions = self.HeadBar.get_positions()
+        lickport_positions = self.LickPort.get_positions()
+        zaber_positions = ZaberPositions(
             headbar_z=head_bar_positions[0],
             headbar_pitch=head_bar_positions[1],
             headbar_roll=head_bar_positions[2],
@@ -2015,9 +1930,9 @@ class BehaviorTraining:
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
-        head_bar_positions = self._headbar.get_positions()
-        lickport_positions = self._lickport.get_positions()
-        zaber_positions = _ZaberPositions(
+        head_bar_positions = self.HeadBar.get_positions()
+        lickport_positions = self.LickPort.get_positions()
+        zaber_positions = ZaberPositions(
             headbar_z=head_bar_positions[0],
             headbar_pitch=head_bar_positions[1],
             headbar_roll=head_bar_positions[2],
@@ -2031,7 +1946,7 @@ class BehaviorTraining:
         zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
-        self._lickport.mount_position()
+        self.LickPort.mount_position()
 
         # Notifies the user about the volume of water dispensed during runtime, so that they can ensure the mouse
         # get any leftover daily water limit.
@@ -2058,13 +1973,36 @@ class BehaviorTraining:
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
-        self._headbar.park_position(wait_until_idle=False)
-        self._lickport.park_position(wait_until_idle=True)
-        self._headbar.wait_until_idle()
-        self._headbar.disconnect()
-        self._lickport.disconnect()
+        self.HeadBar.park_position(wait_until_idle=False)
+        self.LickPort.park_position(wait_until_idle=True)
+        self.HeadBar.wait_until_idle()
+        self.HeadBar.disconnect()
+        self.LickPort.disconnect()
 
         message = "HeadBar and LickPort motors: Reset."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Generates a snapshot of the runtime hardware configuration. In turn, this data is used to parse the .npz log
+        # files during processing. Note, lick training does not use the encoder and run training does not use the torque
+        # sensor.
+        if self._lick_training:
+            hardware_configuration = RuntimeHardwareConfiguration(
+                torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
+                lick_threshold=self._microcontrollers.lick.lick_threshold,
+                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
+                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                has_ttl=False,
+            )
+        else:
+            hardware_configuration = RuntimeHardwareConfiguration(
+                cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
+                lick_threshold=self._microcontrollers.lick.lick_threshold,
+                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
+                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                has_ttl=False,
+            )
+        hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
+        message = "Hardware configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         message = "Initializing data preprocessing..."
@@ -2074,48 +2012,11 @@ class BehaviorTraining:
         # allow parsing the data. Note, to minimize the time taken by data preprocessing, we disable integrity
         # verification and compression. The data is just aggregated into an uncompressed .npz file for each source.
         self._logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
+            remove_sources=True, memory_mapping=False, verbose=True, compress=True, verify_integrity=True
         )
-
-        # Parses behavior data and camera timestamps from the compressed logs. All data is saved at native acquisition
-        # rates as lz4-compressed .feather files. Note, lick training does not use the encoder and run training does
-        # not use the torque sensor.
-        if self._lick_training:
-            process_log_data(
-                log_directory=self._logger.output_directory,
-                behavior_data_directory=self._session_data.behavior_data_path,
-                camera_frame_directory=self._session_data.camera_frames_path,
-                lick_threshold=self._microcontrollers.lick.lick_threshold,
-                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
-                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
-                torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
-                has_ttl=False,
-            )
-        else:
-            process_log_data(
-                log_directory=self._logger.output_directory,
-                behavior_data_directory=self._session_data.behavior_data_path,
-                camera_frame_directory=self._session_data.camera_frames_path,
-                cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
-                lick_threshold=self._microcontrollers.lick.lick_threshold,
-                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
-                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
-                has_ttl=False,
-            )
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("051.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("face_camera.mp4"),
-        )
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("062.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("left_camera.mp4"),
-        )
-        os.renames(
-            old=self._session_data.camera_frames_path.joinpath("073.mp4"),
-            new=self._session_data.camera_frames_path.joinpath("right_camera.mp4"),
-        )
+        process_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Pushes the processed data to the NAS and BioHPC server.
         self._session_data.push_data()
@@ -2368,7 +2269,7 @@ def lick_training_logic(
 
     # Initializes the listener instance used to detect training abort signals and manual reward trigger signals sent
     # via the keyboard.
-    listener = KeyboardListener()
+    listener = _KeyboardListener()
 
     message = (
         f"Initiating lick training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
@@ -2503,8 +2404,8 @@ def vr_maintenance_logic(
         logger.start()
 
         # Initializes HeadBar and LickPort binding classes
-        headbar = _HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
-        lickport = _LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
+        headbar = HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
+        lickport = LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
 
         message = f"Zaber controllers: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2839,7 +2740,7 @@ def run_train_logic(
     runtime.run_train_state()
 
     # Initializes the listener instance used to enable keyboard-driven training runtime control.
-    listener = KeyboardListener()
+    listener = _KeyboardListener()
 
     message = (
         f"Initiating run training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
@@ -3118,7 +3019,7 @@ def run_experiment_logic(
     )
 
     # Initializes the keyboard listener to support aborting test runtimes.
-    listener = KeyboardListener()
+    listener = _KeyboardListener()
 
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state

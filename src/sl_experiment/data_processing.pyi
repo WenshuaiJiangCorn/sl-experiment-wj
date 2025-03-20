@@ -1,8 +1,10 @@
 from typing import Any
 from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray as NDArray
+from ataraxis_data_structures import YamlConfig
 
 from .module_interfaces import (
     TTLInterface as TTLInterface,
@@ -13,6 +15,33 @@ from .module_interfaces import (
     TorqueInterface as TorqueInterface,
     EncoderInterface as EncoderInterface,
 )
+
+@dataclass()
+class RuntimeHardwareConfiguration(YamlConfig):
+    """This class is used to save the runtime hardware configuration information as a .yaml file.
+
+    This information is used to read the data saved to the .npz log files during runtime during data processing.
+
+    Notes:
+        All fields in this dataclass initialize to None. During log processing, any log associated with a hardware
+        module that provides the data stored in a field will be processed, unless that field is None. Therefore, setting
+        any field in this dataclass to None also functions as a flag for whether to parse the log associated with the
+        module that provides this field's information.
+
+        This class is automatically configured by MesoscopeExperiment and BehaviorTraining classes to facilitate log
+        parsing.
+    """
+
+    cue_map: dict[int, float] | None = ...
+    cm_per_pulse: np.float64 | None = ...
+    maximum_break_strength: np.float64 | None = ...
+    minimum_break_strength: np.float64 | None = ...
+    lick_threshold: None | np.uint16 = ...
+    scale_coefficient: np.float64 | None = ...
+    nonlinearity_exponent: np.float64 | None = ...
+    torque_per_adc_unit: np.float64 | None = ...
+    initially_on: bool | None = ...
+    has_ttl: bool | None = ...
 
 def _get_stack_number(tiff_path: Path) -> int | None:
     """A helper function that determines the number of mesoscope-acquired tiff stacks using its file name.
@@ -91,7 +120,7 @@ def _generate_ops(metadata: dict[str, Any], frame_data: NDArray[np.int16], ops_p
             this method via the main directory processing function.
     """
 
-def process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) -> None:
+def _process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) -> None:
     """Extracts frame-invariant ScanImage metadata from the target tiff file and uses it to generate metadata.json and
     ops.json files.
 
@@ -111,61 +140,6 @@ def process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) 
             ProjectData class to match the processed project, animal, and session combination.
         metadata_path: The path to the metadata.json file that should be created by this function. This is resolved
             by the ProjectData class to match the processed project, animal, and session combination.
-    """
-
-def process_mesoscope_directory(
-    image_directory: Path,
-    output_directory: Path,
-    ops_path: Path,
-    frame_invariant_metadata_path: Path,
-    frame_variant_metadata_path: Path,
-    num_processes: int,
-    remove_sources: bool = False,
-    batch: bool = False,
-    verify_integrity: bool = True,
-) -> None:
-    """Loops over all multi-frame TIFF stacks in the input directory, recompresses them using Limited Error Raster
-    Compression (LERC) scheme, and extracts ScanImage metadata.
-
-    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
-    long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
-    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
-    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
-    efficiently encoded JSON (.json) and compressed numpy archive (.npz) files to minimize disk space usage.
-
-    Notes:
-        This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
-        Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
-        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
-        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
-        stacks do not contain ScanImage metadata, they will be excluded from processing.
-
-        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
-        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
-        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
-        combine both methods.
-
-    Args:
-        image_directory: The directory containing the multi-frame TIFF stacks. Usually, this is the raw_data directory
-            of the project-animal-session hierarchy.
-        output_directory: The path to the directory where to save processed (compressed) TIFF stacks.
-        ops_path: The path to the ops.json file that should be created by this function. This file is used during
-            suite2p registration (processing) of the mesoscope data.
-        frame_invariant_metadata_path: The path to the metadata.json file that stores frame-invariant metadata. This
-            metadata is the same across the stacks and frames of the same session. Currently, this data is not used for
-            further processing, but it is preserved in case it is ever necessary in the future.
-        frame_variant_metadata_path: The path to the metadata.npz file that stores frame-variant metadata for each frame
-            acquired during the same session. Similar to frame-invariant metadata, this file is not use for further
-            processing at this time.
-        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
-            compress a stack of TIFF files in parallel.
-        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
-        batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
-            to optimize progress reporting to avoid cluttering the terminal window.
-        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
-            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
-            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
-            worker spawned by this function.
     """
 
 def _process_camera_timestamps(log_path: Path, output_path: Path) -> None:
@@ -188,18 +162,71 @@ def _process_experiment_data(log_path: Path, output_directory: Path, cue_map: di
     the animal during the experiment.
     """
 
-def process_log_data(
-    log_directory: Path,
-    camera_frame_directory: Path,
-    behavior_data_directory: Path,
-    cue_map: dict[int, float] | None = None,
-    cm_per_pulse: np.float64 | None = None,
-    maximum_break_strength: np.float64 | None = None,
-    minimum_break_strength: np.float64 | None = None,
-    lick_threshold: np.uint16 | None = None,
-    scale_coefficient: np.float64 | None = None,
-    nonlinearity_exponent: np.float64 | None = None,
-    torque_per_adc_unit: np.float64 | None = None,
-    initially_on: bool | None = None,
-    has_ttl: bool | None = None,
-) -> None: ...
+def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
+    """Reads the compressed .npz log files stored in the input directory and extracts all camera frame timestamps and
+    relevant behavior data stored in log files.
+
+    This function is intended to run on the BioHPC server as part of the data processing pipeline. It is optimized to
+    process all log files in parallel and extract the data stored inside the files into behavior_data directory and
+    camera_frames directory.
+
+    Notes:
+        This function makes certain assumptions about the layout of the raw-data directory to work as expected.
+
+    Args:
+        data_directory: The Path to the target session raw_data directory to be processed.
+        verbose: Determines whether this function should run in the verbose mode.
+    """
+
+def process_video_names(camera_frame_directory: Path) -> None:
+    """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
+
+    This is a minor convenience function used together with log and mesoscope frame compression during preprocessing.
+
+    Notes:
+        This function assumes that the runtime uses 3 cameras with IDs 51, 62, and 73, respectively.
+
+    Args:
+        camera_frame_directory: The directory containing the video files acquired during experiment or training runtime.
+    """
+
+def process_mesoscope_directory(
+    data_directory: Path,
+    num_processes: int,
+    remove_sources: bool = False,
+    batch: bool = False,
+    verify_integrity: bool = True,
+) -> None:
+    """Loops over all multi-frame Mesoscope TIFF stacks in the input directory, recompresses them using Limited Error
+    Raster Compression (LERC) scheme, and extracts ScanImage metadata.
+
+    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
+    long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
+    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
+    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
+    efficiently encoded JSON (.json) and compressed numpy archive (.npz) files to minimize disk space usage.
+
+    Notes:
+        This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
+        Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
+        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
+        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
+        stacks do not contain ScanImage metadata, they will be excluded from processing.
+
+        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
+        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
+        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
+        combine both methods.
+
+    Args:
+        data_directory: The Path to the target session raw_data directory to be processed.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            compress a stack of TIFF files in parallel.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
+        batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
+            to optimize progress reporting to avoid cluttering the terminal window.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
+    """

@@ -311,7 +311,7 @@ class SurgeryData(YamlConfig):
     """Stores the data about all substances infused into the brain of the subject during the surgery."""
 
 
-class _SurgerySheet:
+class SurgerySheet:
     """Encapsulates and provides access to the target Google Sheet that contains lab surgery logs.
 
     This class uses Google Sheets API to connect to and extract the data stored in the surgery log Google Sheet file.
@@ -619,7 +619,7 @@ class _SurgerySheet:
             return None
 
 
-class _WaterSheetData:
+class WaterSheetData:
     """Encapsulates and provides access to the target Google Sheet that contains project water-restriction data.
 
     This class uses Google Sheets API to connect to and update the data stored in the water restriction log Google Sheet

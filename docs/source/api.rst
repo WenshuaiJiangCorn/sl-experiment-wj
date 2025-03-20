@@ -89,9 +89,9 @@ Transfer Tools
    :undoc-members:
    :show-inheritance:
 
-Data Preprocessing Tools
+Data Processing Tools
 ========================
-.. automodule:: sl_experiment.data_preprocessing
+.. automodule:: sl_experiment.data_processing
    :members:
    :undoc-members:
    :show-inheritance:

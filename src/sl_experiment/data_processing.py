@@ -1,13 +1,17 @@
-"""This module provides the methods used to preprocess experimental data after acquisition. The primary purpose of this
-preprocessing is to prepare the data for storage and further processing in the Sun lab data cluster.
+"""This module provides the methods used to process experimental data after acquisition. The primary purpose of this
+processing is to prepare the data for storage and further processing in the Sun lab data cluster. Some functions from
+this module are called from the Sun Lab data cluster.
 """
 
+import os
 import json
+import shutil as sh
 from typing import Any
 from pathlib import Path
 from datetime import datetime
 from functools import partial
 from collections import defaultdict
+from dataclasses import dataclass
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
@@ -17,8 +21,8 @@ import tifffile
 from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 from ataraxis_video_system import extract_logged_video_system_data
-from ataraxis_base_utilities import console
-from ataraxis_data_structures import DataLogger
+from ataraxis_base_utilities import console, ensure_directory_exists
+from ataraxis_data_structures import DataLogger, YamlConfig
 
 from .module_interfaces import (
     TTLInterface,
@@ -29,6 +33,46 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
+
+
+# This has to be defined here to avoid circular import in experiment.py
+@dataclass()
+class RuntimeHardwareConfiguration(YamlConfig):
+    """This class is used to save the runtime hardware configuration information as a .yaml file.
+
+    This information is used to read the data saved to the .npz log files during runtime during data processing.
+
+    Notes:
+        All fields in this dataclass initialize to None. During log processing, any log associated with a hardware
+        module that provides the data stored in a field will be processed, unless that field is None. Therefore, setting
+        any field in this dataclass to None also functions as a flag for whether to parse the log associated with the
+        module that provides this field's information.
+
+        This class is automatically configured by MesoscopeExperiment and BehaviorTraining classes to facilitate log
+        parsing.
+    """
+
+    cue_map: dict[int, float] | None = None
+    """MesoscopeExperiment instance property."""
+    cm_per_pulse: np.float64 | None = None
+    """EncoderInterface instance property."""
+    maximum_break_strength: np.float64 | None = None
+    """BreakInterface instance property."""
+    minimum_break_strength: np.float64 | None = None
+    """BreakInterface instance property."""
+    # noinspection PyUnresolvedReferences
+    lick_threshold: None | np.uint16 = None
+    """BreakInterface instance property."""
+    scale_coefficient: np.float64 | None = None
+    """ValveInterface instance property."""
+    nonlinearity_exponent: np.float64 | None = None
+    """ValveInterface instance property."""
+    torque_per_adc_unit: np.float64 | None = None
+    """TorqueInterface instance property."""
+    initially_on: bool | None = None
+    """ScreenInterface instance property."""
+    has_ttl: bool | None = None
+    """TTLInterface instance property."""
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
@@ -351,7 +395,7 @@ def _generate_ops(
         json.dump(data, f, separators=(",", ":"), indent=None)  # Maximizes data compression
 
 
-def process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) -> None:
+def _process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) -> None:
     """Extracts frame-invariant ScanImage metadata from the target tiff file and uses it to generate metadata.json and
     ops.json files.
 
@@ -390,135 +434,6 @@ def process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path) 
         frame_data=frame_data,
         ops_path=ops_path,
     )
-
-
-def process_mesoscope_directory(
-    image_directory: Path,
-    output_directory: Path,
-    ops_path: Path,
-    frame_invariant_metadata_path: Path,
-    frame_variant_metadata_path: Path,
-    num_processes: int,
-    remove_sources: bool = False,
-    batch: bool = False,
-    verify_integrity: bool = True,
-) -> None:
-    """Loops over all multi-frame TIFF stacks in the input directory, recompresses them using Limited Error Raster
-    Compression (LERC) scheme, and extracts ScanImage metadata.
-
-    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
-    long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
-    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
-    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
-    efficiently encoded JSON (.json) and compressed numpy archive (.npz) files to minimize disk space usage.
-
-    Notes:
-        This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
-        Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
-        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
-        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
-        stacks do not contain ScanImage metadata, they will be excluded from processing.
-
-        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
-        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
-        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
-        combine both methods.
-
-    Args:
-        image_directory: The directory containing the multi-frame TIFF stacks. Usually, this is the raw_data directory
-            of the project-animal-session hierarchy.
-        output_directory: The path to the directory where to save processed (compressed) TIFF stacks.
-        ops_path: The path to the ops.json file that should be created by this function. This file is used during
-            suite2p registration (processing) of the mesoscope data.
-        frame_invariant_metadata_path: The path to the metadata.json file that stores frame-invariant metadata. This
-            metadata is the same across the stacks and frames of the same session. Currently, this data is not used for
-            further processing, but it is preserved in case it is ever necessary in the future.
-        frame_variant_metadata_path: The path to the metadata.npz file that stores frame-variant metadata for each frame
-            acquired during the same session. Similar to frame-invariant metadata, this file is not use for further
-            processing at this time.
-        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
-            compress a stack of TIFF files in parallel.
-        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
-        batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
-            to optimize progress reporting to avoid cluttering the terminal window.
-        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
-            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
-            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
-            worker spawned by this function.
-    """
-
-    # Precreates the dictionary to store frame-variant metadata extracted from all TIFF frames before they are
-    # compressed into BigTiff.
-    all_metadata = defaultdict(list)
-
-    # Finds all TIFF files in the input directory (non-recursive).
-    tiff_files = list(image_directory.glob("*.tif")) + list(image_directory.glob("*.tiff"))
-
-    # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
-    tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
-    tiff_files.sort(key=_get_stack_number)  # type: ignore
-
-    # Goes over each stack and, for each, determines the position of the first frame from the stack in the overall
-    # sequence of frames acquired by all stacks. This is used to map frames stored in multiple stacks to a single
-    # session-wide sequence.
-    frame_numbers = []
-    starting_frame = 1
-    for file in tiff_files:
-        stack_size = _check_stack_size(file)
-        if stack_size > 0:
-            # Appends the starting frame number to the list and increments the stack list
-            frame_numbers.append(starting_frame)
-            starting_frame += stack_size
-        else:
-            # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
-            # processing
-            tiff_files.remove(file)
-
-    # Converts to tuple for efficiency
-    tiff_files = tuple(tiff_files)  # type: ignore
-    frame_numbers = tuple(frame_numbers)  # type: ignore
-
-    # Ends the runtime early if there are no valid TIFF files to process after filtering
-    if len(tiff_files) == 0:
-        return
-
-    # Extracts frame invariant metadata using the first frame of the first TIFF stack. Since this metadata is the
-    # same for all stacks, it is safe to use any available stack. We use the first one for consistency with
-    # suite2p helper scripts.
-    process_invariant_metadata(file=tiff_files[0], ops_path=ops_path, metadata_path=frame_invariant_metadata_path)
-
-    # Uses partial to bind the constant arguments to the processing function
-    process_func = partial(
-        _process_stack, output_dir=output_directory, remove_sources=remove_sources, verify_integrity=verify_integrity
-    )
-
-    # Processes each tiff stack in parallel
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        # Submits all tasks
-        future_to_file = set()
-        for file, frame in zip(tiff_files, frame_numbers):
-            future_to_file.add(executor.submit(process_func, file, frame))
-
-        if not batch:
-            # Shows progress with tqdm when not in batch mode
-            with tqdm(
-                total=len(tiff_files),
-                desc=f"Processing TIFF stacks for {Path(*image_directory.parts[-6:])}",
-                unit="stack",
-            ) as pbar:
-                for future in as_completed(future_to_file):
-                    for key, value in future.result().items():
-                        all_metadata[key].append(value)
-                    pbar.update(1)
-        else:
-            # For batch mode, processes without progress tracking
-            for future in as_completed(future_to_file):
-                for key, value in future.result().items():
-                    all_metadata[key].append(value)
-
-    # Saves concatenated metadata as compressed numpy archive
-    metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
-    np.savez(frame_variant_metadata_path, **metadata_dict)
 
 
 def _process_camera_timestamps(log_path: Path, output_path: Path) -> None:
@@ -647,21 +562,30 @@ def _process_experiment_data(log_path: Path, output_directory: Path, cue_map: di
     cue_dataframe.write_ipc(output_directory.joinpath("cue_data.feather"), compression="lz4")
 
 
-def process_log_data(
-    log_directory: Path,
-    camera_frame_directory: Path,
-    behavior_data_directory: Path,
-    cue_map: dict[int, float] | None = None,
-    cm_per_pulse: np.float64 | None = None,
-    maximum_break_strength: np.float64 | None = None,
-    minimum_break_strength: np.float64 | None = None,
-    lick_threshold: np.uint16 | None = None,
-    scale_coefficient: np.float64 | None = None,
-    nonlinearity_exponent: np.float64 | None = None,
-    torque_per_adc_unit: np.float64 | None = None,
-    initially_on: bool | None = None,
-    has_ttl: bool | None = None,
-) -> None:
+def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
+    """Reads the compressed .npz log files stored in the input directory and extracts all camera frame timestamps and
+    relevant behavior data stored in log files.
+
+    This function is intended to run on the BioHPC server as part of the data processing pipeline. It is optimized to
+    process all log files in parallel and extract the data stored inside the files into behavior_data directory and
+    camera_frames directory.
+
+    Notes:
+        This function makes certain assumptions about the layout of the raw-data directory to work as expected.
+
+    Args:
+        data_directory: The Path to the target session raw_data directory to be processed.
+        verbose: Determines whether this function should run in the verbose mode.
+    """
+    # Resolves the paths to the specific directories used during processing
+    log_directory = data_directory.joinpath("behavior_data_log")  # Should exist inside the raw data directory
+    camera_frame_directory = data_directory.joinpath("camera_frames")  # Should exist inside the raw data directory
+    behavior_data_directory = data_directory.joinpath("behavior_data")
+    ensure_directory_exists(behavior_data_directory)  # Generates the directory
+
+    # Should exist inside the raw data directory
+    hardware_configuration_path = data_directory.joinpath("hardware_configuration.yaml")
+
     # Finds all .npz and .npy log files inside the input log file directory.
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
     uncompressed_files: list[Path] = [file for file in log_directory.glob("*.npy")]
@@ -692,18 +616,23 @@ def process_log_data(
     if len(compressed_files) < 0:
         return
 
+    # Loads the input HardwareConfiguration file to read the hardware parameters necessary to parse the data
+    hardware_configuration: RuntimeHardwareConfiguration = RuntimeHardwareConfiguration.from_yaml(  # type: ignore
+        file_path=hardware_configuration_path,
+    )
+
     # Otherwise, iterates over all compressed log files and processes them in-parallel
     with ProcessPoolExecutor() as executor:
         futures = set()
         for file in compressed_files:
             # MesoscopeExperiment log file
-            if file.stem == "1_log" and cue_map is not None:
+            if file.stem == "1_log" and hardware_configuration.cue_map is not None:
                 futures.add(
                     executor.submit(
                         _process_experiment_data,
                         file,
                         behavior_data_directory,
-                        cue_map,
+                        hardware_configuration.cue_map,
                     )
                 )
 
@@ -740,68 +669,264 @@ def process_log_data(
             # Actor AMC module data
             if file.stem == "101_log":
                 # Break
-                if minimum_break_strength is not None and maximum_break_strength is not None:
+                if (
+                    hardware_configuration.minimum_break_strength is not None
+                    and hardware_configuration.maximum_break_strength is not None
+                ):
                     futures.add(
                         executor.submit(
                             BreakInterface.parse_logged_data,
                             file,
                             behavior_data_directory,
-                            minimum_break_strength,
-                            maximum_break_strength,
+                            hardware_configuration.minimum_break_strength,
+                            hardware_configuration.maximum_break_strength,
                         )
                     )
 
                 # Valve
-                if nonlinearity_exponent is not None and scale_coefficient is not None:
+                if (
+                    hardware_configuration.nonlinearity_exponent is not None
+                    and hardware_configuration.scale_coefficient is not None
+                ):
                     futures.add(
                         executor.submit(
                             ValveInterface.parse_logged_data,
                             file,
                             behavior_data_directory,
-                            scale_coefficient,
-                            nonlinearity_exponent,
+                            hardware_configuration.scale_coefficient,
+                            hardware_configuration.nonlinearity_exponent,
                         )
                     )
 
                 # Screens
-                if initially_on is not None:
+                if hardware_configuration.initially_on is not None:
                     futures.add(
-                        executor.submit(ScreenInterface.parse_logged_data, file, behavior_data_directory, initially_on)
+                        executor.submit(
+                            ScreenInterface.parse_logged_data,
+                            file,
+                            behavior_data_directory,
+                            hardware_configuration.initially_on,
+                        )
                     )
 
             # Sensor AMC module data
             if file.stem == "152_log":
                 # Lick Sensor
-                if lick_threshold is not None:
+                if hardware_configuration.lick_threshold is not None:
                     futures.add(
-                        executor.submit(LickInterface.parse_logged_data, file, behavior_data_directory, lick_threshold)
+                        executor.submit(
+                            LickInterface.parse_logged_data,
+                            file,
+                            behavior_data_directory,
+                            hardware_configuration.lick_threshold,
+                        )
                     )
 
                 # Torque Sensor
-                if torque_per_adc_unit is not None:
+                if hardware_configuration.torque_per_adc_unit is not None:
                     futures.add(
                         executor.submit(
-                            TorqueInterface.parse_logged_data, file, behavior_data_directory, torque_per_adc_unit
+                            TorqueInterface.parse_logged_data,
+                            file,
+                            behavior_data_directory,
+                            hardware_configuration.torque_per_adc_unit,
                         )
                     )
 
                 # Mesoscope Frame TTL module
-                if has_ttl:
+                if hardware_configuration.has_ttl:
                     futures.add(executor.submit(TTLInterface.parse_logged_data, file, behavior_data_directory))
 
             # Encoder AMC module data
             if file.stem == "203_log":
                 # Encoder
-                if cm_per_pulse is not None:
+                if hardware_configuration.cm_per_pulse is not None:
                     futures.add(
-                        executor.submit(EncoderInterface.parse_logged_data, file, behavior_data_directory, cm_per_pulse)
+                        executor.submit(
+                            EncoderInterface.parse_logged_data,
+                            file,
+                            behavior_data_directory,
+                            hardware_configuration.cm_per_pulse,
+                        )
                     )
 
-        # Displays a progress bar to track the parsing status
-        with tqdm(
-            total=len(futures),
-            desc=f"Parsing log sources",
-            unit="source",
-        ) as pbar:
-            for _ in as_completed(futures):
-                pbar.update(1)
+        # Displays a progress bar to track the parsing status if the function is called in the verbose mode.
+        if verbose:
+            with tqdm(
+                total=len(futures),
+                desc=f"Parsing log sources",
+                unit="source",
+            ) as pbar:
+                for future in as_completed(futures):
+                    # Propagates any exceptions from the transfers
+                    future.result()
+                    pbar.update(1)
+        else:
+            for future in as_completed(futures):
+                # Propagates any exceptions from the transfers
+                future.result()
+
+
+def process_video_names(camera_frame_directory: Path) -> None:
+    """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
+
+    This is a minor convenience function used together with log and mesoscope frame compression during preprocessing.
+
+    Notes:
+        This function assumes that the runtime uses 3 cameras with IDs 51, 62, and 73, respectively.
+
+    Args:
+        camera_frame_directory: The directory containing the video files acquired during experiment or training runtime.
+    """
+    os.renames(
+        old=camera_frame_directory.joinpath("051.mp4"),
+        new=camera_frame_directory.joinpath("face_camera.mp4"),
+    )
+    os.renames(
+        old=camera_frame_directory.joinpath("062.mp4"),
+        new=camera_frame_directory.joinpath("left_camera.mp4"),
+    )
+    os.renames(
+        old=camera_frame_directory.joinpath("073.mp4"),
+        new=camera_frame_directory.joinpath("right_camera.mp4"),
+    )
+
+
+def process_mesoscope_directory(
+    data_directory: Path,
+    num_processes: int,
+    remove_sources: bool = False,
+    batch: bool = False,
+    verify_integrity: bool = True,
+) -> None:
+    """Loops over all multi-frame Mesoscope TIFF stacks in the input directory, recompresses them using Limited Error
+    Raster Compression (LERC) scheme, and extracts ScanImage metadata.
+
+    This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
+    long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
+    achieves ~70% compression ratio, compared to the original frame stacks obtained from the mesoscope. Additionally,
+    this function also extracts frame-variant and frame-invariant ScanImage metadata from raw stacks and saves it as
+    efficiently encoded JSON (.json) and compressed numpy archive (.npz) files to minimize disk space usage.
+
+    Notes:
+        This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
+        Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
+        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
+        input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
+        stacks do not contain ScanImage metadata, they will be excluded from processing.
+
+        To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
+        same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
+        operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
+        combine both methods.
+
+    Args:
+        data_directory: The Path to the target session raw_data directory to be processed.
+        num_processes: The maximum number of processes to use while processing the directory. Each process is used to
+            compress a stack of TIFF files in parallel.
+        remove_sources: Determines whether to remove the original TIFF files after they have been processed.
+        batch: Determines whether the function is called as part of batch-processing multiple directories. This is used
+            to optimize progress reporting to avoid cluttering the terminal window.
+        verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
+            The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
+            of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
+            worker spawned by this function.
+    """
+    # Resolves the paths to the specific directories used during processing
+    image_directory = data_directory.joinpath("raw_mesoscope_frames")  # Should exist inside the raw data directory
+    output_directory = data_directory.joinpath("mesoscope_frames")
+    ensure_directory_exists(output_directory)  # Generates the directory
+
+    # Also resolves paths to the output files
+    frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
+    frame_variant_metadata_path = output_directory.joinpath("frame_variant_metadata.npz")
+    ops_path = output_directory.joinpath("ops.json")
+
+    # Precreates the dictionary to store frame-variant metadata extracted from all TIFF frames before they are
+    # compressed into BigTiff.
+    all_metadata = defaultdict(list)
+
+    # Finds all TIFF files in the input directory (non-recursive).
+    tiff_files = list(image_directory.glob("*.tif")) + list(image_directory.glob("*.tiff"))
+
+    # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
+    tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
+    tiff_files.sort(key=_get_stack_number)  # type: ignore
+
+    # Goes over each stack and, for each, determines the position of the first frame from the stack in the overall
+    # sequence of frames acquired by all stacks. This is used to map frames stored in multiple stacks to a single
+    # session-wide sequence.
+    frame_numbers = []
+    starting_frame = 1
+    for file in tiff_files:
+        stack_size = _check_stack_size(file)
+        if stack_size > 0:
+            # Appends the starting frame number to the list and increments the stack list
+            frame_numbers.append(starting_frame)
+            starting_frame += stack_size
+        else:
+            # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
+            # processing
+            tiff_files.remove(file)
+
+    # Converts to tuple for efficiency
+    tiff_files = tuple(tiff_files)  # type: ignore
+    frame_numbers = tuple(frame_numbers)  # type: ignore
+
+    # Ends the runtime early if there are no valid TIFF files to process after filtering
+    if len(tiff_files) == 0:
+        return
+
+    # Extracts frame invariant metadata using the first frame of the first TIFF stack. Since this metadata is the
+    # same for all stacks, it is safe to use any available stack. We use the first one for consistency with
+    # suite2p helper scripts.
+    _process_invariant_metadata(file=tiff_files[0], ops_path=ops_path, metadata_path=frame_invariant_metadata_path)
+
+    # Uses partial to bind the constant arguments to the processing function
+    process_func = partial(
+        _process_stack, output_dir=output_directory, remove_sources=remove_sources, verify_integrity=verify_integrity
+    )
+
+    # Processes each tiff stack in parallel
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # Submits all tasks
+        future_to_file = set()
+        for file, frame in zip(tiff_files, frame_numbers):
+            future_to_file.add(executor.submit(process_func, file, frame))
+
+        if not batch:
+            # Shows progress with tqdm when not in batch mode
+            with tqdm(
+                total=len(tiff_files),
+                desc=f"Processing TIFF stacks for {Path(*image_directory.parts[-6:])}",
+                unit="stack",
+            ) as pbar:
+                for future in as_completed(future_to_file):
+                    for key, value in future.result().items():
+                        all_metadata[key].append(value)
+                    pbar.update(1)
+        else:
+            # For batch mode, processes without progress tracking
+            for future in as_completed(future_to_file):
+                for key, value in future.result().items():
+                    all_metadata[key].append(value)
+
+    # Saves concatenated metadata as compressed numpy archive
+    metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
+    np.savez(frame_variant_metadata_path, **metadata_dict)
+
+    # Moves motion estimator files to the mesoscope_frames directory. This way, ALL mesoscope-related data is stored
+    # under mesoscope_frames.
+    sh.move(
+        src=image_directory.joinpath("MotionEstimator.me"),
+        dst=output_directory.joinpath("MotionEstimator.me"),
+    )
+    sh.move(
+        src=image_directory.joinpath("zstack.mat"),
+        dst=output_directory.joinpath("zstack.mat"),
+    )
+
+    # The processing function should have removed (unlinked) all original tiff stacks. This also removes the temporary
+    # storage directory itself
+    if remove_sources:
+        sh.rmtree(image_directory)

@@ -31,7 +31,7 @@ from .module_interfaces import (
 
 
 @dataclass()
-class _ZaberPositions(YamlConfig):
+class ZaberPositions(YamlConfig):
     """This class is used to save and restore Zaber motor positions between sessions by saving them as .yaml file.
 
     The class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
@@ -66,7 +66,7 @@ class _ZaberPositions(YamlConfig):
     """The absolute position, in native motor units, of the LickPort y-axis motor."""
 
 
-class _HeadBar:
+class HeadBar:
     """Interfaces with Zaber motors that control the position of the HeadBar manipulator arm.
 
     This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes. It is used
@@ -112,9 +112,9 @@ class _HeadBar:
         # If the previous positions path points to an existing .yaml file, loads the data from the file into
         # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
         # previous positions.
-        self._previous_positions: None | _ZaberPositions = None
+        self._previous_positions: None | ZaberPositions = None
         if zaber_positions_path.exists():
-            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
+            self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
 
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
@@ -313,7 +313,7 @@ class _HeadBar:
         self._headbar.disconnect()
 
 
-class _LickPort:
+class LickPort:
     """Interfaces with Zaber motors that control the position of the LickPort manipulator arm.
 
     This class abstracts working with Zaber motors that move the LickPort in Z, X, and Y axes. It is used
@@ -359,9 +359,9 @@ class _LickPort:
         # If the previous positions path points to an existing .yaml file, loads the data from the file into
         # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
         # previous positions.
-        self._previous_positions: None | _ZaberPositions = None
+        self._previous_positions: None | ZaberPositions = None
         if zaber_positions_path.exists():
-            self._previous_positions = _ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
+            self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
 
     def restore_position(self, wait_until_idle: bool = True) -> None:
         """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
@@ -562,7 +562,7 @@ class _LickPort:
         self._lickport.disconnect()
 
 
-class _MicroControllerInterfaces:
+class MicroControllerInterfaces:
     """Interfaces with all Ataraxis Micro Controller (AMC) devices that control and record non-video behavioral data
     from the Mesoscope-VR system.
 
@@ -1047,7 +1047,7 @@ class _MicroControllerInterfaces:
         return self.valve.valve_tracker
 
 
-class _VideoSystems:
+class VideoSystems:
     """Interfaces with all cameras managed by Ataraxis Video System (AVS) classes that acquire and save camera frames
     as .mp4 video files.
 

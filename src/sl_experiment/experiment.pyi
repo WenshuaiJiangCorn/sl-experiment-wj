@@ -13,25 +13,26 @@ from ataraxis_communication_interface import MQTTCommunication
 from .visualizers import BehaviorVisualizer as BehaviorVisualizer
 from .transfer_tools import transfer_directory as transfer_directory
 from .binding_classes import (
-    _HeadBar as _HeadBar,
-    _LickPort as _LickPort,
-    _VideoSystems as _VideoSystems,
-    _ZaberPositions as _ZaberPositions,
-    _MicroControllerInterfaces as _MicroControllerInterfaces,
+    HeadBar as HeadBar,
+    LickPort as LickPort,
+    VideoSystems as VideoSystems,
+    ZaberPositions as ZaberPositions,
+    MicroControllerInterfaces as MicroControllerInterfaces,
+)
+from .data_processing import (
+    RuntimeHardwareConfiguration as RuntimeHardwareConfiguration,
+    process_video_names as process_video_names,
+    process_mesoscope_directory as process_mesoscope_directory,
 )
 from .packaging_tools import calculate_directory_checksum as calculate_directory_checksum
 from .module_interfaces import (
     BreakInterface as BreakInterface,
     ValveInterface as ValveInterface,
 )
-from .data_preprocessing import (
-    process_log_data as process_log_data,
-    process_mesoscope_directory as process_mesoscope_directory,
-)
 from .google_sheet_tools import (
     SurgeryData as SurgeryData,
-    _SurgerySheet as _SurgerySheet,
-    _WaterSheetData as _WaterSheetData,
+    SurgerySheet as SurgerySheet,
+    WaterSheetData as WaterSheetData,
 )
 
 @dataclass()
@@ -98,7 +99,7 @@ class ExperimentState:
     vr_state_code: int
     state_duration_s: float
 
-class KeyboardListener:
+class _KeyboardListener:
     """Monitors the keyboard input for various runtime control signals and changes internal flags to communicate
     detected signals.
 
@@ -299,37 +300,6 @@ class SessionData:
         formats. After runtime, SessionData pulls all mesoscope frames into this directory.
         """
     @property
-    def mesoscope_frames_path(self) -> Path:
-        """Returns the path to the mesoscope_frames directory of the managed session.
-
-        This path is used during mesoscope data preprocessing to store compressed (preprocessed) mesoscope frames.
-        """
-    @property
-    def ops_path(self) -> Path:
-        """Returns the path to the ops.json file of the managed session.
-
-        This path is used to save the ops.json generated from the mesoscope TIFF metadata during preprocessing. This is
-        a configuration file used by the suite2p during mesoscope data registration.
-        """
-    @property
-    def frame_invariant_metadata_path(self) -> Path:
-        """Returns the path to the frame_invariant_metadata.json file of the managed session.
-
-        This path is used to save the metadata shared by all frames in all TIFF stacks acquired by the mesoscope.
-        Currently, this data is not used during processing.
-        """
-    @property
-    def frame_variant_metadata_path(self) -> Path:
-        """Returns the path to the frame_variant_metadata.npz file of the managed session.
-
-        This path is used to save the metadata unique for each frame in all TIFF stacks acquired by the mesoscope.
-        Currently, this data is not used during processing.
-
-        Notes:
-            Unlike frame-invariant metadata, this file is stored as a compressed NumPy archive (NPZ) file to optimize
-            storage space usage.
-        """
-    @property
     def camera_frames_path(self) -> Path:
         """Returns the path to the camera_frames directory of the managed session.
 
@@ -353,11 +323,10 @@ class SessionData:
         water delivered during runtime (important for water restriction).
         """
     @property
-    def behavior_data_path(self) -> Path:
-        """Returns the path to the behavior_data directory of the managed session.
+    def hardware_configuration_path(self) -> Path:
+        """Returns the path to the hardware_configuration.yaml file of the managed session.
 
-        This path is used during module data processing to extract the data acquired by various hardware modules from
-        .npz log archives and save it as feather files.
+        This file stores hardware module parameters used to read and parse .npz log files during data processing.
         """
     @property
     def previous_zaber_positions_path(self) -> Path:
@@ -367,23 +336,6 @@ class SessionData:
         the persistent directory when the original session is moved to long-term storage. Loading the file allows
         reusing LickPort and HeadBar motor positions across sessions. The contents of this file are updated after each
         experimental or training session.
-        """
-    @property
-    def persistent_motion_estimator_path(self) -> Path:
-        """Returns the path to the MotionEstimator.me file for the managed animal and project combination stored on the
-        ScanImagePC.
-
-        This path is used during the first training session to save the 'reference' MotionEstimator.me file established
-        during the initial mesoscope ROI selection to the ScanImagePC. The same reference file is used for all following
-        sessions to correct for the natural motion of the brain relative to the cranial window.
-        """
-    @property
-    def surgery_metadata_paths(self) -> tuple[Path, Path, Path]:
-        """Returns the paths to the surgery_metadata.yaml file for the managed project and animal combination.
-
-        This file is used to store the data extracted from the lab's surgery log Google Sheet. Typically, this is only
-        done once, when processing the first training session for the animal. This method returns the paths to the
-        target file on all destinations: VRPC, BioHPC server, and the NAS.
         """
     def write_water_restriction_data(self, experimenter_id: str, animal_weight: float, water_volume: float) -> None:
         """Updates the water restriction log tab for the currently managed project and animal with the provided data.
@@ -408,14 +360,14 @@ class SessionData:
         experiment runtime. Although it is not necessary to always overwrite the metadata, since this takes very little
         time, the current mode of operation is to always update this data.
         """
-    def pull_mesoscope_data(
-        self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = False
+    def _pull_mesoscope_data(
+        self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = True
     ) -> None:
         """Pulls the frames acquired by the mesoscope from the ScanImage PC to the VRPC.
 
         This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
         before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
-        contains only the frames acquired during the current session runtime, and the MotionEstimator.me and
+        contains only the frames acquired during the current session runtime, the MotionEstimator.me and
         zstack.mat used for motion registration.
 
         Notes:
@@ -426,36 +378,30 @@ class SessionData:
             'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
             reference for all further motion estimation procedures carried out during future sessions.
 
+            Before pulling the data, the method renames the current mesoscope_frames folder to include the managed
+            session name and recreates the mesoscope_frames folder. This effectively 'caches' the data on the
+            ScanImagePC to avoid delays in running the next session if the processing fails for any reason.
+
         Args:
             num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
                 the local machine. Depending on the connection speed between the PCs, it may be useful to set this
                 number to the number of available CPU cores - 4.
             remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
-                Generally, it is recommended to remove source data to keep ScanImagePC disk usage low.
+                Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
+                this to True will only mark the data for removal. The data will not be removed until 'purge-data' CLI is
+                called.
             verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
                 performed before source folder is removed from the ScanImagePC, if remove_sources is True.
-        Raises:
-            RuntimeError: If the mesoscope source directory does not contain motion estimator files or mesoscope frames.
         """
     def process_mesoscope_data(self) -> None:
-        """Preprocesses the (pulled) mesoscope data.
+        """Pulls the mesoscope-acquired data to the VRPC and preprocesses the frame data.
 
-        This is a wrapper around the process_mesoscope_directory() function. It compressed all mesoscope frames using
-        LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file for future
-        suite2p registration. This method also ensures that after processing all mesoscope data, including motion
-        estimation files, are found under the mesoscope_frames directory.
-
-        Notes:
-            Additional processing for camera data is carried out by the stop() method of each experimental class. This
-            is intentional, as not all classes use all cameras.
+        Primarily, this is a wrapper around the process_mesoscope_directory() function. It compresses all mesoscope
+        frames using LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file
+        for future suite2p registration. This method also ensures that after processing all mesoscope data, including
+        motion estimation files, are found under the mesoscope_frames directory.
         """
-    def push_data(
-        self,
-        parallel: bool = True,
-        num_threads: int = 10,
-        remove_sources: bool = False,
-        verify_transfer_integrity: bool = False,
-    ) -> None:
+    def push_data(self, parallel: bool = True, num_threads: int = 10) -> None:
         """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
 
         This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and
@@ -480,11 +426,6 @@ class SessionData:
                 the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
                 advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
                 number of CPU cores - 4.
-            remove_sources: Determines whether to remove the raw_data directory from the VRPC once it has been copied
-                to the NAS and Server. Depending on the overall load of the VRPC, we recommend keeping source data on
-                the VRPC at least until the integrity of the transferred data is verified on the server.
-            verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
-                performed before source folder is removed from the VRPC, if remove_sources is True.
         """
 
 class MesoscopeExperiment:
@@ -545,12 +486,12 @@ class MesoscopeExperiment:
         _descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
-        _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
+        _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
-        _cameras: Stores the _VideoSystems instance that interfaces with video systems (cameras) used during
+        _cameras: Stores the VideoSystems instance that interfaces with video systems (cameras) used during
             runtime.
-        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
-        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
+        HeadBar: Stores the HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        LickPort: Stores the LickPort class instance that interfaces with all LickPort manipulator motors.
         _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _state_map: Maps the integer state-codes used to represent VR system states to human-readable string-names.
@@ -579,11 +520,11 @@ class MesoscopeExperiment:
     _cue_map: dict[int, float]
     _session_data: SessionData
     _logger: DataLogger
-    _microcontrollers: _MicroControllerInterfaces
+    _microcontrollers: MicroControllerInterfaces
     _unity: MQTTCommunication
-    _cameras: _VideoSystems
-    _headbar: _HeadBar
-    _lickport: _LickPort
+    _cameras: VideoSystems
+    HeadBar: HeadBar
+    LickPort: LickPort
     def __init__(
         self,
         session_data: SessionData,
@@ -750,12 +691,12 @@ class BehaviorTraining:
         descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers and video
             cameras.
-        _microcontrollers: Stores the _MicroControllerInterfaces instance that interfaces with all MicroController
+        _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
-        _cameras: Stores the _VideoSystems instance that interfaces with video systems (cameras) used during
+        _cameras: Stores the VideoSystems instance that interfaces with video systems (cameras) used during
             runtime.
-        _headbar: Stores the _HeadBar class instance that interfaces with all HeadBar manipulator motors.
-        _lickport: Stores the _LickPort class instance that interfaces with all LickPort manipulator motors.
+        HeadBar: Stores the HeadBar class instance that interfaces with all HeadBar manipulator motors.
+        LickPort: Stores the LickPort class instance that interfaces with all LickPort manipulator motors.
         _screen_on: Tracks whether the VR displays are currently ON.
         _session_data: Stores the SessionData instance used to manage the acquired data.
 
@@ -769,10 +710,10 @@ class BehaviorTraining:
     _screen_on: bool
     _session_data: SessionData
     _logger: DataLogger
-    _microcontrollers: _MicroControllerInterfaces
-    _cameras: _VideoSystems
-    _headbar: _HeadBar
-    _lickport: _LickPort
+    _microcontrollers: MicroControllerInterfaces
+    _cameras: VideoSystems
+    HeadBar: HeadBar
+    LickPort: LickPort
     def __init__(
         self,
         session_data: SessionData,
