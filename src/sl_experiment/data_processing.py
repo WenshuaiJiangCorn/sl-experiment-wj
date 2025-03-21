@@ -21,7 +21,7 @@ import tifffile
 from numpy.typing import NDArray
 from numpy.lib.npyio import NpzFile
 from ataraxis_video_system import extract_logged_video_system_data
-from ataraxis_base_utilities import console, ensure_directory_exists
+from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
 from ataraxis_data_structures import DataLogger, YamlConfig
 
 from .module_interfaces import (
@@ -33,6 +33,8 @@ from .module_interfaces import (
     TorqueInterface,
     EncoderInterface,
 )
+from .packaging_tools import calculate_directory_checksum
+from .transfer_tools import transfer_directory
 
 
 # This has to be defined here to avoid circular import in experiment.py
@@ -586,35 +588,8 @@ def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
     # Should exist inside the raw data directory
     hardware_configuration_path = data_directory.joinpath("hardware_configuration.yaml")
 
-    # Finds all .npz and .npy log files inside the input log file directory.
+    # Finds all .npz log files inside the input log file directory. Assumes there are no uncompressed log files.
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
-    uncompressed_files: list[Path] = [file for file in log_directory.glob("*.npy")]
-
-    # If the input directory contains .npy (uncompressed) log entries and no compressed log entries, first
-    # compresses all log entries in the directory. Statically uses the logger name used in the BehavioralTraining and
-    # MesoscopeExperiment classes.
-    if len(compressed_files) == 0 and len(uncompressed_files) > 0:
-        logger = DataLogger(output_directory=log_directory, instance_name="behavior", exist_ok=True)
-        logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
-        )
-
-        # Rebuilds the list of compressed files
-        compressed_files = [file for file in log_directory.glob("*.npz")]
-
-    # If both compressed and uncompressed log files existing in the same directory, aborts with an error
-    elif len(compressed_files) > 0 and len(uncompressed_files) > 0:
-        message = (
-            "The input log directory contains both compressed and uncompressed log files. Since compression overwrites "
-            "the .npz archive with the processed data, it is unsafe to proceed with log parsing in automated mode."
-            "Manually back up the existing .npz files, remove them from the log directory and call the processing "
-            "method again."
-        )
-        console.error(message, error=RuntimeError)
-
-    # If there are no compressed files at this time, there is no data to process. Ends runtime early
-    if len(compressed_files) < 0:
-        return
 
     # Loads the input HardwareConfiguration file to read the hardware parameters necessary to parse the data
     hardware_configuration: RuntimeHardwareConfiguration = RuntimeHardwareConfiguration.from_yaml(  # type: ignore
@@ -767,7 +742,7 @@ def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
                 future.result()
 
 
-def process_video_names(camera_frame_directory: Path) -> None:
+def preprocess_video_names(camera_frame_directory: Path) -> None:
     """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
 
     This is a minor convenience function used together with log and mesoscope frame compression during preprocessing.
@@ -792,8 +767,164 @@ def process_video_names(camera_frame_directory: Path) -> None:
     )
 
 
-def process_mesoscope_directory(
-    data_directory: Path,
+def _pull_mesoscope_data(
+    raw_data_directory: Path,
+    mesoscope_root_directory: Path,
+    num_threads: int = 28,
+    remove_sources: bool = False,
+    verify_transfer_integrity: bool = True,
+) -> None:
+    """Pulls the frames acquired by the mesoscope from the ScanImagePC to the VRPC.
+
+    This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
+    before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
+    contains only the frames acquired during the current session runtime, the MotionEstimator.me and
+    zstack.mat used for motion registration.
+
+    Notes:
+        It is safe to call this function for sessions that did not acquire mesoscope frames. It is designed to
+        abort early if it cannot discover the cached mesoscope frames data for the target session on the ScanImagePC.
+
+        This function expects that the data acquisition runtime has renamed the mesoscope_frames source directory for
+        the session to include the session name. Manual intervention may be necessary if the runtime fails before the
+        mesoscope_frames source directory is renamed.
+
+        This function is configured to parallelize data transfer and verification to optimize runtime speeds where
+        possible.
+
+        When the function is called for the first time for a particular project and animal combination, it also
+        'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
+        reference for all further motion estimation procedures carried out during future sessions.
+
+    Args:
+        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        mesoscope_root_directory: The Path to the root directory that stores all experiment data on the ScanImagePC.
+        num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
+            the local machine.
+        remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
+            Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
+            this to True will only mark the data for removal. The data will not be removed until 'purge-data' command
+            is used from the terminal.
+        verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
+            performed before source folder is marked for removal from the ScanImagePC if remove_sources is True.
+    """
+    # Overall, the path to raw_data folder looks like this: root/project/animal/session/raw_data. This indexes the
+    # session, project, and animal names from the path.
+    session_name = raw_data_directory.parents[0].name
+    animal_name = raw_data_directory.parents[1].name
+    project_name = raw_data_directory.parents[2].name
+
+    # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
+    source = mesoscope_root_directory.joinpath(f"{session_name}_mesoscope_frames")
+
+    # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
+    # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
+    if not source.exists() or source.joinpath("ubiquitin.bin").exists():
+        return
+
+    # Otherwise, if the source exists and is not marked for deletion, pulls the frame to the target directory:
+
+    # Precreates the temporary storage directory for the pulled data.
+    destination = raw_data_directory.joinpath("raw_mesoscope_frames")
+    ensure_directory_exists(destination)
+
+    # Defines the set of extensions to look for when verifying source folder contents
+    extensions = {"*.me", "*.mat", "*.tiff", "*.tif"}
+
+    # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
+    # all files are present or fails five times in a row.
+    for attempt in range(5):  # A maximum of 5 reattempts is allowed
+        # Extracts the names of files stored in the source folder
+        files: tuple[Path, ...] = tuple([path for ext in extensions for path in source.glob(ext)])
+        file_names: tuple[str, ...] = tuple([file.name for file in files])
+        error = False
+
+        # Ensures the folder contains motion estimator data files
+        if "MotionEstimator.me" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"MotionEstimator.me file, which is required for further frame data processing."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        if "zstack.mat" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"zstack.mat file, which is required for further frame data processing."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Prevents pulling an empty folder. At a minimum, we expect 2 motion estimation files and one TIFF stack
+        # file
+        if len(files) < 3:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC for the session {session_name} does not contain the minimum expected "
+                f"number of files (3). This indicates that no frames were acquired during runtime or that the frames "
+                f"were saved at a different location."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Breaks the loop if all files are present
+        if not error:
+            break
+
+        # Otherwise, waits for the user to move the files into the requested directory and continues the runtime
+        message = (
+            f"Unable to locate all required Mesoscope data files when pulling the session {session_name} data to the "
+            f"VRPC. Move all requested files to the mesoscope_frames directory on the ScanImage PC before "
+            f"continuing the runtime. Note, cycling through this message 5 times in a row will abort the "
+            f"preprocessing with a RuntimeError."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+
+        # If the user has repeatedly failed 10 attempts in a row, exits with a runtime error
+        if attempt >= 4:
+            message = (
+                f"Failed 5 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
+                f"data processing and terminating the preprocessing runtime."
+            )
+            console.error(message=message, error=RuntimeError)
+
+    # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
+    # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
+    # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
+    persistent_motion_estimator_path = mesoscope_root_directory.joinpath(
+        "persistent_data", project_name, animal_name, "MotionEstimator.me"
+    )
+    if not persistent_motion_estimator_path.exists():
+        sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
+
+    # Generates the checksum for the source folder if transfer integrity verification is enabled.
+    if verify_transfer_integrity:
+        calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
+
+    # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
+    transfer_directory(
+        source=source, destination=destination, num_threads=num_threads, verify_integrity=verify_transfer_integrity
+    )
+
+    # Removes the checksum file after the transfer is complete. The checksum will be recalculated for the whole
+    # session directory during preprocessing, so there is no point in keeping the original mesoscope checksum file.
+    if verify_transfer_integrity:
+        destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
+
+    # After the transfer completes successfully (including integrity verification), tags (marks) the source
+    # directory for removal. Specifically, deposits an 'ubiquitin.bin' marker, which is used by our data purging
+    # runtime to discover and remove directories that are no longer necessary.
+    if remove_sources:
+        marker_path = source.joinpath("ubiquitin.bin")
+        marker_path.touch()
+
+
+def _preprocess_mesoscope_directory(
+    raw_data_directory: Path,
     num_processes: int,
     remove_sources: bool = False,
     batch: bool = False,
@@ -821,7 +952,7 @@ def process_mesoscope_directory(
         combine both methods.
 
     Args:
-        data_directory: The Path to the target session raw_data directory to be processed.
+        raw_data_directory: The Path to the target session raw_data directory to be processed.
         num_processes: The maximum number of processes to use while processing the directory. Each process is used to
             compress a stack of TIFF files in parallel.
         remove_sources: Determines whether to remove the original TIFF files after they have been processed.
@@ -833,8 +964,8 @@ def process_mesoscope_directory(
             worker spawned by this function.
     """
     # Resolves the paths to the specific directories used during processing
-    image_directory = data_directory.joinpath("raw_mesoscope_frames")  # Should exist inside the raw data directory
-    output_directory = data_directory.joinpath("mesoscope_frames")
+    image_directory = raw_data_directory.joinpath("raw_mesoscope_frames")  # Should exist inside the raw data directory
+    output_directory = raw_data_directory.joinpath("mesoscope_frames")
     ensure_directory_exists(output_directory)  # Generates the directory
 
     # Also resolves paths to the output files
@@ -930,3 +1061,115 @@ def process_mesoscope_directory(
     # storage directory itself
     if remove_sources:
         sh.rmtree(image_directory)
+
+
+def process_mesoscope_data(self) -> None:
+    """Pulls the mesoscope-acquired data to the VRPC and preprocesses the frame data.
+
+    Primarily, this is a wrapper around the process_mesoscope_directory() function. It compresses all mesoscope
+    frames using LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file
+    for future suite2p registration. This method also ensures that after processing all mesoscope data, including
+    motion estimation files, are found under the mesoscope_frames directory.
+    """
+
+    # Pulls the mesoscope data from the ScanImagePC to the VRPC
+    self._pull_mesoscope_data(num_threads=30, remove_sources=True, verify_transfer_integrity=True)
+
+    # Preprocesses the pulled mesoscope frames.
+    _preprocess_mesoscope_directory(
+        raw_data_directory=self.raw_data_path,
+        num_processes=30,
+        remove_sources=True,
+        verify_integrity=True,
+    )
+
+
+def _preprocess_log_directory(raw_data_directory: Path, logger: DataLogger | None = None) -> None:
+    """Compresses all .npy (uncompressed) log entries stored in the behavior log directory into one or more .npz
+    archives.
+
+    This service function is used during data preprocessing to optimize the size and format used to store all log
+    entries. Primarily, this is necessary to facilitate data transfer over the network and log processing on the
+    BioHPC server.
+
+    data_directory: The path to the processed session raw_data directory.
+    logger: An optional initialized DataLogger instance used to generate the log data. During normal preprocessing, this
+        function receives the initialized logger instance used to generate the data from the managing runtime
+        function. When this function is used to repeat / resumed failed preprocessing, it initialized its own
+        data logger.
+    """
+    # Unless an initialized DataLogger instance is provided, initializes a DataLogger instance using the default
+    # parameters used by the data acquisition pipeline.
+    if logger is None:
+        logger = DataLogger(output_directory=raw_data_directory, instance_name="behavior", exist_ok=True)
+
+    # Resolves the path to the log directory, using either the input or initialized logger class.
+    log_directory = logger.output_directory
+
+    # Searches for compressed and uncompressed files inside the log directory
+    compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
+    uncompressed_files: list[Path] = [file for file in log_directory.glob("*.npy")]
+
+    # If there are no uncompressed files, ends the runtime early
+    if len(uncompressed_files) < 0:
+        return
+
+    # If the input directory contains .npy (uncompressed) log entries and no compressed log entries, compresses all log
+    # entries in the directory
+    if len(compressed_files) == 0 and len(uncompressed_files) > 0:
+        logger.compress_logs(
+            remove_sources=True, memory_mapping=False, verbose=True, compress=True, verify_integrity=True
+        )
+
+    # If both compressed and uncompressed log files existing in the same directory, aborts with an error
+    elif len(compressed_files) > 0 and len(uncompressed_files) > 0:
+        message = (
+            "The input log directory contains both compressed and uncompressed log files. Since compression overwrites "
+            "the .npz archive with the processed data, it is unsafe to proceed with log compression in automated mode."
+            "Manually back up the existing .npz files, remove them from the log directory and call the processing "
+            "method again."
+        )
+        console.error(message, error=RuntimeError)
+
+
+def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
+    """Checks the data stored on Sun lab BioHPC server for the presence of telomere.bin markers and removes all matching
+    directories on the VRPC.
+
+    Specifically, this function iterates through all raw_data directories on the VRPC, checks if the corresponding
+    directory on the BioHPC server contains a telomere.bin marker, and removes the local raw_data directory if a marker
+    is found.
+
+    Args:
+        server_root_path: The path to the root directory used to store all experiment and training data on the Sun lab
+            BioHPC server.
+        local_root_path: The path to the root directory used to store all experiment and training data on the VRPC.
+    """
+    # Finds all raw_data directories in the local path
+    for raw_data_path in local_root_path.rglob("raw_data"):
+        # Constructs the relative path to the raw_data directory from the local root
+        relative_path = raw_data_path.relative_to(local_root_path)
+
+        # Constructs the corresponding server path
+        server_path = server_root_path.joinpath(relative_path)
+
+        # Checks if the telomere.bin marker exists in the server path
+        if server_path.joinpath("telomere.bin").exists():
+            # If marker exists, removes the local (VRPC) raw_data directory
+            sh.rmtree(raw_data_path, ignore_errors=True)
+
+
+def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
+    """Checks the data stored on the ScanImage PC for the presence of ubiquitin.bin markers and removes all directories
+    that contain the marker.
+
+    This function is used to clear out cached mesoscope frame directories on the ScanImage PC once they have been safely
+    copied and processed on the VRPC.
+
+    Args:
+        mesoscope_root_path: The path to the root directory used to store all mesoscope-acquired data on the ScanImage
+            (Mesoscope) PC.
+    """
+    file: Path
+    for file in mesoscope_root_path.rglob("ubiquitin.bin"):
+        sh.rmtree(file.parent, ignore_errors=True)

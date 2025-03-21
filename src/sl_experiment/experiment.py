@@ -26,7 +26,7 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .visualizers import BehaviorVisualizer
 from .transfer_tools import transfer_directory
 from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
-from .data_processing import RuntimeHardwareConfiguration, process_video_names, process_mesoscope_directory
+from .data_processing import RuntimeHardwareConfiguration, preprocess_video_names, _preprocess_mesoscope_directory
 from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import BreakInterface, ValveInterface
 from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
@@ -751,11 +751,21 @@ class SessionData:
         motion estimation files, are found under the mesoscope_frames directory.
         """
 
+        # Resolves source and destination paths
+        source = self._mesoscope.joinpath("mesoscope_frames")
+
+        # Before transferring the data, renames the mesoscope_frames folder to include the session name. This is used
+        # to 'clear' the mesoscope_frames name for the next session, so that the next session can run without delay if
+        # mesoscope frame pulling or processing fails for any reason. The processing can then be repeated using the
+        # cached data.
+        source = source.rename(self._mesoscope.joinpath(f"{self._session_name}_mesoscope_frames"))
+        ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
+
         # Pulls the mesoscope data from the ScanImagePC to the VRPC
         self._pull_mesoscope_data(num_threads=30, remove_sources=True, verify_transfer_integrity=True)
 
         # Preprocesses the pulled mesoscope frames.
-        process_mesoscope_directory(
+        _preprocess_mesoscope_directory(
             data_directory=self.raw_data_path,
             num_processes=30,
             remove_sources=True,
@@ -889,7 +899,7 @@ class MesoscopeExperiment:
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
-        _descriptor: Stores the session descriptor instance.
+        descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
@@ -951,7 +961,7 @@ class MesoscopeExperiment:
 
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
-        self._descriptor: _MesoscopeExperimentDescriptor = descriptor
+        self.descriptor: _MesoscopeExperimentDescriptor = descriptor
 
         # Input verification:
         if not isinstance(session_data, SessionData):
@@ -1282,8 +1292,8 @@ class MesoscopeExperiment:
         # that the reported dispensed_water_volume_ul is accurate.
         delivered_water = self._microcontrollers.total_delivered_volume
         # Overwrites the delivered water volume with the volume recorded over the runtime.
-        self._descriptor.dispensed_water_volume_ul = delivered_water
-        self._descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+        self.descriptor.dispensed_water_volume_ul = delivered_water
+        self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
@@ -1328,6 +1338,23 @@ class MesoscopeExperiment:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
+        # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
+        descriptor: _MesoscopeExperimentDescriptor = self.descriptor.from_yaml(  # type: ignore
+            file_path=self._session_data.session_descriptor_path
+        )
+        while "Replace this with your notes." in descriptor.experimenter_notes:
+            message = (
+                "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
+                "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
+                "replaced the default text under the 'experimenter_notes' field with the notes taken during the "
+                "experiment. Make sure to save the changes to the file by using 'CTRL+S' combination."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
+
+            # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
+            descriptor = self.descriptor.from_yaml(file_path=self._session_data.session_descriptor_path)  # type: ignore
+
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
         self.HeadBar.park_position(wait_until_idle=False)
@@ -1367,7 +1394,7 @@ class MesoscopeExperiment:
         )
 
         # Renames video files to use human-friendly names
-        process_video_names(camera_frame_directory=self._session_data.camera_frames_path)
+        preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Preprocesses the pulled mesoscope data.
         self._session_data.process_mesoscope_data()
@@ -1971,6 +1998,23 @@ class BehaviorTraining:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
+        # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
+        descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor = self.descriptor.from_yaml(  # type: ignore
+            file_path=self._session_data.session_descriptor_path
+        )
+        while "Replace this with your notes." in descriptor.experimenter_notes:
+            message = (
+                "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
+                "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
+                "replaced the default text under the 'experimenter_notes' field with the notes taken during the "
+                "experiment. Make sure to save the changes to the file by using 'CTRL+S' combination."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
+
+            # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
+            descriptor = self.descriptor.from_yaml(file_path=self._session_data.session_descriptor_path)  # type: ignore
+
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
         self.HeadBar.park_position(wait_until_idle=False)
@@ -2016,7 +2060,7 @@ class BehaviorTraining:
         )
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
-        process_video_names(camera_frame_directory=self._session_data.camera_frames_path)
+        preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Pushes the processed data to the NAS and BioHPC server.
         self._session_data.push_data()
@@ -2281,49 +2325,58 @@ def lick_training_logic(
     terminate = False
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
-    delay_timer.reset()
-    for delay in tqdm(
-        reward_delays,
-        desc="Running lick training",
-        unit="reward",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
-    ):
-        # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done during
-        # the delay has to go here
-        while delay_timer.elapsed < delay:
-            # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
-            # interest and appear visually smooth to human observers.
-            visualizer.update()
-
-            # If the listener detects the default abort sequence, terminates the runtime.
-            if listener.exit_signal:
-                terminate = True  # Sets the terminate flag
-                break  # Breaks the while loop
-
-            # If the listener detects a reward delivery signal, delivers the reward to the animal
-            if listener.reward_signal:
-                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
-
-        # If the user sent the abort command, terminates the training early
-        if terminate:
-            message = (
-                "Lick training abort signal detected. Aborting the lick training with a graceful shutdown procedure."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            break  # Breaks the for loop
-
-        # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the next
-        # reward delay
-        runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+    try:
         delay_timer.reset()
+        for delay in tqdm(
+            reward_delays,
+            desc="Running lick training",
+            unit="reward",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
+        ):
+            # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done
+            # during the delay has to go here
+            while delay_timer.elapsed < delay:
+                # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
+                # interest and appear visually smooth to human observers.
+                visualizer.update()
+
+                # If the listener detects the default abort sequence, terminates the runtime.
+                if listener.exit_signal:
+                    terminate = True  # Sets the terminate flag
+                    break  # Breaks the while loop
+
+                # If the listener detects a reward delivery signal, delivers the reward to the animal
+                if listener.reward_signal:
+                    runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+            # If the user sent the abort command, terminates the training early
+            if terminate:
+                message = (
+                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
+                    "procedure."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                break  # Breaks the for loop
+
+            # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the
+            # next reward delay
+            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+            delay_timer.reset()
+
+        # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
+        delay_timer.delay_noblock(lower_bound * 1000000)  # Converts to microseconds before delaying
+
+    except Exception as e:
+        message = (
+            f"Training runtime has encountered an error and had to be terminated early. Attempting to gracefully "
+            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
+            f"{str(e)}"
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
 
     # Shutdown sequence:
-    message = (
-        f"Training runtime: Complete. Delaying for additional {lower_bound} seconds to ensure the animal "
-        f"has time to consume the final dispensed reward."
-    )
+    message = f"Training runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
-    delay_timer.delay_noblock(lower_bound * 1000000)  # Converts to microseconds before delaying
 
     # Terminates the listener
     listener.shutdown()
@@ -2772,90 +2825,105 @@ def run_train_logic(
 
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
-    runtime_timer.reset()
-    speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
-    while runtime_timer.elapsed < training_time:
-        # Updates the total volume of water dispensed during runtime at each loop iteration.
-        dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
+    try:
+        runtime_timer.reset()
+        speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
+        while runtime_timer.elapsed < training_time:
+            # Updates the total volume of water dispensed during runtime at each loop iteration.
+            dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
 
-        # Determines how many times the speed and duration thresholds have been increased based on the difference
-        # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
-        # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
-        # harder to keep receiving water.
-        increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
+            # Determines how many times the speed and duration thresholds have been increased based on the difference
+            # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
+            # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
+            # harder to keep receiving water.
+            increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
 
-        # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
-        # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
-        speed_threshold = np.clip(
-            a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.1),
-            a_min=0.1,  # Minimum value
-            a_max=maximum_speed,  # Maximum value
-        )
-        duration_threshold = np.clip(
-            a=initial_duration + (increase_steps * duration_step) + (listener.duration_modifier * 50),
-            a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
-            a_max=maximum_duration,  # Maximum value
-        )
-
-        # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and previous
-        # threshold trackers with new data.
-        if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
-            previous_speed_threshold = speed_threshold
-            previous_duration_threshold = duration_threshold
-
-        # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to calculate
-        # the running speed of the animal over 100 millisecond windows. This accesses the result of this computation and
-        # uses it to determine whether the animal is performing above the threshold.
-        current_speed = visualizer.running_speed
-
-        # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed for
-        # the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has not yet
-        # maintained the required duration, the loop will keep cycling and accumulating the timer count. This is done
-        # until the animal either reaches the required duration or drops below the speed threshold.
-        if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
-            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
-
-            # Also resets the timer. While mice typically stop to consume water rewards, which would reset the timer,
-            # this guards against animals that carry on running without consuming water rewards.
-            speed_timer.reset()
-
-        # If the current speed is below the speed threshold, resets the speed timer.
-        elif current_speed < speed_threshold:
-            speed_timer.reset()
-
-        # Updates the progress bar with each elapsed second. Note, this is technically not safe in case multiple seconds
-        # pass between reaching this conditional, but we know empirically that the loop will run at millisecond
-        # intervals, so it is not a concern.
-        if runtime_timer.elapsed > previous_time:
-            previous_time = runtime_timer.elapsed  # Updates the previous time for the next progress bar update
-            progress_bar.update(1)
-
-        # Updates the visualizer plot
-        visualizer.update()
-
-        # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
-        # training early with a success message.
-        if dispensed_water_volume >= maximum_volume:
-            message = (
-                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
-                f"the training process."
+            # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
+            # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
+            speed_threshold = np.clip(
+                a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.1),
+                a_min=0.1,  # Minimum value
+                a_max=maximum_speed,  # Maximum value
             )
-            console.echo(message=message, level=LogLevel.SUCCESS)
-            break
+            duration_threshold = np.clip(
+                a=initial_duration + (increase_steps * duration_step) + (listener.duration_modifier * 50),
+                a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
+                a_max=maximum_duration,  # Maximum value
+            )
 
-        # If the listener detects a reward delivery signal, delivers the reward to the animal.
-        if listener.reward_signal:
-            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+            # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
+            # previous threshold trackers with new data.
+            if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
+                visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
+                previous_speed_threshold = speed_threshold
+                previous_duration_threshold = duration_threshold
 
-        # If the user sent the abort command, terminates the training early with an error message.
-        if listener.exit_signal:
-            message = "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
-            console.echo(message=message, level=LogLevel.ERROR)
-            break
+            # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to
+            # calculate the running speed of the animal over 100 millisecond windows. This accesses the result of this
+            # computation and uses it to determine whether the animal is performing above the threshold.
+            current_speed = visualizer.running_speed
 
-    # Close the progress bar
-    progress_bar.close()
+            # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
+            # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
+            # not yet maintained the required duration, the loop will keep cycling and accumulating the timer count.
+            # This is done until the animal either reaches the required duration or drops below the speed threshold.
+            if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
+                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+                # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
+                # timer, this guards against animals that carry on running without consuming water rewards.
+                speed_timer.reset()
+
+            # If the current speed is below the speed threshold, resets the speed timer.
+            elif current_speed < speed_threshold:
+                speed_timer.reset()
+
+            # Updates the progress bar with each elapsed second. Note, this is technically not safe in case multiple
+            # seconds pass between reaching this conditional, but we know empirically that the loop will run at
+            # millisecond intervals, so it is not a concern.
+            if runtime_timer.elapsed > previous_time:
+                previous_time = runtime_timer.elapsed  # Updates the previous time for the next progress bar update
+                progress_bar.update(1)
+
+            # Updates the visualizer plot
+            visualizer.update()
+
+            # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
+            # training early with a success message.
+            if dispensed_water_volume >= maximum_volume:
+                message = (
+                    f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
+                    f"the training process."
+                )
+                console.echo(message=message, level=LogLevel.SUCCESS)
+                break
+
+            # If the listener detects a reward delivery signal, delivers the reward to the animal.
+            if listener.reward_signal:
+                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+            # If the user sent the abort command, terminates the training early with an error message.
+            if listener.exit_signal:
+                message = (
+                    "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                break
+
+        # Close the progress bar
+        progress_bar.close()
+
+    except Exception as e:
+        message = (
+            f"Training runtime has encountered an error and had to be terminated early. Attempting to gracefully "
+            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
+            f"{str(e)}"
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+
+    # Shutdown sequence:
+    message = f"Training runtime: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
     # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
@@ -2863,10 +2931,6 @@ def run_train_logic(
     if not isinstance(runtime.descriptor, _LickTrainingDescriptor):  # This is to appease mypy
         runtime.descriptor.final_running_speed_cm_s = float(speed_threshold)
         runtime.descriptor.final_speed_duration_s = float(duration_threshold / 1000)  # Converts from s to ms
-
-    # Shutdown sequence:
-    message = f"Training runtime: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Terminates the listener
     listener.shutdown()
@@ -3023,48 +3087,57 @@ def run_experiment_logic(
 
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
-    for state in experiment_state_sequence:
-        runtime_timer.reset()  # Resets the timer
+    try:
+        for state in experiment_state_sequence:
+            runtime_timer.reset()  # Resets the timer
 
-        # Sets the Experiment state
-        runtime.change_experiment_state(state.experiment_state_code)
+            # Sets the Experiment state
+            runtime.change_experiment_state(state.experiment_state_code)
 
-        # Resolves and sets the VR state
-        if state.vr_state_code == 1:
-            runtime.vr_rest()
-        elif state.vr_state_code == 2:
-            runtime.vr_run()
-        else:
-            warning_text = (
-                f"Invalid VR state code {state.vr_state_code} encountered when executing experiment runtime. "
-                f"Currently, only codes 1 (rest) and 2 (run) are supported. Skipping the unsupported state."
-            )
-            console.echo(message=warning_text, level=LogLevel.ERROR)
-            continue
+            # Resolves and sets the VR state
+            if state.vr_state_code == 1:
+                runtime.vr_rest()
+            elif state.vr_state_code == 2:
+                runtime.vr_run()
+            else:
+                warning_text = (
+                    f"Invalid VR state code {state.vr_state_code} encountered when executing experiment runtime. "
+                    f"Currently, only codes 1 (rest) and 2 (run) are supported. Skipping the unsupported state."
+                )
+                console.echo(message=warning_text, level=LogLevel.ERROR)
+                continue
 
-        # Creates a tqdm progress bar for the current experiment state
-        with tqdm(
-            total=state.state_duration_s,
-            desc=f"Executing experiment state {state.experiment_state_code}",
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
-        ) as pbar:
-            previous_seconds = 0
+            # Creates a tqdm progress bar for the current experiment state
+            with tqdm(
+                total=state.state_duration_s,
+                desc=f"Executing experiment state {state.experiment_state_code}",
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
+            ) as pbar:
+                previous_seconds = 0
 
-            while runtime_timer.elapsed < state.state_duration_s:
-                visualizer.update()  # Continuously updates the visualizer
+                while runtime_timer.elapsed < state.state_duration_s:
+                    visualizer.update()  # Continuously updates the visualizer
 
-                # Updates the progress bar every second. While the current implementation is not safe, we know that
-                # the loop will cycle much faster than 1 second, so it should not be possible for the delta to ever
-                # exceed 1 second.
-                if runtime_timer.elapsed != previous_seconds:
-                    pbar.update(1)
-                    previous_seconds = runtime_timer.elapsed
+                    # Updates the progress bar every second. While the current implementation is not safe, we know that
+                    # the loop will cycle much faster than 1 second, so it should not be possible for the delta to ever
+                    # exceed 1 second.
+                    if runtime_timer.elapsed != previous_seconds:
+                        pbar.update(1)
+                        previous_seconds = runtime_timer.elapsed
 
-                # If the user sent the abort command, terminates the runtime early with an error message.
-                if listener.exit_signal:
-                    message = "Experiment runtime: aborted due to user request."
-                    console.echo(message=message, level=LogLevel.ERROR)
-                    break
+                    # If the user sent the abort command, terminates the runtime early with an error message.
+                    if listener.exit_signal:
+                        message = "Experiment runtime: aborted due to user request."
+                        console.echo(message=message, level=LogLevel.ERROR)
+                        break
+
+    except Exception as e:
+        message = (
+            f"Experiment runtime has encountered an error and had to be terminated early. Attempting to gracefully "
+            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
+            f"{str(e)}"
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
 
     # Shutdown sequence:
     message = f"Experiment runtime: Complete."

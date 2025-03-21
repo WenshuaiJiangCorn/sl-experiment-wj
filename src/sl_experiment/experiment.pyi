@@ -21,8 +21,8 @@ from .binding_classes import (
 )
 from .data_processing import (
     RuntimeHardwareConfiguration as RuntimeHardwareConfiguration,
-    process_video_names as process_video_names,
-    process_mesoscope_directory as process_mesoscope_directory,
+    preprocess_video_names as process_video_names,
+    _preprocess_mesoscope_directory as process_mesoscope_directory,
 )
 from .packaging_tools import calculate_directory_checksum as calculate_directory_checksum
 from .module_interfaces import (
@@ -483,7 +483,7 @@ class MesoscopeExperiment:
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
-        _descriptor: Stores the session descriptor instance.
+        descriptor: Stores the session descriptor instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
@@ -512,7 +512,7 @@ class MesoscopeExperiment:
 
     _state_map: dict[int, str]
     _started: bool
-    _descriptor: _MesoscopeExperimentDescriptor
+    descriptor: _MesoscopeExperimentDescriptor
     _vr_state: int
     _experiment_state: int
     _timestamp_timer: PrecisionTimer

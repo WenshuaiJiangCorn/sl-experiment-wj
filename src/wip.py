@@ -5,14 +5,12 @@ import polars as pl
 
 from sl_experiment.module_interfaces import _interpolate_data
 
-root = Path("/media/Data/Experiments/Template/666/2025-03-18-18-52-54-948030/raw_data/behavior_data")
-x = root.joinpath("break_data.feather")
-y = pl.read_ipc(x, use_pyarrow=True)
-print(y)
-
+# root = Path("/media/Data/Experiments/Template/666/2025-03-18-18-52-54-948030/raw_data/behavior_data")
+# x = root.joinpath("break_data.feather")
+# y = pl.read_ipc(x, use_pyarrow=True)
+# print(y)
+#
 import sys
-
-sys.exit()
 
 # # Load data
 # distance = Path("/media/Data/Experiments/TestMice/666/2025-03-10-16-15-25-577230/raw_data/behavior_data/encoder_data.feather")

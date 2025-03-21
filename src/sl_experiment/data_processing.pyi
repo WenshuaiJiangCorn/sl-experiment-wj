@@ -178,7 +178,7 @@ def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
         verbose: Determines whether this function should run in the verbose mode.
     """
 
-def process_video_names(camera_frame_directory: Path) -> None:
+def preprocess_video_names(camera_frame_directory: Path) -> None:
     """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
 
     This is a minor convenience function used together with log and mesoscope frame compression during preprocessing.
@@ -190,7 +190,7 @@ def process_video_names(camera_frame_directory: Path) -> None:
         camera_frame_directory: The directory containing the video files acquired during experiment or training runtime.
     """
 
-def process_mesoscope_directory(
+def _preprocess_mesoscope_directory(
     data_directory: Path,
     num_processes: int,
     remove_sources: bool = False,
