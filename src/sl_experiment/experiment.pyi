@@ -21,7 +21,7 @@ from .binding_classes import (
 )
 from .data_processing import (
     RuntimeHardwareConfiguration as RuntimeHardwareConfiguration,
-    preprocess_video_names as process_video_names,
+    _preprocess_video_names as process_video_names,
     _preprocess_mesoscope_directory as process_mesoscope_directory,
 )
 from .packaging_tools import calculate_directory_checksum as calculate_directory_checksum

@@ -26,7 +26,7 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .visualizers import BehaviorVisualizer
 from .transfer_tools import transfer_directory
 from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
-from .data_processing import RuntimeHardwareConfiguration, preprocess_video_names, _preprocess_mesoscope_directory
+from .data_processing import RuntimeHardwareConfiguration, _preprocess_video_names, _preprocess_mesoscope_directory
 from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import BreakInterface, ValveInterface
 from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
@@ -766,7 +766,7 @@ class SessionData:
 
         # Preprocesses the pulled mesoscope frames.
         _preprocess_mesoscope_directory(
-            data_directory=self.raw_data_path,
+            raw_data_directory=self.raw_data_path,
             num_processes=30,
             remove_sources=True,
             verify_integrity=True,
@@ -1394,7 +1394,7 @@ class MesoscopeExperiment:
         )
 
         # Renames video files to use human-friendly names
-        preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
+        _preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Preprocesses the pulled mesoscope data.
         self._session_data.process_mesoscope_data()
@@ -2060,7 +2060,7 @@ class BehaviorTraining:
         )
 
         # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
-        preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
+        _preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
 
         # Pushes the processed data to the NAS and BioHPC server.
         self._session_data.push_data()

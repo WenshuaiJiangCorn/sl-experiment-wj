@@ -2,8 +2,17 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+from ataraxis_base_utilities import console
 
-from sl_experiment.module_interfaces import _interpolate_data
+from sl_experiment.data_processing import _pull_mesoscope_data, _preprocess_mesoscope_directory, _resolve_ubiquitin_markers
+
+if __name__ == "__main__":
+    console.enable()
+    rdd = Path("/media/Data/vrpc/test/1/2022_01_25/raw_data")
+    mrd = Path("/media/Data/scaniamgepc")
+    _pull_mesoscope_data(raw_data_directory=rdd, mesoscope_root_directory=mrd, num_threads=120, remove_sources=True)
+    _preprocess_mesoscope_directory(raw_data_directory=rdd, num_processes=67, batch_size=1)
+    _resolve_ubiquitin_markers(mesoscope_root_path=mrd)
 
 # root = Path("/media/Data/Experiments/Template/666/2025-03-18-18-52-54-948030/raw_data/behavior_data")
 # x = root.joinpath("break_data.feather")

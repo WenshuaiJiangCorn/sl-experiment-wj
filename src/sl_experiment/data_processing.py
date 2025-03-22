@@ -12,7 +12,7 @@ from datetime import datetime
 from functools import partial
 from collections import defaultdict
 from dataclasses import dataclass
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 
 from tqdm import tqdm
 import numpy as np
@@ -77,6 +77,37 @@ class RuntimeHardwareConfiguration(YamlConfig):
     """TTLInterface instance property."""
 
 
+def _delete_directory(directory_path: Path) -> None:
+    """Removes the input directory and all its subdirectories using parallel processing.
+
+    This function outperforms default approaches like subprocess call with rm -rf and shutil rmtree for directories with
+    a comparably small number of large files. For example, this is the case for the mesoscope frame directories, which
+    are deleted ~6 times faster with this method over sh.rmtree. Potentially, it may also outperform these approaches
+    for all comparatively shallow directories.
+
+    Args:
+        directory_path: The path to the directory to delete.
+    """
+    # Checks if the directory exists and, if not, aborts early
+    if not directory_path.exists():
+        return
+
+    # Builds the list of files and directories inside the input directory using Path
+    files = [p for p in directory_path.iterdir() if p.is_file()]
+    subdirs = [p for p in directory_path.iterdir() if p.is_dir()]
+
+    # Deletes files in parallel
+    with ThreadPoolExecutor() as executor:
+        executor.map(os.unlink, files)
+
+    # Recursively deletes subdirectories
+    for subdir in subdirs:
+        _delete_directory(subdir)
+
+    # Removes the now-empty directory
+    os.rmdir(directory_path)
+
+
 def _get_stack_number(tiff_path: Path) -> int | None:
     """A helper function that determines the number of mesoscope-acquired tiff stacks using its file name.
 
@@ -120,7 +151,7 @@ def _check_stack_size(file: Path) -> int:
 
 
 def _process_stack(
-    tiff_path: Path, first_frame_number: int, output_dir: Path, remove_sources: bool, verify_integrity: bool
+    tiff_path: Path, first_frame_number: int, output_dir: Path, verify_integrity: bool, batch_size: int = 250
 ) -> dict[str, Any]:
     """Reads a TIFF stack, extracts its frame-variant ScanImage data, and saves it as a LERC-compressed stacked TIFF
     file.
@@ -128,11 +159,12 @@ def _process_stack(
     This is a worker function called by the process_mesoscope_directory in-parallel for each stack inside each
     processed directory. It re-compresses the input TIFF stack using LERC-compression and extracts the frame-variant
     ScanImage metadata for each frame inside the stack. Optionally, the function can be configured to verify data
-    integrity after compression and to remove original TIFF stacks after processing.
+    integrity after compression.
 
     Notes:
         This function can reserve up to double the processed stack size of RAM bytes to hold the data in memory. If the
-        host-computer does not have enough RAM, reduce the number of concurrent processes or disable verification.
+        host-computer does not have enough RAM, reduce the number of concurrent processes, reduce the batch size, or
+        disable verification.
 
     Raises:
         RuntimeError: If any extracted frame does not match the original frame stored inside the TIFF stack.
@@ -145,11 +177,13 @@ def _process_stack(
             sequence of frames acquired during the experiment. This is used to configure the output file name to include
             the range of frames stored in the stack.
         output_dir: The path to the directory where to save the processed stacks.
-        remove_sources: Determines whether to remove original TIFF stacks after processing.
         verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
             The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
             of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
             process.
+        batch_size: The number of frames to process at the same time. This directly determines the RAM footprint of
+            this function, as frames are kept in RAM during compression. Note, verification doubles the RAM footprint,
+            as it requires both compressed and uncompressed data to be kept in RAM for comparison.
     """
     # Generates the file handle for the current stack
     with tifffile.TiffFile(tiff_path) as stack:
@@ -249,9 +283,6 @@ def _process_stack(
             "epochTimestamps_us": epoch_timestamps,
         }
 
-        # Loads stack data
-        original_stack = stack.asarray()  # Reads the data as a numpy array into RAM
-
         # Computes the starting and ending frame number
         start_frame = first_frame_number  # This is precomputed to be correct, no adjustment needed
         end_frame = first_frame_number + stack_size - 1  # Ending frame number is length - 1 + start
@@ -259,25 +290,44 @@ def _process_stack(
         # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
         output_path = output_dir.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
 
-        # Compresses and writes the data to the output path generated above
-        tifffile.imwrite(
-            output_path,
-            original_stack,
-            compression="lerc",
-            compressionargs={"level": 0.0},  # Lossless compression
-            predictor=True,
-        )
+        # Calculates the total number of batches required to fully process the stack
+        num_batches = int(np.ceil(stack_size / batch_size))
 
-    # Verifies the integrity of the compressed stack.
-    if verify_integrity:
-        compressed_stack = tifffile.imread(output_path)
-        if not np.array_equal(compressed_stack, original_stack):
-            message = f"Compressed stack {output_path} does not match the original stack in {tiff_path}."
-            console.error(message=message, error=RuntimeError)
+        # Creates a TiffWriter to iteratively process and append each batch to the output file. Note, if the file
+        # already exists, it will be overwritten.
+        with tifffile.TiffWriter(output_path, bigtiff=False) as writer:
+            for batch_idx in range(num_batches):
+                # Calculates start and end indices for this batch
+                start_idx = batch_idx * batch_size
+                end_idx = min((batch_idx + 1) * batch_size, stack_size)
 
-    # Removes the original file if requested
-    if remove_sources:
-        tiff_path.unlink()
+                # Reads a batch of original frames
+                original_batch = np.array([stack.pages[i].asarray() for i in range(start_idx, end_idx)])
+
+                # Writes the entire batch to the output file using LERC compression
+                writer.write(
+                    original_batch,
+                    compression="lerc",
+                    compressionargs={"level": 0.0},  # Lossless compression
+                    predictor=True,
+                )
+
+                # Verifies the integrity of this batch if requested
+                if verify_integrity:
+                    # Opens up the compressed file written above for reading
+                    with tifffile.TiffFile(output_path) as compressed_stack:
+                        # Reads the frames for the current batch using the same indices as used for writing
+                        compressed_batch = np.array(
+                            [compressed_stack.pages[i].asarray() for i in range(start_idx, end_idx)]
+                        )
+
+                        # Compares with original batch
+                        if not np.array_equal(compressed_batch, original_batch):
+                            message = (
+                                f"Compressed batch {batch_idx + 1}/{num_batches} in {output_path} does not match the "
+                                f"original in {tiff_path}."
+                            )
+                            console.error(message=message, error=RuntimeError)
 
     # Returns extracted metadata dictionary to caller
     return metadata_dict
@@ -742,17 +792,24 @@ def process_log_directory(data_directory: Path, verbose: bool = False) -> None:
                 future.result()
 
 
-def preprocess_video_names(camera_frame_directory: Path) -> None:
+def _preprocess_video_names(raw_data_directory: Path) -> None:
     """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
 
-    This is a minor convenience function used together with log and mesoscope frame compression during preprocessing.
+    This is a minor preprocessing function primarily designed to make further data processing steps more human-readable.
 
     Notes:
-        This function assumes that the runtime uses 3 cameras with IDs 51, 62, and 73, respectively.
+        This function assumes that the runtime uses 3 cameras with IDs 51 (face camera), 62 (left camera), and 73
+        (right camera).
 
     Args:
-        camera_frame_directory: The directory containing the video files acquired during experiment or training runtime.
+        raw_data_directory: The Path to the target session raw_data directory to be processed.
     """
+
+    # Resolves the path to the camera frame directory
+    camera_frame_directory = raw_data_directory.joinpath("camera_frames")
+
+    # Renames the video files to use human-friendly names. Assumes the standard data acquisition configuration with 3
+    # cameras and predefined camera IDs.
     os.renames(
         old=camera_frame_directory.joinpath("051.mp4"),
         new=camera_frame_directory.joinpath("face_camera.mp4"),
@@ -770,8 +827,8 @@ def preprocess_video_names(camera_frame_directory: Path) -> None:
 def _pull_mesoscope_data(
     raw_data_directory: Path,
     mesoscope_root_directory: Path,
-    num_threads: int = 28,
-    remove_sources: bool = False,
+    num_threads: int = 30,
+    remove_sources: bool = True,
     verify_transfer_integrity: bool = True,
 ) -> None:
     """Pulls the frames acquired by the mesoscope from the ScanImagePC to the VRPC.
@@ -926,11 +983,12 @@ def _pull_mesoscope_data(
 def _preprocess_mesoscope_directory(
     raw_data_directory: Path,
     num_processes: int,
-    remove_sources: bool = False,
+    remove_sources: bool = True,
     batch: bool = False,
     verify_integrity: bool = True,
+    batch_size: int = 250,
 ) -> None:
-    """Loops over all multi-frame Mesoscope TIFF stacks in the input directory, recompresses them using Limited Error
+    """Loops over all multi-frame Mesoscope TIFF stacks in the mesoscope_frames, recompresses them using Limited Error
     Raster Compression (LERC) scheme, and extracts ScanImage metadata.
 
     This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
@@ -949,7 +1007,11 @@ def _preprocess_mesoscope_directory(
         To optimize runtime efficiency, this function employs multiple processes to work with multiple TIFFs at the
         same time. Given the overall size of each image dataset, this function can run out of RAM if it is allowed to
         operate on the entire folder at the same time. To prevent this, disable verification, use fewer processes, or
-        combine both methods.
+        change the batch_size to load fewer frames in memory at the same time.
+
+        In addition to frame compression and data extraction, this function also generates the ops.json configuration
+        file. This file is used during suite2p cell registration, performed as part of our standard data processing
+        pipeline.
 
     Args:
         raw_data_directory: The Path to the target session raw_data directory to be processed.
@@ -962,6 +1024,8 @@ def _preprocess_mesoscope_directory(
             The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
             of compromising the data is negligible. Note, enabling this function doubles the RAM used by each parallel
             worker spawned by this function.
+        batch_size: Determines how many frames are loaded into memory at the same time during processing. Note, the same
+            number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the paths to the specific directories used during processing
     image_directory = raw_data_directory.joinpath("raw_mesoscope_frames")  # Should exist inside the raw data directory
@@ -972,6 +1036,11 @@ def _preprocess_mesoscope_directory(
     frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
     frame_variant_metadata_path = output_directory.joinpath("frame_variant_metadata.npz")
     ops_path = output_directory.joinpath("ops.json")
+
+    # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
+    # acquired at all. Aborts processing early.
+    if not image_directory.exists():
+        return
 
     # Precreates the dictionary to store frame-variant metadata extracted from all TIFF frames before they are
     # compressed into BigTiff.
@@ -1015,7 +1084,10 @@ def _preprocess_mesoscope_directory(
 
     # Uses partial to bind the constant arguments to the processing function
     process_func = partial(
-        _process_stack, output_dir=output_directory, remove_sources=remove_sources, verify_integrity=verify_integrity
+        _process_stack,
+        output_dir=output_directory,
+        verify_integrity=verify_integrity,
+        batch_size=batch_size,
     )
 
     # Processes each tiff stack in parallel
@@ -1044,7 +1116,7 @@ def _preprocess_mesoscope_directory(
 
     # Saves concatenated metadata as compressed numpy archive
     metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
-    np.savez(frame_variant_metadata_path, **metadata_dict)
+    np.savez_compressed(frame_variant_metadata_path, **metadata_dict)
 
     # Moves motion estimator files to the mesoscope_frames directory. This way, ALL mesoscope-related data is stored
     # under mesoscope_frames.
@@ -1057,31 +1129,9 @@ def _preprocess_mesoscope_directory(
         dst=output_directory.joinpath("zstack.mat"),
     )
 
-    # The processing function should have removed (unlinked) all original tiff stacks. This also removes the temporary
-    # storage directory itself
+    # If configured, the processing function ensures that
     if remove_sources:
-        sh.rmtree(image_directory)
-
-
-def process_mesoscope_data(self) -> None:
-    """Pulls the mesoscope-acquired data to the VRPC and preprocesses the frame data.
-
-    Primarily, this is a wrapper around the process_mesoscope_directory() function. It compresses all mesoscope
-    frames using LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file
-    for future suite2p registration. This method also ensures that after processing all mesoscope data, including
-    motion estimation files, are found under the mesoscope_frames directory.
-    """
-
-    # Pulls the mesoscope data from the ScanImagePC to the VRPC
-    self._pull_mesoscope_data(num_threads=30, remove_sources=True, verify_transfer_integrity=True)
-
-    # Preprocesses the pulled mesoscope frames.
-    _preprocess_mesoscope_directory(
-        raw_data_directory=self.raw_data_path,
-        num_processes=30,
-        remove_sources=True,
-        verify_integrity=True,
-    )
+        _delete_directory(image_directory)
 
 
 def _preprocess_log_directory(raw_data_directory: Path, logger: DataLogger | None = None) -> None:
@@ -1132,6 +1182,27 @@ def _preprocess_log_directory(raw_data_directory: Path, logger: DataLogger | Non
         console.error(message, error=RuntimeError)
 
 
+def preprocess_session_directory(
+    raw_data_directory: Path, mesoscope_root_path: Path, logger: DataLogger | None = None
+) -> None:
+    _preprocess_log_directory(raw_data_directory=raw_data_directory, logger=logger)
+    _preprocess_video_names(raw_data_directory=raw_data_directory)
+    _pull_mesoscope_data(
+        raw_data_directory=raw_data_directory,
+        mesoscope_root_directory=mesoscope_root_path,
+        num_threads=30,
+        remove_sources=True,
+        verify_transfer_integrity=True,
+    )
+    _preprocess_mesoscope_directory(
+        raw_data_directory=raw_data_directory,
+        num_processes=30,
+        remove_sources=True,
+        verify_integrity=True,
+        batch_size=1,
+    )
+
+
 def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
     """Checks the data stored on Sun lab BioHPC server for the presence of telomere.bin markers and removes all matching
     directories on the VRPC.
@@ -1145,7 +1216,9 @@ def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> 
             BioHPC server.
         local_root_path: The path to the root directory used to store all experiment and training data on the VRPC.
     """
-    # Finds all raw_data directories in the local path
+    # Finds all raw_data directories in the local path for which there is a raw_data with the telomere.bin marker on
+    # the server
+    deletion_candidates = []
     for raw_data_path in local_root_path.rglob("raw_data"):
         # Constructs the relative path to the raw_data directory from the local root
         relative_path = raw_data_path.relative_to(local_root_path)
@@ -1156,7 +1229,11 @@ def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> 
         # Checks if the telomere.bin marker exists in the server path
         if server_path.joinpath("telomere.bin").exists():
             # If marker exists, removes the local (VRPC) raw_data directory
-            sh.rmtree(raw_data_path, ignore_errors=True)
+            deletion_candidates.append(raw_data_path)
+
+    # Iteratively removes all deletion candidates gathered above
+    for candidate in deletion_candidates:
+        _delete_directory(directory_path=candidate)
 
 
 def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
@@ -1170,6 +1247,9 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
         mesoscope_root_path: The path to the root directory used to store all mesoscope-acquired data on the ScanImage
             (Mesoscope) PC.
     """
+    # Builds a list of deletion candidates and then iteratively removes all discovered directories marked for
+    # deletion
     file: Path
-    for file in mesoscope_root_path.rglob("ubiquitin.bin"):
-        sh.rmtree(file.parent, ignore_errors=True)
+    deletion_candidates = [file.parent for file in mesoscope_root_path.rglob("ubiquitin.bin")]
+    for candidate in deletion_candidates:
+        _delete_directory(directory_path=candidate)
