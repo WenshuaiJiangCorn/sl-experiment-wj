@@ -417,7 +417,8 @@ def run_experiment(
 
 @click.command()
 @click.option(
-    "-s--session-path",
+    "-s",
+    "--session-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     required=True,
     prompt="Enter the paths to the target session directory",

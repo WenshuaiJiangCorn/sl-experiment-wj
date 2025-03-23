@@ -43,20 +43,20 @@ class RuntimeHardwareConfiguration(YamlConfig):
 
     cue_map: dict[int, float] | None = None
     """MesoscopeExperiment instance property."""
-    cm_per_pulse: np.float64 | None = None
+    cm_per_pulse: float | None = None
     """EncoderInterface instance property."""
-    maximum_break_strength: np.float64 | None = None
+    maximum_break_strength: float | None = None
     """BreakInterface instance property."""
-    minimum_break_strength: np.float64 | None = None
+    minimum_break_strength: float | None = None
     """BreakInterface instance property."""
     # noinspection PyUnresolvedReferences
-    lick_threshold: None | np.uint16 = None
+    lick_threshold: int | None = None
     """BreakInterface instance property."""
-    scale_coefficient: np.float64 | None = None
+    scale_coefficient: float | None = None
     """ValveInterface instance property."""
-    nonlinearity_exponent: np.float64 | None = None
+    nonlinearity_exponent: float | None = None
     """ValveInterface instance property."""
-    torque_per_adc_unit: np.float64 | None = None
+    torque_per_adc_unit: float | None = None
     """TorqueInterface instance property."""
     initially_on: bool | None = None
     """ScreenInterface instance property."""
@@ -493,18 +493,21 @@ def _preprocess_video_names(raw_data_directory: Path) -> None:
 
     # Renames the video files to use human-friendly names. Assumes the standard data acquisition configuration with 3
     # cameras and predefined camera IDs.
-    os.renames(
-        old=camera_frame_directory.joinpath("051.mp4"),
-        new=camera_frame_directory.joinpath("face_camera.mp4"),
-    )
-    os.renames(
-        old=camera_frame_directory.joinpath("062.mp4"),
-        new=camera_frame_directory.joinpath("left_camera.mp4"),
-    )
-    os.renames(
-        old=camera_frame_directory.joinpath("073.mp4"),
-        new=camera_frame_directory.joinpath("right_camera.mp4"),
-    )
+    if camera_frame_directory.joinpath("051.mp4").exists():
+        os.renames(
+            old=camera_frame_directory.joinpath("051.mp4"),
+            new=camera_frame_directory.joinpath("face_camera.mp4"),
+        )
+    if camera_frame_directory.joinpath("062.mp4").exists():
+        os.renames(
+            old=camera_frame_directory.joinpath("062.mp4"),
+            new=camera_frame_directory.joinpath("left_camera.mp4"),
+        )
+    if camera_frame_directory.joinpath("073.mp4").exists():
+        os.renames(
+            old=camera_frame_directory.joinpath("073.mp4"),
+            new=camera_frame_directory.joinpath("right_camera.mp4"),
+        )
 
 
 def _pull_mesoscope_data(
@@ -638,6 +641,7 @@ def _pull_mesoscope_data(
     persistent_motion_estimator_path = mesoscope_root_directory.joinpath(
         "persistent_data", project_name, animal_name, "MotionEstimator.me"
     )
+    ensure_directory_exists(persistent_motion_estimator_path.parent)
     if not persistent_motion_estimator_path.exists():
         sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
@@ -894,6 +898,11 @@ def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: 
         mesoscope_root_path: The Path to the root directory used to store all experiment and training data on the Sun
             lab BioHPC server.
     """
+
+    # Enables console, if it is not enabled
+    if not console.enabled:
+        console.enable()
+
     _preprocess_log_directory(
         raw_data_directory=raw_data_directory, num_processes=31, remove_sources=True, verify_integrity=False
     )
@@ -1002,15 +1011,17 @@ def purge_redundant_data(
         remove_telomere: Determines whether to remove VRPC directories whose corresponding BioHPC-server directories
             are marked with telomere.bin markers. Specifically, this allows removing directories that have been safely
             moved to and processed by the BioHPC server.
-            local_root_path: The path to the root directory of the VRPC used to store all experiment and training data.
-            server_root_path: The path to the root directory of the BioHPC server used to store all experiment and
-                training data.
-            mesoscope_root_path: The path to the root directory of the ScanImagePC used to store all
-                mesoscope-acquired frame data.
+        local_root_path: The path to the root directory of the VRPC used to store all experiment and training data.
+        server_root_path: The path to the root directory of the BioHPC server used to store all experiment and
+            training data.
+        mesoscope_root_path: The path to the root directory of the ScanImagePC used to store all
+            mesoscope-acquired frame data.
     """
 
     # Removes no longer necessary ScanImagePC directories (cached mesoscope frames)
-    _resolve_ubiquitin_markers(mesoscope_root_path)
+    if remove_ubiquitin:
+        _resolve_ubiquitin_markers(mesoscope_root_path)
 
     # Removes no longer necessary VRPC directories (raw_data folders)
-    _resolve_telomere_markers(server_root_path, local_root_path)
+    if remove_telomere:
+        _resolve_telomere_markers(server_root_path, local_root_path)

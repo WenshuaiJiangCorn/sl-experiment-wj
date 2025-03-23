@@ -500,6 +500,8 @@ class SessionData:
             ensure_directory_exists(self._mesoscope)
             ensure_directory_exists(self._mesoscope_persistent)
             self._mesoscope_frames_exist = True
+        else:
+            self._mesoscope_frames_exist = False
 
     @property
     def raw_data_path(self) -> Path:
@@ -1232,13 +1234,13 @@ class MesoscopeExperiment:
         # files during processing.
         hardware_configuration = RuntimeHardwareConfiguration(
             cue_map=self._cue_map,
-            cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
-            maximum_break_strength=self._microcontrollers.wheel_break.maximum_break_strength,
-            minimum_break_strength=self._microcontrollers.wheel_break.minimum_break_strength,
-            lick_threshold=self._microcontrollers.lick.lick_threshold,
-            scale_coefficient=self._microcontrollers.valve.scale_coefficient,
-            nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
-            torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
+            cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+            maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
+            minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
+            lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+            scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+            nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+            torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
             initially_on=self._microcontrollers.screens.initially_on,
             has_ttl=True,
         )
@@ -1881,18 +1883,18 @@ class BehaviorTraining:
         # sensor.
         if self._lick_training:
             hardware_configuration = RuntimeHardwareConfiguration(
-                torque_per_adc_unit=self._microcontrollers.torque.torque_per_adc_unit,
-                lick_threshold=self._microcontrollers.lick.lick_threshold,
-                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
-                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
                 has_ttl=False,
             )
         else:
             hardware_configuration = RuntimeHardwareConfiguration(
-                cm_per_pulse=self._microcontrollers.wheel_encoder.cm_per_pulse,
-                lick_threshold=self._microcontrollers.lick.lick_threshold,
-                scale_coefficient=self._microcontrollers.valve.scale_coefficient,
-                nonlinearity_exponent=self._microcontrollers.valve.nonlinearity_exponent,
+                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
                 has_ttl=False,
             )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
@@ -2869,7 +2871,7 @@ def run_experiment_logic(
         project_name=project,
         surgery_sheet_id=surgery_log_id,
         water_log_sheet_id=water_restriction_log_id,
-        generate_mesoscope_paths=False,  # No need for mesoscope when training.
+        generate_mesoscope_paths=True,
         credentials_path=Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json"),
         local_root_directory=Path("/media/Data/Experiments"),
         server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
