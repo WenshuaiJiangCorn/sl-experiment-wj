@@ -1,6 +1,8 @@
 """This module provides click-based Command-Line Interface (CLI) scripts that allow using various features from this
 library through the terminal."""
 
+from pathlib import Path
+
 import click
 
 from .experiment import (
@@ -10,7 +12,8 @@ from .experiment import (
     run_experiment_logic,
     vr_maintenance_logic,
 )
-from .zaber_bindings import _CRCCalculator, discover_zaber_devices
+from .zaber_bindings import CRCCalculator, discover_zaber_devices
+from .data_preprocessing import purge_redundant_data, preprocess_session_directory
 
 # Precalculated default valve calibration data. This should be defined separately for each project, as the valve
 # is replaced and recalibrated fairly frequently.
@@ -28,7 +31,7 @@ valve_calibration_data = (
 )
 def calculate_crc(string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
-    calculator = _CRCCalculator()
+    calculator = CRCCalculator()
     crc_checksum = calculator.string_checksum(string)
     click.echo(f"The CRC32-XFER checksum for the input string '{string}' is: {crc_checksum}")
 
@@ -409,4 +412,65 @@ def run_experiment(
         valve_calibration_data=valve_calibration_data,
         cue_length_map=cue_length_map,
         experiment_state_sequence=experiment_state_sequence,
+    )
+
+
+@click.command()
+@click.option(
+    "-s--session-path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    required=True,
+    prompt="Enter the paths to the target session directory",
+    help="The path to the session directory to preprocess.",
+)
+def preprocess_session(session_path: Path) -> None:
+    """Preprocesses the target session's data.
+
+    Primarily, this command is intended to retry or resume failed or interrupted preprocessing runtimes.
+    Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
+    storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
+
+    This command aggregates all session data on the VRPC, compresses the data to optimize it for network transmission
+    and storage, and transfers the data to the NAS and the BioHPC cluster. It automatically skips already completed
+    processing stages as necessary to optimize runtime performance.
+    """
+    session_path = Path(session_path)
+    preprocess_session_directory(
+        raw_data_directory=session_path, mesoscope_root_path=Path("/home/cybermouse/scanimage/mesodata")
+    )
+
+
+@click.command()
+@click.option(
+    "-u",
+    "--remove_ubiquitin",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Determines whether to remove ubiquitin-marked mesoscope_frames directories from the ScanImagePC.",
+)
+@click.option(
+    "-t",
+    "--remove_telomere",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        "Determines whether to remove raw_data directories from the VRPC if their counterparts on the "
+        "BioHPC server contain telomere markers."
+    ),
+)
+def purge_data(remove_ubiquitin: bool, remove_telomere: bool) -> None:
+    """Depending on configuration, removes all redundant data directories from the ScanImagePC, VRPC, or both.
+
+    This command should be used at least weekly to remove no longer necessary data from the PCs used during data
+    acquisition. Unless this function is called, our preprocessing pipelines will NOT remove the data, eventually
+    leading to both PCs running out of storage space.
+    """
+    purge_redundant_data(
+        remove_ubiquitin=remove_ubiquitin,
+        remove_telomere=remove_telomere,
+        local_root_path=Path("/media/Data/Experiments"),
+        server_root_path=Path("/media/cbsuwsun/storage/sun_data"),
+        mesoscope_root_path=Path("/home/cybermouse/scanimage/mesodata"),
     )

@@ -322,3 +322,46 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
         mesoscope_root_path: The path to the root directory used to store all mesoscope-acquired data on the ScanImage
             (Mesoscope) PC.
     """
+
+def purge_redundant_data(
+    remove_ubiquitin: bool,
+    remove_telomere: bool,
+    local_root_path: Path,
+    server_root_path: Path,
+    mesoscope_root_path: Path,
+) -> None:
+    """Loops over ScanImagePC and VRPC directories that store training and experiment data and removes no longer
+    necessary data caches.
+
+    This function searches the ScanImagePC and VRPC for no longer necessary directories and removes them from the
+    respective systems. ScanImagePC directories are marked for deletion once they are safely copied to the VRPC (and the
+    integrity of the copied data is verified using xxHash-128 checksum). VRPC directories are marked for deletion once
+    the data is safely copied to the BioHPC server and the server verifies the integrity of the copied data using
+    xxHash-128 checksum.
+
+    Notes:
+        This is a service function intended to maintain the ScanImagePC and VRPC disk space. To ensure data integrity
+        and redundancy at all processing stages, we do not remove the raw data from these PCs even if it has been
+        preprocessed and moved to long-term storage destinations. However, once the data is moved to the BioHPC server
+        and the NAS, it is generally safe to remove the copies stored on the ScanImagePC and VRPC.
+
+        While the NAS is currently not verified for transferred data integrity, it is highly unlikely that the transfer
+        process leads to data corruption. Overall, the way this process is structured ensures that at all stages of
+        data processing there are at least two copies of the data stored on two different machines.
+
+        Currently, this function does not discriminate between projects or animals. It will remove all data marked for
+        deletion via the ubiquitin.bin marker or the telomere.bin marker.
+
+    Args:
+        remove_ubiquitin: Determines whether to remove ScanImagePC mesoscope_frames directories marked for deletion
+            with ubiquitin.bin markers. Specifically, this allows removing directories that have been safely moved to
+            the VRPC.
+        remove_telomere: Determines whether to remove VRPC directories whose corresponding BioHPC-server directories
+            are marked with telomere.bin markers. Specifically, this allows removing directories that have been safely
+            moved to and processed by the BioHPC server.
+            local_root_path: The path to the root directory of the VRPC used to store all experiment and training data.
+            server_root_path: The path to the root directory of the BioHPC server used to store all experiment and
+                training data.
+            mesoscope_root_path: The path to the root directory of the ScanImagePC used to store all
+                mesoscope-acquired frame data.
+    """

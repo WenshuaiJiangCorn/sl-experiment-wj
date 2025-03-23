@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from _typeshed import Incomplete
 
 from .experiment import (
@@ -8,8 +10,12 @@ from .experiment import (
     vr_maintenance_logic as vr_maintenance_logic,
 )
 from .zaber_bindings import (
-    _CRCCalculator as _CRCCalculator,
+    CRCCalculator as CRCCalculator,
     discover_zaber_devices as discover_zaber_devices,
+)
+from .data_preprocessing import (
+    purge_redundant_data as purge_redundant_data,
+    preprocess_session_directory as preprocess_session_directory,
 )
 
 valve_calibration_data: Incomplete
@@ -75,4 +81,24 @@ def run_experiment(experimenter: str, animal: str, animal_weight: float) -> None
     The CLI is primarily designed to calibrate and test the Sun lab Mesoscope-VR system and to demonstrate how to
     implement experiment runtimes for custom projects. Depending on the animal id, this CLI statically uses 'TestMice'
     or 'Template' project.
+    """
+
+def preprocess_session(session_path: Path) -> None:
+    """Preprocesses the target session's data.
+
+    Primarily, this command is intended to retry or resume failed or interrupted preprocessing runtimes.
+    Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
+    storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
+
+    This command aggregates all session data on the VRPC, compresses the data to optimize it for network transmission
+    and storage, and transfers the data to the NAS and the BioHPC cluster. It automatically skips already completed
+    processing stages as necessary to optimize runtime performance.
+    """
+
+def purge_data(remove_ubiquitin: bool, remove_telomere: bool) -> None:
+    """Depending on configuration, removes all redundant data directories from the ScanImagePC, VRPC, or both.
+
+    This command should be used at least weekly to remove no longer necessary data from the PCs used during data
+    acquisition. Unless this function is called, our preprocessing pipelines will NOT remove the data, eventually
+    leading to both PCs running out of storage space.
     """

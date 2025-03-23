@@ -33,6 +33,15 @@ Reference Command Line Interfaces
    :prog: sl-experiment
    :nested: full
 
+.. click:: sl_experiment.cli:preprocess_session
+   :prog: sl-experiment
+   :nested: full
+
+.. click:: sl_experiment.cli:purge_data
+   :prog: sl-experiment
+   :nested: full
+
+
 Experiment Interfaces
 =====================
 .. automodule:: sl_experiment.experiment

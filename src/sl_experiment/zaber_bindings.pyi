@@ -49,7 +49,7 @@ def discover_zaber_devices(silence_errors: bool = True) -> None:
             will also print encountered error messages, which may be desirable for debugging purposes.
     """
 
-class _CRCCalculator:
+class CRCCalculator:
     """A CRC32-XFER checksum calculator that works with raw bytes or pythonic strings.
 
     This utility class exposes methods that generate CRC checksum labels and bytes objects, which are primarily used by
@@ -413,7 +413,7 @@ class ZaberDevice:
     _name: str
     _label: str
     _axis: ZaberAxis
-    _crc_calculator: _CRCCalculator
+    _crc_calculator: CRCCalculator
     _shutdown_flag: bool
     def __init__(self, device: Device) -> None: ...
     def __repr__(self) -> str:

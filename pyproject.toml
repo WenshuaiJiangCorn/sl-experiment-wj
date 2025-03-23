@@ -163,6 +163,8 @@ sl-maintain-vr = "sl_experiment.cli:maintain_vr"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
+sl-process = "sl_experiment.cli:preprocess_session"
+sl-purge = "sl_experiment.cli:purge_data"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

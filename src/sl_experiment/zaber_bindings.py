@@ -145,7 +145,7 @@ def discover_zaber_devices(silence_errors: bool = True) -> None:
             print(error)
 
 
-class _CRCCalculator:
+class CRCCalculator:
     """A CRC32-XFER checksum calculator that works with raw bytes or pythonic strings.
 
     This utility class exposes methods that generate CRC checksum labels and bytes objects, which are primarily used by
@@ -851,7 +851,7 @@ class ZaberDevice:
         self._axis: ZaberAxis = ZaberAxis(motor=self._device.get_axis(axis_number=1))
 
         # Creates a CRC32-XFER calculator to confirm the device has been configured to work with Ataraxis binding.
-        self._crc_calculator: _CRCCalculator = _CRCCalculator()
+        self._crc_calculator: CRCCalculator = CRCCalculator()
 
         # Uses the CRC calculator to generate the checksum for the device label string. It is expected that the
         # device_code (USER_DATA_0) non-volatile variable of the device is set to this checksum for any
