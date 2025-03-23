@@ -4,7 +4,6 @@ session data."""
 import os
 import copy
 import json
-import shutil
 from typing import Any
 from pathlib import Path
 import tempfile
@@ -26,9 +25,9 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .visualizers import BehaviorVisualizer
 from .transfer_tools import transfer_directory
 from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
-from .data_processing import RuntimeHardwareConfiguration, _preprocess_video_names, _preprocess_mesoscope_directory
 from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import BreakInterface, ValveInterface
+from .data_preprocessing import RuntimeHardwareConfiguration, preprocess_session_directory
 from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
 
 
@@ -350,6 +349,10 @@ class SessionData:
         experimental session 'raw_data' directory. The checksum verifies the data of each file and the paths to each
         file relative to the 'raw_data' root directory.
 
+        This class also works with Sun lab Google Sheet logs to write water restriction data and read surgery data for
+        processed animals. Overall, this is aimed at centralizing all raw data processing under a single binding and to
+        collect all data in the same directory structure.
+
     Args:
         project_name: The name of the project managed by the class.
         animal_name: The name of the animal managed by the class.
@@ -402,6 +405,8 @@ class SessionData:
         _project_name: Stores the name of the project whose data is managed by the class.
         _animal_name: Stores the name of the animal whose data is managed by the class.
         _session_name: Stores the name of the session directory whose data is managed by the class.
+        _mesoscope_frames_exist: A boolean flag used to trigger additional mesoscope_frame directory preprocessing.
+            This data preprocessing is not needed for runtimes that do not acquire mesoscope frames.
     """
 
     def __init__(
@@ -494,6 +499,7 @@ class SessionData:
         if generate_mesoscope_paths:
             ensure_directory_exists(self._mesoscope)
             ensure_directory_exists(self._mesoscope_persistent)
+            self._mesoscope_frames_exist = True
 
     @property
     def raw_data_path(self) -> Path:
@@ -604,190 +610,18 @@ class SessionData:
         data.to_yaml(server_surgery_path)
         data.to_yaml(nas_surgery_path)
 
-    def _pull_mesoscope_data(
-        self, num_threads: int = 28, remove_sources: bool = False, verify_transfer_integrity: bool = True
-    ) -> None:
-        """Pulls the frames acquired by the mesoscope from the ScanImage PC to the VRPC.
-
-        This method should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
-        before running the preprocessing pipeline. The method expects that the mesoscope frames source directory
-        contains only the frames acquired during the current session runtime, the MotionEstimator.me and
-        zstack.mat used for motion registration.
-
-        Notes:
-            This method is configured to parallelize data transfer and verification to optimize runtime speeds where
-            possible.
-
-            When the method is called for the first time for a particular project and animal combination, it also
-            'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
-            reference for all further motion estimation procedures carried out during future sessions.
-
-            Before pulling the data, the method renames the current mesoscope_frames folder to include the managed
-            session name and recreates the mesoscope_frames folder. This effectively 'caches' the data on the
-            ScanImagePC to avoid delays in running the next session if the processing fails for any reason.
-
-        Args:
-            num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
-                the local machine. Depending on the connection speed between the PCs, it may be useful to set this
-                number to the number of available CPU cores - 4.
-            remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
-                Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
-                this to True will only mark the data for removal. The data will not be removed until 'purge-data' CLI is
-                called.
-            verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
-                performed before source folder is removed from the ScanImagePC, if remove_sources is True.
-        """
-        # Resolves source and destination paths
-        source = self._mesoscope.joinpath("mesoscope_frames")
-
-        # Before transferring the data, renames the mesoscope_frames folder to include the session name. This is used
-        # to 'clear' the mesoscope_frames name for the next session, so that the next session can run without delay if
-        # mesoscope frame pulling or processing fails for any reason. The processing can then be repeated using the
-        # cached data.
-        source = source.rename(self._mesoscope.joinpath(f"{self._session_name}_mesoscope_frames"))
-        ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
-
-        destination = self.raw_data_path.joinpath("raw_mesoscope_frames")  # Temporary local storage directory
-        ensure_directory_exists(destination)
-
-        # Defines the set of extensions to look for when verifying source folder contents
-        extensions = {"*.me", "*.mat", "*.tiff", "*.tif"}
-
-        # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
-        # all files are present.
-        for attempt in range(5):  # A maximum of 5 reattempts is allowed
-            # Extracts the names of files stored in the source folder
-            files: tuple[Path, ...] = tuple([path for ext in extensions for path in source.glob(ext)])
-            file_names: tuple[str, ...] = tuple([file.name for file in files])
-            error = False
-
-            # Ensures the folder contains motion estimator data files
-            if "MotionEstimator.me" not in file_names:
-                message = (
-                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                    f"'mesoscope_frames' ScanImage PC directory does not contain the MotionEstimator.me file, "
-                    f"which is required for further frame data processing."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                error = True
-
-            if "zstack.mat" not in file_names:
-                message = (
-                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                    f"'mesoscope_frames' ScanImage PC directory does not contain the zstack.mat file, which is "
-                    f"required for further frame data processing."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                error = True
-
-            # Prevents 'pulling' an empty folder. At a minimum, we expect 2 motion estimation files and one TIFF stack
-            # file
-            if len(files) < 3:
-                message = (
-                    f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                    f"'mesoscope_frames' ScanImage PC directory does not contain the minimum expected number of files "
-                    f"(3). This indicates that no frames were acquired during runtime or that the frames were saved at "
-                    f"a different location."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                error = True
-
-            # Breaks the loop if all files are present
-            if not error:
-                break
-
-            # Waits for the user to move the files into the requested directory and continues the runtime
-            message = (
-                f"Unable to locate all required Mesoscope data files when pulling the data to the VRPC. "
-                f"Move all requested files to the mesoscope_frames directory on the ScanImage PC before "
-                f"continuing the runtime. Note, cycling through this message 5 times in a row will abort the "
-                f"preprocessing with a RuntimeError"
-            )
-            console.echo(message=message, level=LogLevel.WARNING)
-            input("Enter anything to continue: ")
-
-            # If the user has repeatedly failed 10 attempts in a row, exits with a runtime error
-            if attempt >= 4:
-                message = (
-                    f"Failed 4 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
-                    f"data processing and terminating the preprocessing runtime."
-                )
-                console.error(message=message, error=RuntimeError)
-
-        # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
-        # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
-        # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-        persistent_motion_estimator_path = self._mesoscope_persistent.joinpath("MotionEstimator.me")
-        if not persistent_motion_estimator_path.exists():
-            shutil.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
-
-        # Generates the checksum for the source folder if transfer integrity verification is enabled.
-        if verify_transfer_integrity:
-            calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
-
-        # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
-        transfer_directory(
-            source=source, destination=destination, num_threads=num_threads, verify_integrity=verify_transfer_integrity
-        )
-
-        # Removes the checksum file after the transfer is complete. The checksum will be recalculated for the whole
-        # session directory during preprocessing, so there is no point in keeping the original mesoscope checksum file.
-        if verify_transfer_integrity:
-            destination.joinpath("ax_checksum.txt").unlink(missing_ok=True)
-
-        # After the transfer completes successfully (including integrity verification), tags (marks) the source
-        # directory for removal. Specifically, deposits an 'ubiquitin' marker, which is used by our data purging
-        # runtime to discover and remove directories that are no longer necessary.
-        if remove_sources:
-            marker_path = source.joinpath("ubiquitin.bin")
-            marker_path.touch()
-
-    def process_mesoscope_data(self) -> None:
-        """Pulls the mesoscope-acquired data to the VRPC and preprocesses the frame data.
-
-        Primarily, this is a wrapper around the process_mesoscope_directory() function. It compresses all mesoscope
-        frames using LERC, extracts and save sframe-invariant and frame-variant metadata, and generates an ops.json file
-        for future suite2p registration. This method also ensures that after processing all mesoscope data, including
-        motion estimation files, are found under the mesoscope_frames directory.
-        """
-
-        # Resolves source and destination paths
-        source = self._mesoscope.joinpath("mesoscope_frames")
-
-        # Before transferring the data, renames the mesoscope_frames folder to include the session name. This is used
-        # to 'clear' the mesoscope_frames name for the next session, so that the next session can run without delay if
-        # mesoscope frame pulling or processing fails for any reason. The processing can then be repeated using the
-        # cached data.
-        source = source.rename(self._mesoscope.joinpath(f"{self._session_name}_mesoscope_frames"))
-        ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
-
-        # Pulls the mesoscope data from the ScanImagePC to the VRPC
-        self._pull_mesoscope_data(num_threads=30, remove_sources=True, verify_transfer_integrity=True)
-
-        # Preprocesses the pulled mesoscope frames.
-        _preprocess_mesoscope_directory(
-            raw_data_directory=self.raw_data_path,
-            num_processes=30,
-            remove_sources=True,
-            verify_integrity=True,
-        )
-
-    def push_data(
+    def _push_data(
         self,
         parallel: bool = True,
-        num_threads: int = 10,
+        num_threads: int = 15,
     ) -> None:
         """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
 
-        This method should be called after data acquisition and preprocessing to move the prepared data to the NAS and
-        the server. This method generates the xxHash3-128 checksum for the source folder and, if configured, verifies
-        that the transferred data produces the same checksum to ensure data integrity.
+        This internal method is called as part of preprocessing to move the preprocessed data to the NAS and the server.
+        This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
+        verify the integrity of the transferred data.
 
         Notes:
-            This method is configured to run data transfer and checksum calculation in parallel where possible. It is
-            advised to minimize the use of the host-machine while it is running this method, as most CPU resources will
-            be consumed by the data transfer process.
-
             The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
             session runtime. This ensures that the persisted file is always up to date with the current zaber motor
             positions.
@@ -842,6 +676,34 @@ class SessionData:
                     num_threads=num_threads,
                     verify_integrity=False,  # This is now done on the server directly
                 )
+
+    def preprocess_session_data(self) -> None:
+        """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
+        processing.
+
+        This method should be called at the end of each training and experiment runtime to compress and safely transfer
+        the data to its long-term storage destinations.
+
+        Notes:
+            The method will NOT delete the data from the VRPC or ScanImagePC. To safely remove the data, use the
+            purge-redundant-data CLI command. The data will only be removed if it has been marked for removal by our
+            data management algorithms, which ensure we have enough spare copies of the data elsewhere.
+        """
+
+        # If the instance manages a session that acquired mesoscope frames, renames the generic mesoscope_frames
+        # directory to include the session name. It is essential that this is done before preprocessing, as
+        # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
+        # session.
+        if self._mesoscope_frames_exist:
+            self._mesoscope.joinpath("mesoscope_frames").rename(
+                self._mesoscope.joinpath(f"{self._session_name}_mesoscope_frames")
+            )
+
+        # This performs all data preprocessing steps, including pulling the mesoscope frames from the ScanImagePC.
+        preprocess_session_directory(raw_data_directory=self.raw_data_path, mesoscope_root_path=self._mesoscope)
+
+        # Pushes the preprocessed data to the NAS and the BioHPC server
+        self._push_data()
 
 
 class MesoscopeExperiment:
@@ -988,7 +850,7 @@ class MesoscopeExperiment:
         # traversed cues (corridors).
         self._cue_map: dict[int, float] = cue_length_map
 
-        # Saves the SessionData instance to class attribute so that it can be used from class methods. Since SessionData
+        # Saves the SessionData instance to an attribute so that it can be used from class methods. Since SessionData
         # resolves session directory structure at initialization, the instance is ready to resolve all paths used by
         # the experiment class instance.
         self._session_data: SessionData = session_data
@@ -1387,20 +1249,8 @@ class MesoscopeExperiment:
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
-        # allow parsing the data during server-side processing.
-        self._logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=True, verify_integrity=True
-        )
-
-        # Renames video files to use human-friendly names
-        _preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
-
-        # Preprocesses the pulled mesoscope data.
-        self._session_data.process_mesoscope_data()
-
-        # Pushes the processed data to the NAS and BioHPC server.
-        self._session_data.push_data()
+        # Preprocesses the session data
+        self._session_data.preprocess_session_data()
 
         message = "Data preprocessing: complete. MesoscopeExperiment runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1722,7 +1572,7 @@ class BehaviorTraining:
         # Defines other flags used during runtime:
         self._screen_on: bool = screens_on  # Usually this would be false, but this is not guaranteed
 
-        # Saves the SessionData instance to class attribute so that it can be used from class methods. Since SessionData
+        # Saves the SessionData instance to an attribute so that it can be used from class methods. Since SessionData
         # resolves session directory structure at initialization, the instance is ready to resolve all paths used by
         # the training class instance.
         self._session_data: SessionData = session_data
@@ -2052,18 +1902,8 @@ class BehaviorTraining:
         message = "Initializing data preprocessing..."
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Compresses all logs into a single .npz file. This is done both for long-term storage optimization and to
-        # allow parsing the data. Note, to minimize the time taken by data preprocessing, we disable integrity
-        # verification and compression. The data is just aggregated into an uncompressed .npz file for each source.
-        self._logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=True, verify_integrity=True
-        )
-
-        # Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
-        _preprocess_video_names(camera_frame_directory=self._session_data.camera_frames_path)
-
-        # Pushes the processed data to the NAS and BioHPC server.
-        self._session_data.push_data()
+        # Preprocesses the session data
+        self._session_data.preprocess_session_data()
 
         message = "Data preprocessing: complete. BehaviorTraining runtime: terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
