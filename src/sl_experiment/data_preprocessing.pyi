@@ -276,7 +276,42 @@ def _preprocess_log_directory(
         RuntimeError: If the target log directory contains both compressed and uncompressed log entries.
     """
 
-def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: Path) -> None:
+def _push_data(
+    raw_data_directory: Path,
+    server_root_directory: Path,
+    nas_root_directory: Path,
+    parallel: bool = True,
+    num_threads: int = 15,
+) -> None:
+    """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
+
+    This internal method is called as part of preprocessing to move the preprocessed data to the NAS and the server.
+    This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
+    verify the integrity of the transferred data.
+
+    Notes:
+        The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
+        session runtime. This ensures that the persisted file is always up to date with the current zaber motor
+        positions.
+
+    Args:
+        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
+            data.
+        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
+        parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
+            data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
+            of parallel threads used by each transfer process or the number of threads used to compute the
+            xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
+        num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
+            the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
+            advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
+            number of CPU cores - 4.
+    """
+
+def preprocess_session_directory(
+    raw_data_directory: Path, mesoscope_root_directory: Path, server_root_directory: Path, nas_root_directory: Path
+) -> None:
     """Prepares the target session directory for long-term storage and further processing on the BioHPC server.
 
     This function acts as the central API for all data preprocessing tasks. Primarily, data preprocessing is used to
@@ -293,8 +328,11 @@ def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: 
 
     Args:
         raw_data_directory: The Path to the target session raw_data directory to be processed.
-        mesoscope_root_path: The Path to the root directory used to store all experiment and training data on the Sun
-            lab BioHPC server.
+        mesoscope_root_directory: The Path to the root directory used to store all mesoscope-acquired data on the
+            ScanImagePC.
+        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
+            data.
+        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
     """
 
 def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:

@@ -81,14 +81,14 @@ def _delete_directory(directory_path: Path) -> None:
 
     # Builds the list of files and directories inside the input directory using Path
     files = [p for p in directory_path.iterdir() if p.is_file()]
-    subdirs = [p for p in directory_path.iterdir() if p.is_dir()]
+    subdirectories = [p for p in directory_path.iterdir() if p.is_dir()]
 
     # Deletes files in parallel
     with ThreadPoolExecutor() as executor:
         executor.map(os.unlink, files)
 
     # Recursively deletes subdirectories
-    for subdir in subdirs:
+    for subdir in subdirectories:
         _delete_directory(subdir)
 
     # Removes the now-empty directory
@@ -878,7 +878,85 @@ def _preprocess_log_directory(
         console.error(message, error=RuntimeError)
 
 
-def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: Path) -> None:
+def _push_data(
+    raw_data_directory: Path,
+    server_root_directory: Path,
+    nas_root_directory: Path,
+    parallel: bool = True,
+    num_threads: int = 15,
+) -> None:
+    """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
+
+    This internal method is called as part of preprocessing to move the preprocessed data to the NAS and the server.
+    This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
+    verify the integrity of the transferred data.
+
+    Notes:
+        The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
+        session runtime. This ensures that the persisted file is always up to date with the current zaber motor
+        positions.
+
+    Args:
+        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
+            data.
+        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
+        parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
+            data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
+            of parallel threads used by each transfer process or the number of threads used to compute the
+            xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
+        num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
+            the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
+            advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
+            number of CPU cores - 4.
+    """
+
+    # Resolves source and destination paths
+    session_name = raw_data_directory.parents[0].name
+    animal_name = raw_data_directory.parents[1].name
+    project_name = raw_data_directory.parents[2].name
+
+    # Resolves a tuple of destination paths
+    destinations = (
+        nas_root_directory.joinpath(project_name, animal_name, session_name, "raw_data"),
+        server_root_directory.joinpath(project_name, animal_name, session_name, "raw_data"),
+    )
+
+    # Computes the xxHash3-128 checksum for the source folder
+    calculate_directory_checksum(directory=raw_data_directory, num_processes=None, save_checksum=True)
+
+    # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
+    if parallel:
+        with ProcessPoolExecutor(max_workers=len(destinations)) as executor:
+            futures = {
+                executor.submit(
+                    transfer_directory,
+                    source=raw_data_directory,
+                    destination=destination,
+                    num_threads=num_threads,
+                    verify_integrity=False,  # This is now done on the server directly
+                ): destination
+                for destination in destinations
+            }
+            for future in as_completed(futures):
+                # Propagates any exceptions from the transfers
+                future.result()
+
+    # Otherwise, runs the transfers sequentially. Note, transferring individual files is still done in parallel, but
+    # the transfer is performed for each destination sequentially.
+    else:
+        for destination in destinations:
+            transfer_directory(
+                source=raw_data_directory,
+                destination=destination,
+                num_threads=num_threads,
+                verify_integrity=False,  # This is now done on the server directly
+            )
+
+
+def preprocess_session_directory(
+    raw_data_directory: Path, mesoscope_root_directory: Path, server_root_directory: Path, nas_root_directory: Path
+) -> None:
     """Prepares the target session directory for long-term storage and further processing on the BioHPC server.
 
     This function acts as the central API for all data preprocessing tasks. Primarily, data preprocessing is used to
@@ -895,25 +973,38 @@ def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: 
 
     Args:
         raw_data_directory: The Path to the target session raw_data directory to be processed.
-        mesoscope_root_path: The Path to the root directory used to store all experiment and training data on the Sun
-            lab BioHPC server.
+        mesoscope_root_directory: The Path to the root directory used to store all mesoscope-acquired data on the
+            ScanImagePC.
+        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
+            data.
+        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
     """
 
     # Enables console, if it is not enabled
     if not console.enabled:
         console.enable()
 
+    message = "Initializing data preprocessing..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Compresses all log entries (.npy) into archive files (.npz)
     _preprocess_log_directory(
         raw_data_directory=raw_data_directory, num_processes=31, remove_sources=True, verify_integrity=False
     )
+
+    # Renames all videos to use human-friendly names
     _preprocess_video_names(raw_data_directory=raw_data_directory)
+
+    # Pulls mesoscope-acquired data from the ScanImagePC to the VRPC
     _pull_mesoscope_data(
         raw_data_directory=raw_data_directory,
-        mesoscope_root_directory=mesoscope_root_path,
+        mesoscope_root_directory=mesoscope_root_directory,
         num_threads=31,
         remove_sources=True,
         verify_transfer_integrity=True,
     )
+
+    # Compresses all mesoscope-acquired frames and extracts their metadata
     _preprocess_mesoscope_directory(
         raw_data_directory=raw_data_directory,
         num_processes=31,
@@ -921,6 +1012,18 @@ def preprocess_session_directory(raw_data_directory: Path, mesoscope_root_path: 
         verify_integrity=True,
         batch_size=100,
     )
+
+    # Sends preprocessed data to the NAS and the BioHPC server
+    _push_data(
+        raw_data_directory=raw_data_directory,
+        server_root_directory=server_root_directory,
+        nas_root_directory=nas_root_directory,
+        parallel=True,
+        num_threads=15,
+    )
+
+    message = "Data preprocessing: Complete."
+    console.echo(message=message, level=LogLevel.INFO)
 
 
 def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
@@ -952,7 +1055,7 @@ def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> 
             deletion_candidates.append(raw_data_path)
 
     # Iteratively removes all deletion candidates gathered above
-    for candidate in deletion_candidates:
+    for candidate in tqdm(deletion_candidates, desc="Deleting redundant VRPC directories", unit="directory"):
         _delete_directory(directory_path=candidate)
 
 
@@ -971,7 +1074,7 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
     # deletion
     file: Path
     deletion_candidates = [file.parent for file in mesoscope_root_path.rglob("ubiquitin.bin")]
-    for candidate in deletion_candidates:
+    for candidate in tqdm(deletion_candidates, desc="Deleting redundant ScanImagePC directories", unit="directory"):
         _delete_directory(directory_path=candidate)
 
 
@@ -1018,10 +1121,21 @@ def purge_redundant_data(
             mesoscope-acquired frame data.
     """
 
+    # Enables console, if it is not enabled
+    if not console.enabled:
+        console.enable()
+
+    message = "Initializing data purging..."
+    console.echo(message=message, level=LogLevel.INFO)
+
     # Removes no longer necessary ScanImagePC directories (cached mesoscope frames)
     if remove_ubiquitin:
+        message = "Purging redundant ScanImagePC directories..."
+        console.echo(message=message, level=LogLevel.INFO)
         _resolve_ubiquitin_markers(mesoscope_root_path)
 
     # Removes no longer necessary VRPC directories (raw_data folders)
     if remove_telomere:
+        message = "Purging redundant VRPC directories..."
+        console.echo(message=message, level=LogLevel.INFO)
         _resolve_telomere_markers(server_root_path, local_root_path)

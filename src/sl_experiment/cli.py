@@ -437,7 +437,10 @@ def preprocess_session(session_path: Path) -> None:
     """
     session_path = Path(session_path)
     preprocess_session_directory(
-        raw_data_directory=session_path, mesoscope_root_path=Path("/home/cybermouse/scanimage/mesodata")
+        raw_data_directory=session_path,
+        mesoscope_root_directory=Path("/home/cybermouse/scanimage/mesodata"),
+        server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
+        nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
     )
 
 

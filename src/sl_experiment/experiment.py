@@ -10,7 +10,6 @@ import tempfile
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Process
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import numpy as np
@@ -23,9 +22,7 @@ from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
 from .visualizers import BehaviorVisualizer
-from .transfer_tools import transfer_directory
 from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
-from .packaging_tools import calculate_directory_checksum
 from .module_interfaces import BreakInterface, ValveInterface
 from .data_preprocessing import RuntimeHardwareConfiguration, preprocess_session_directory
 from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
@@ -387,9 +384,8 @@ class SessionData:
             write data from the surgery and water restriction Google Sheets.
         _local: The path to the host-machine directory for the managed project, animal, and session combination.
             This path points to the 'raw_data' subdirectory that stores all acquired and preprocessed session data.
-        _server: The path to the BioHPC server directory for the managed project, animal, and session
-            combination.
-        _nas: The path to the Synology NAS directory for the managed project, animal, and session combination.
+        _server: The path to the root BioHPC server directory.
+        _nas: The path to the root Synology NAS directory.
         _mesoscope: The path to the root ScanImage PC (mesoscope) data directory. This directory is shared by
             all projects, animals, and sessions.
         _persistent: The path to the host-machine directory used to retain persistent data from previous session(s) of
@@ -398,9 +394,6 @@ class SessionData:
         _metadata: The path to the host-machine directory used to store the metadata information about the managed
             project and animal combination. This information typically does not change across sessions, but it is also
             exported to the nas and server, like the raw data.
-        _server_metadata: Same as above, but on the BioHPC server.
-        _nas_metadata: Same as above, but on the Synology NAS.
-        _mesoscope_persistent: Similar to above, but stores the path to the mesoscope (ScanImage) PC persistent
             directory. This directory ios used to persist motion estimator files between experimental sessions.
         _project_name: Stores the name of the project whose data is managed by the class.
         _animal_name: Stores the name of the animal whose data is managed by the class.
@@ -430,9 +423,6 @@ class SessionData:
         # Computes the project + animal directory paths for the local machine (VRPC)
         self._local: Path = local_root_directory.joinpath(project_name, animal_name)
 
-        # Mesoscope is configured to use the same directories for all projects and animals
-        self._mesoscope: Path = mesoscope_data_directory
-
         # Generates a separate directory to store persistent data. This has to be done early as _local is later
         # overwritten with the path to the raw_data directory of the created session.
         self._persistent: Path = self._local.joinpath("persistent_data")
@@ -442,9 +432,6 @@ class SessionData:
         # over sessions. The persistent directory, on the other hand, is used to back up data between sessions that
         # needs to stay on the host PC.
         self._metadata: Path = self._local.joinpath("metadata")
-
-        # Also generates the mesoscope persistent path
-        self._mesoscope_persistent: Path = self._mesoscope.joinpath("persistent_data", project_name, animal_name)
 
         # Records animal and project names to attributes. Session name is resolved below
         self._project_name: str = project_name
@@ -481,12 +468,11 @@ class SessionData:
         # directory acts as the root for all raw and preprocessed data generated during session runtime.
         self._local = self._local.joinpath(self._session_name, "raw_data")
 
-        # Modifies nas and server paths to point to the session directory. The "raw_data" folder will be created during
-        # data movement method runtime, so the folder is not precreated for destinations.
-        self._server: Path = server_root_directory.joinpath(self._project_name, self._animal_name, self._session_name)
-        self._nas: Path = nas_root_directory.joinpath(self._project_name, self._animal_name, self._session_name)
-        self._server_metadata: Path = self._server.joinpath("metadata")
-        self._nas_metadata: Path = self._nas.joinpath("metadata")
+        # Keeps other paths pointing to the root directories, as most methods using these paths now automatically
+        # resolve the necessary project-animal-session structures.
+        self._mesoscope: Path = mesoscope_data_directory
+        self._server: Path = server_root_directory
+        self._nas: Path = nas_root_directory
 
         # Ensures that root paths exist for all destinations and sources. Note
         ensure_directory_exists(self._local)
@@ -494,12 +480,16 @@ class SessionData:
         ensure_directory_exists(self._server)
         ensure_directory_exists(self._persistent)
         ensure_directory_exists(self._metadata)
-        ensure_directory_exists(self._server_metadata)
-        ensure_directory_exists(self._nas_metadata)
+        ensure_directory_exists(
+            self._server.joinpath(self._project_name, self._animal_name, self._session_name, "metadata")
+        )
+        ensure_directory_exists(
+            self._nas.joinpath(self._project_name, self._animal_name, self._session_name, "metadata")
+        )
         if generate_mesoscope_paths:
-            ensure_directory_exists(self._mesoscope)
-            ensure_directory_exists(self._mesoscope_persistent)
             self._mesoscope_frames_exist = True
+            ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
+            ensure_directory_exists(self._mesoscope.joinpath("persistent_data", project_name, animal_name))
         else:
             self._mesoscope_frames_exist = False
 
@@ -596,8 +586,12 @@ class SessionData:
         """
         # Resolves the paths to the surgery data file for the current animal and project combination
         local_surgery_path = self._metadata.joinpath("surgery_metadata.yaml")
-        server_surgery_path = self._server_metadata.joinpath("surgery_metadata.yaml")
-        nas_surgery_path = self._nas_metadata.joinpath("surgery_metadata.yaml")
+        server_surgery_path = self._server.joinpath(
+            self._project_name, self._animal_name, self._session_name, "metadata", "surgery_metadata.yaml"
+        )
+        nas_surgery_path = self._nas.joinpath(
+            self._project_name, self._animal_name, self._session_name, "metadata", "surgery_metadata.yaml"
+        )
 
         # Loads and parses the data from the surgery log Google Sheet file
         sheet = SurgerySheet(
@@ -611,73 +605,6 @@ class SessionData:
         data.to_yaml(local_surgery_path)
         data.to_yaml(server_surgery_path)
         data.to_yaml(nas_surgery_path)
-
-    def _push_data(
-        self,
-        parallel: bool = True,
-        num_threads: int = 15,
-    ) -> None:
-        """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
-
-        This internal method is called as part of preprocessing to move the preprocessed data to the NAS and the server.
-        This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
-        verify the integrity of the transferred data.
-
-        Notes:
-            The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
-            session runtime. This ensures that the persisted file is always up to date with the current zaber motor
-            positions.
-
-        Args:
-            parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
-                data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
-                of parallel threads used by each transfer process or the number of threads used to compute the
-                xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
-            num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
-                the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
-                advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
-                number of CPU cores - 4.
-        """
-
-        # Resolves source and destination paths
-        source = self.raw_data_path
-
-        # Resolves a tuple of destination paths
-        destinations = (
-            self._nas.joinpath("raw_data"),
-            self._server.joinpath("raw_data"),
-        )
-
-        # Computes the xxHash3-128 checksum for the source folder
-        calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
-
-        # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
-        if parallel:
-            with ProcessPoolExecutor(max_workers=len(destinations)) as executor:
-                futures = {
-                    executor.submit(
-                        transfer_directory,
-                        source=source,
-                        destination=destination,
-                        num_threads=num_threads,
-                        verify_integrity=False,  # This is now done on the server directly
-                    ): destination
-                    for destination in destinations
-                }
-                for future in as_completed(futures):
-                    # Propagates any exceptions from the transfers
-                    future.result()
-
-        # Otherwise, runs the transfers sequentially. Note, transferring individual files is still done in parallel, but
-        # the transfer is performed for each destination sequentially.
-        else:
-            for destination in destinations:
-                transfer_directory(
-                    source=source,
-                    destination=destination,
-                    num_threads=num_threads,
-                    verify_integrity=False,  # This is now done on the server directly
-                )
 
     def preprocess_session_data(self) -> None:
         """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
@@ -702,10 +629,12 @@ class SessionData:
             )
 
         # This performs all data preprocessing steps, including pulling the mesoscope frames from the ScanImagePC.
-        preprocess_session_directory(raw_data_directory=self.raw_data_path, mesoscope_root_path=self._mesoscope)
-
-        # Pushes the preprocessed data to the NAS and the BioHPC server
-        self._push_data()
+        preprocess_session_directory(
+            raw_data_directory=self.raw_data_path,
+            mesoscope_root_directory=self._mesoscope,
+            server_root_directory=self._server,
+            nas_root_directory=self._nas,
+        )
 
 
 class MesoscopeExperiment:
@@ -1248,13 +1177,10 @@ class MesoscopeExperiment:
         message = "Hardware configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = "Initializing data preprocessing..."
-        console.echo(message=message, level=LogLevel.INFO)
-
         # Preprocesses the session data
         self._session_data.preprocess_session_data()
 
-        message = "Data preprocessing: complete. MesoscopeExperiment runtime: terminated."
+        message = "Data preprocessing: Complete. MesoscopeExperiment runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def vr_rest(self) -> None:
@@ -1901,13 +1827,10 @@ class BehaviorTraining:
         message = "Hardware configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = "Initializing data preprocessing..."
-        console.echo(message=message, level=LogLevel.INFO)
-
         # Preprocesses the session data
         self._session_data.preprocess_session_data()
 
-        message = "Data preprocessing: complete. BehaviorTraining runtime: terminated."
+        message = "Data preprocessing: Complete. BehaviorTraining runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def lick_train_state(self) -> None:

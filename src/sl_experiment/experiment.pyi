@@ -11,7 +11,6 @@ from ataraxis_data_structures import DataLogger, YamlConfig, SharedMemoryArray
 from ataraxis_communication_interface import MQTTCommunication
 
 from .visualizers import BehaviorVisualizer as BehaviorVisualizer
-from .transfer_tools import transfer_directory as transfer_directory
 from .binding_classes import (
     HeadBar as HeadBar,
     LickPort as LickPort,
@@ -19,7 +18,6 @@ from .binding_classes import (
     ZaberPositions as ZaberPositions,
     MicroControllerInterfaces as MicroControllerInterfaces,
 )
-from .packaging_tools import calculate_directory_checksum as calculate_directory_checksum
 from .module_interfaces import (
     BreakInterface as BreakInterface,
     ValveInterface as ValveInterface,
@@ -246,9 +244,8 @@ class SessionData:
             write data from the surgery and water restriction Google Sheets.
         _local: The path to the host-machine directory for the managed project, animal, and session combination.
             This path points to the 'raw_data' subdirectory that stores all acquired and preprocessed session data.
-        _server: The path to the BioHPC server directory for the managed project, animal, and session
-            combination.
-        _nas: The path to the Synology NAS directory for the managed project, animal, and session combination.
+        _server: The path to the root BioHPC server directory.
+        _nas: The path to the root Synology NAS directory.
         _mesoscope: The path to the root ScanImage PC (mesoscope) data directory. This directory is shared by
             all projects, animals, and sessions.
         _persistent: The path to the host-machine directory used to retain persistent data from previous session(s) of
@@ -257,9 +254,6 @@ class SessionData:
         _metadata: The path to the host-machine directory used to store the metadata information about the managed
             project and animal combination. This information typically does not change across sessions, but it is also
             exported to the nas and server, like the raw data.
-        _server_metadata: Same as above, but on the BioHPC server.
-        _nas_metadata: Same as above, but on the Synology NAS.
-        _mesoscope_persistent: Similar to above, but stores the path to the mesoscope (ScanImage) PC persistent
             directory. This directory ios used to persist motion estimator files between experimental sessions.
         _project_name: Stores the name of the project whose data is managed by the class.
         _animal_name: Stores the name of the animal whose data is managed by the class.
@@ -272,17 +266,14 @@ class SessionData:
     _water_log_sheet_id: str
     _credentials_path: Path
     _local: Path
-    _mesoscope: Path
     _persistent: Path
     _metadata: Path
-    _mesoscope_persistent: Path
     _project_name: str
     _animal_name: str
     _session_name: str
+    _mesoscope: Path
     _server: Path
     _nas: Path
-    _server_metadata: Path
-    _nas_metadata: Path
     _mesoscope_frames_exist: bool
     def __init__(
         self,
@@ -365,28 +356,6 @@ class SessionData:
         This method is used to actualize the surgery data stored in the 'metadata' directories after each training or
         experiment runtime. Although it is not necessary to always overwrite the metadata, since this takes very little
         time, the current mode of operation is to always update this data.
-        """
-    def _push_data(self, parallel: bool = True, num_threads: int = 15) -> None:
-        """Copies the raw_data directory from the VRPC to the NAS and the BioHPC server.
-
-        This internal method is called as part of preprocessing to move the preprocessed data to the NAS and the server.
-        This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
-        verify the integrity of the transferred data.
-
-        Notes:
-            The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
-            session runtime. This ensures that the persisted file is always up to date with the current zaber motor
-            positions.
-
-        Args:
-            parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
-                data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
-                of parallel threads used by each transfer process or the number of threads used to compute the
-                xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
-            num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
-                the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
-                advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
-                number of CPU cores - 4.
         """
     def preprocess_session_data(self) -> None:
         """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
