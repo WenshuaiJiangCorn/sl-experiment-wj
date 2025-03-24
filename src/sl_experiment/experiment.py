@@ -480,12 +480,8 @@ class SessionData:
         ensure_directory_exists(self._server)
         ensure_directory_exists(self._persistent)
         ensure_directory_exists(self._metadata)
-        ensure_directory_exists(
-            self._server.joinpath(self._project_name, self._animal_name, self._session_name, "metadata")
-        )
-        ensure_directory_exists(
-            self._nas.joinpath(self._project_name, self._animal_name, self._session_name, "metadata")
-        )
+        ensure_directory_exists(self._server.joinpath(self._project_name, self._animal_name, "metadata"))
+        ensure_directory_exists(self._nas.joinpath(self._project_name, self._animal_name, "metadata"))
         if generate_mesoscope_paths:
             self._mesoscope_frames_exist = True
             ensure_directory_exists(self._mesoscope.joinpath("mesoscope_frames"))
@@ -587,10 +583,10 @@ class SessionData:
         # Resolves the paths to the surgery data file for the current animal and project combination
         local_surgery_path = self._metadata.joinpath("surgery_metadata.yaml")
         server_surgery_path = self._server.joinpath(
-            self._project_name, self._animal_name, self._session_name, "metadata", "surgery_metadata.yaml"
+            self._project_name, self._animal_name, "metadata", "surgery_metadata.yaml"
         )
         nas_surgery_path = self._nas.joinpath(
-            self._project_name, self._animal_name, self._session_name, "metadata", "surgery_metadata.yaml"
+            self._project_name, self._animal_name, "metadata", "surgery_metadata.yaml"
         )
 
         # Loads and parses the data from the surgery log Google Sheet file
