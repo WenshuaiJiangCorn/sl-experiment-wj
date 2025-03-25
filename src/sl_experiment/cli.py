@@ -320,6 +320,11 @@ def run_training(
     surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
     water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
+    # The way increase threshold is used requires it to be greater than 0. So if a threshold of 0 is passed, the system
+    # sets it to a very small number instead. which functions similar to it being 0, but does not produce an error.
+    if increase_threshold < 0:
+        increase_threshold = 0.0000001
+
     # Runs the training session.
     run_train_logic(
         project=project,
@@ -331,9 +336,9 @@ def run_training(
         valve_calibration_data=valve_calibration_data,
         initial_speed_threshold=initial_speed,
         initial_duration_threshold=initial_duration,
-        speed_increase_step=increase_threshold,
-        duration_increase_step=speed_step,
-        increase_threshold=duration_step,
+        speed_increase_step=speed_step,
+        duration_increase_step=duration_step,
+        increase_threshold=increase_threshold,
         maximum_speed_threshold=maximum_speed,
         maximum_duration_threshold=maximum_duration,
         maximum_water_volume=maximum_volume,

@@ -2602,7 +2602,7 @@ def run_train_logic(
             # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
             # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
             speed_threshold = np.clip(
-                a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.1),
+                a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.05),
                 a_min=0.1,  # Minimum value
                 a_max=maximum_speed,  # Maximum value
             )
