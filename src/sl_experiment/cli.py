@@ -13,7 +13,7 @@ from .experiment import (
     vr_maintenance_logic,
 )
 from .zaber_bindings import CRCCalculator, discover_zaber_devices
-from .data_preprocessing import purge_redundant_data, preprocess_session_directory
+from .data_preprocessing import SessionData, purge_redundant_data
 
 # Precalculated default valve calibration data. This should be defined separately for each project, as the valve
 # is replaced and recalibrated fairly frequently.
@@ -137,14 +137,25 @@ def lick_training(
     surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
     water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
+    # Initializes the session data manager class. This generates the necessary data directories on all PCs used in
+    # out data acquisition, processing, and storage pipelines.
+    session_data = SessionData(
+        animal_id=animal,
+        project_name=project,
+        session_type="lick_training",
+        surgery_sheet_id=surgery_id,
+        water_log_sheet_id=water_restriction_id,
+        credentials_path="/media/Data/Experiments/sl-surgery-log-0f651e492767.json",
+        local_root_directory="/media/Data/Experiments",
+        server_root_directory="/media/cbsuwsun/storage/sun_data",
+        nas_root_directory="/home/cybermouse/nas/rawdata",
+    )
+
     # Runs the lick training session.
     lick_training_logic(
-        project=project,
-        animal=animal,
         experimenter=experimenter,
         animal_weight=animal_weight,
-        surgery_log_id=surgery_id,
-        water_restriction_log_id=water_restriction_id,
+        session_data=session_data,
         valve_calibration_data=valve_calibration_data,
         average_reward_delay=average_delay,
         maximum_deviation_from_mean=maximum_deviation,
@@ -320,19 +331,24 @@ def run_training(
     surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
     water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
-    # The way increase threshold is used requires it to be greater than 0. So if a threshold of 0 is passed, the system
-    # sets it to a very small number instead. which functions similar to it being 0, but does not produce an error.
-    if increase_threshold < 0:
-        increase_threshold = 0.0000001
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_id=animal,
+        project_name=project,
+        session_type="run_training",
+        surgery_sheet_id=surgery_id,
+        water_log_sheet_id=water_restriction_id,
+        credentials_path="/media/Data/Experiments/sl-surgery-log-0f651e492767.json",
+        local_root_directory="/media/Data/Experiments",
+        server_root_directory="/media/cbsuwsun/storage/sun_data",
+        nas_root_directory="/home/cybermouse/nas/rawdata",
+    )
 
     # Runs the training session.
     run_train_logic(
-        project=project,
-        animal=animal,
         experimenter=experimenter,
         animal_weight=animal_weight,
-        surgery_log_id=surgery_id,
-        water_restriction_log_id=water_restriction_id,
+        session_data=session_data,
         valve_calibration_data=valve_calibration_data,
         initial_speed_threshold=initial_speed,
         initial_duration_threshold=initial_duration,
@@ -406,14 +422,24 @@ def run_experiment(
     surgery_id = "1aEdF4gaiQqltOcTABQxN7mf1m44NGA-BTFwZsZdnRX8"
     water_restriction_id = "12yMl60O9rlb4VPE70swRJEWkMvgsL7sgVx1qYYcij6g"
 
+    # Initializes the session data manager class.
+    session_data = SessionData(
+        animal_id=animal,
+        project_name=project,
+        session_type="experiment",
+        surgery_sheet_id=surgery_id,
+        water_log_sheet_id=water_restriction_id,
+        credentials_path="/media/Data/Experiments/sl-surgery-log-0f651e492767.json",
+        local_root_directory="/media/Data/Experiments",
+        server_root_directory="/media/cbsuwsun/storage/sun_data",
+        nas_root_directory="/home/cybermouse/nas/rawdata",
+    )
+
     # Runs the experiment session using the input parameters.
     run_experiment_logic(
-        project=project,
-        animal=animal,
         experimenter=experimenter,
         animal_weight=animal_weight,
-        surgery_log_id=surgery_id,
-        water_restriction_log_id=water_restriction_id,
+        session_data=session_data,
         valve_calibration_data=valve_calibration_data,
         cue_length_map=cue_length_map,
         experiment_state_sequence=experiment_state_sequence,
@@ -426,7 +452,7 @@ def run_experiment(
     "--session-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     required=True,
-    prompt="Enter the paths to the target session directory",
+    prompt="Enter the paths to the target session directory:",
     help="The path to the session directory to preprocess.",
 )
 def preprocess_session(session_path: Path) -> None:
@@ -441,12 +467,8 @@ def preprocess_session(session_path: Path) -> None:
     processing stages as necessary to optimize runtime performance.
     """
     session_path = Path(session_path)
-    preprocess_session_directory(
-        raw_data_directory=session_path,
-        mesoscope_root_directory=Path("/home/cybermouse/scanimage/mesodata"),
-        server_root_directory=Path("/media/cbsuwsun/storage/sun_data"),
-        nas_root_directory=Path("/home/cybermouse/nas/rawdata"),
-    )
+    session_data = SessionData.from_path(path=session_path)
+    session_data.preprocess_session_data()
 
 
 @click.command()

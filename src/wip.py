@@ -3,11 +3,30 @@
 # y = pl.read_ipc(x, use_pyarrow=True)
 # print(y)
 #
-import sys
 from pathlib import Path
+from dataclasses import dataclass
 
-import numpy as np
-import polars as pl
+from ataraxis_data_structures import YamlConfig
+
+from sl_experiment.data_preprocessing import SessionData
+
+# x = SessionData(
+#     animal_id="1",
+#     project_name="test",
+#     session_type="experiment",
+#     surgery_sheet_id="12345",
+#     water_log_sheet_id="765432",
+#     credentials_path="/home/cyberaxolotl/Desktop/test123/dir/sl-surgery-log-0f651e492767.json",
+#     local_root_directory="/home/cyberaxolotl/Desktop/test123/dir",
+#     server_root_directory="/home/cyberaxolotl/Desktop/test123/dir2",
+#     nas_root_directory="/home/cyberaxolotl/Desktop/test123/dir3",
+#     mesoscope_root_directory = "/home/cyberaxolotl/Desktop/test123/dir4",
+# )
+#
+# x.to_path()
+
+# y = SessionData.from_path(path=Path("/home/cyberaxolotl/Desktop/test123/dir/test/1/2025-03-25-16-36-02-968958"))
+# print(y)
 
 # # Load data
 # distance = Path("/media/Data/Experiments/TestMice/666/2025-03-10-16-15-25-577230/raw_data/behavior_data/encoder_data.feather")

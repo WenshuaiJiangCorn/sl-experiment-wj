@@ -1,13 +1,18 @@
 """This module provides the methods used to preprocess experimental data after acquisition. The primary purpose of this
 procedure is to prepare the data for storage and further processing in the Sun lab data cluster.
+
+This module also provides some of the dataclasses used to store runtime information on disk (session descriptors,
+hardware configuration) and the main SessionData class used to manage the data of each session.
 """
 
 import os
 import json
+import time
 import shutil as sh
 from typing import Any
 from pathlib import Path
 from datetime import datetime
+import warnings
 from functools import partial
 from collections import defaultdict
 from dataclasses import dataclass
@@ -19,12 +24,14 @@ import tifffile
 from numpy.typing import NDArray
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import YamlConfig, compress_npy_logs
+from ataraxis_time.time_helpers import get_timestamp
 
 from .transfer_tools import transfer_directory
 from .packaging_tools import calculate_directory_checksum
+from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
 
 
-# This has to be defined here to avoid circular import in experiment.py
+# Most of these classes have to be defined here to avoid circular import in experiment.py
 @dataclass()
 class RuntimeHardwareConfiguration(YamlConfig):
     """This class is used to save the runtime hardware configuration information as a .yaml file.
@@ -49,7 +56,6 @@ class RuntimeHardwareConfiguration(YamlConfig):
     """BreakInterface instance property."""
     minimum_break_strength: float | None = None
     """BreakInterface instance property."""
-    # noinspection PyUnresolvedReferences
     lick_threshold: int | None = None
     """BreakInterface instance property."""
     scale_coefficient: float | None = None
@@ -62,6 +68,447 @@ class RuntimeHardwareConfiguration(YamlConfig):
     """ScreenInterface instance property."""
     has_ttl: bool | None = None
     """TTLInterface instance property."""
+
+
+@dataclass
+class SessionData(YamlConfig):
+    """Provides methods for managing the data acquired during one experiment or training session.
+
+    This class functions as the central hub for collecting the data from all local PCs involved in the data acquisition
+    process and pushing it to the NAS and the BioHPC server. Its primary purpose is to maintain the session data
+    structure across all supported destinations and to efficiently and safely move the data to these destinations with
+    minimal redundancy and footprint. Additionally, this class generates the paths used by all other classes from
+    this library to determine where to load and saved various data during runtime. Finally, it also carries out basic
+    data preprocessing to optimize raw data for network transmission and long-term storage.
+
+    As part of its initialization, the class generates the session directory for the input animal and project
+    combination. Session directories use the current UTC timestamp, down to microseconds, as the directory name. This
+    ensures that each session name is unique and preserves the overall session order.
+
+    Notes:
+        Do not call methods from this class directly. This class is intended to be used primarily through the runtime
+        logic functions from the experiment.py module and general command-line-interfaces installed with the library.
+        The only reason the class is defined as public is to support reconfiguring data destinations and session details
+        when implementing custom CLI functions for projects that use this library.
+
+        It is expected that the server, NAS, and mesoscope data directories are mounted on the host-machine via the
+        SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
+        the OS has full access to these directories and filesystems.
+
+        This class is specifically designed for working with raw data from a single animal participating in a single
+        experimental project session. Processed data is managed by the processing library methods and classes.
+
+        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each
+        experimental session 'raw_data' directory. The checksum verifies the data of each file and the paths to each
+        file relative to the 'raw_data' root directory.
+    """
+
+    # Main attributes that are expected to be provided by the user during class initialization
+    project_name: str
+    """The name of the project for which the data is acquired."""
+    animal_id: str
+    """The ID code of the animal for which the data is acquired."""
+    surgery_sheet_id: str
+    """The ID for the Google Sheet file that stores surgery information for the animal whose data is managed by this 
+    instance. This is used to parse and write the surgery data for each managed animal into its 'metadata' folder, so 
+    that the surgery data is always kept together with the rest of the training and experiment data."""
+    water_log_sheet_id: str
+    """The ID for the Google Sheet file that stores water restriction information for the animal whose data is managed 
+    by this instance. This is used to synchronize the information inside the water restriction log with the state of 
+    the animal at the end of each training or experiment runtime.
+    """
+    session_type: str
+    """Stores the type of the session. Primarily, this determines how to read the session_descriptor.yaml file. Has 
+    to be set to one of the three supported types: 'lick_training', 'run_training' or 'experiment'.
+    """
+    credentials_path: str = "/media/Data/Experiments/sl-surgery-log-0f651e492767.json"
+    """
+    The path to the locally stored .JSON file that stores the service account credentials used to read and write Google 
+    Sheet data. This is used to access and work with the surgery log and the water restriction log.
+    """
+    local_root_directory: str = "/media/Data/Experiments"
+    """The path to the root directory where all projects are stored on the host-machine (VRPC)."""
+    server_root_directory: str = "/media/cbsuwsun/storage/sun_data"
+    """The path to the root directory where all projects are stored on the BioHPC server machine."""
+    nas_root_directory: str = "/home/cybermouse/nas/rawdata"
+    """The path to the root directory where all projects are stored on the Synology NAS."""
+    mesoscope_root_directory: str = "/home/cybermouse/scanimage/mesodata"
+    """The path to the root directory used to store all mesoscope-acquired data on the ScanImagePC."""
+    session_name: str = "None"
+    """Stores the name of the session for which the data is acquired. This name is generated at class initialization 
+    based on the current microsecond-accurate timestamp. Do NOT manually provide this name at class initialization.
+    Use 'from_path' class method to initialize a SessionData instance for an already existing session data directory.
+    """
+
+    def __post_init__(self) -> None:
+        """Generates the session name and creates the session directory structure on all involved PCs."""
+
+        # If the session name is provided, ends the runtime early. This is here to support initializing the
+        # SessionData class from the path to the root directory of a previous created session.
+        if self.session_name is not None:
+            return
+
+        # Acquires the UTC timestamp to use as the session name
+        self.session_name = str(get_timestamp(time_separator="-"))
+
+        # Converts root strings to Path objects.
+        local_root_directory = Path(self.local_root_directory)
+        server_root_directory = Path(self.server_root_directory)
+        nas_root_directory = Path(self.nas_root_directory)
+        mesoscope_root_directory = Path(self.mesoscope_root_directory)
+
+        # Constructs the session directory path and generates the directory
+        raw_session_path = local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name)
+
+        # Handles potential session name conflicts
+        counter = 0
+        while raw_session_path.exists():
+            counter += 1
+            new_session_name = f"{self.session_name}_{counter}"
+            raw_session_path = local_root_directory.joinpath(self.project_name, self.animal_id, new_session_name)
+
+        # If a conflict is detected and resolved, warns the user about the resolved conflict.
+        if counter > 0:
+            message = (
+                f"Session name conflict occurred for animal '{self.animal_id}' of project '{self.project_name}' "
+                f"when adding the new session with timestamp {self.session_name}. The session with identical name "
+                f"already exists. The newly created session directory uses a '_{counter}' postfix to distinguish "
+                f"itself from the already existing session directory."
+            )
+            warnings.warn(message=message)
+
+        # Saves the final session name to class attribute
+        self.session_name = raw_session_path.stem
+
+        # Generates the directory structures on all computers used in data management:
+        # Raw Data directory and all subdirectories.
+        ensure_directory_exists(
+            local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name, "raw_data")
+        )
+        ensure_directory_exists(
+            local_root_directory.joinpath(
+                self.project_name, self.animal_id, self.session_name, "raw_data", "camera_frames"
+            )
+        )
+        ensure_directory_exists(
+            local_root_directory.joinpath(
+                self.project_name, self.animal_id, self.session_name, "raw_data", "mesoscope_frames"
+            )
+        )
+        ensure_directory_exists(
+            local_root_directory.joinpath(
+                self.project_name, self.animal_id, self.session_name, "raw_data", "behavior_data_log"
+            )
+        )
+
+        ensure_directory_exists(local_root_directory.joinpath(self.project_name, self.animal_id, "persistent_data"))
+        ensure_directory_exists(nas_root_directory.joinpath(self.project_name, self.animal_id, self.session_name))
+        ensure_directory_exists(server_root_directory.joinpath(self.project_name, self.animal_id, self.session_name))
+        ensure_directory_exists(local_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(server_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(nas_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(mesoscope_root_directory.joinpath("mesoscope_frames"))
+        ensure_directory_exists(mesoscope_root_directory.joinpath("persistent_data", self.project_name, self.animal_id))
+
+    @classmethod
+    def from_path(cls, path: Path) -> "SessionData":
+        """Initializes a SessionData instance to represent the data of an already existing session.
+
+        Typically, this initialization mode is used to preprocess an interrupted session. This method uses the cached
+        data stored in the 'session_data.yaml' file in the 'raw_data' subdirectory of the provided session directory.
+
+        Args:
+            path: The path to the session directory on the local (VRPC) machine.
+
+        Returns:
+            An initialized SessionData instance for the session whose data is stored at the provided path.
+
+        Raises:
+            FileNotFoundError: If the 'session_data.yaml' file is not found after resolving the provided path.
+        """
+        path = path.joinpath("raw_data", "session_data.yaml")
+
+        if not path.exists():
+            message = (
+                f"No 'session_data.yaml' file found at the provided path: {path}. Unable to preprocess the target "
+                f"session, as session_data.yaml is required to run preprocessing. This likely indicates that the "
+                f"session runtime was interrupted before recording any data, as the session_data.yaml snapshot is "
+                f"generated very early in the session runtime."
+            )
+            console.error(message=message, error=FileNotFoundError)
+
+        return cls.from_yaml(file_path=path.joinpath("raw_data", "session_data.yaml"))  # type: ignore
+
+    def to_path(self) -> None:
+        """Saves the data of the instance to the 'raw_data' directory of the managed session as a 'session_data.yaml'
+        file.
+
+        This is used to save the data stored in the instance to disk, so that it can be reused during preprocessing or
+        data processing. This also serves as the repository for the identification information about the project,
+        animal, and session that generated the data.
+        """
+        self.to_yaml(file_path=self.raw_data_path.joinpath("session_data.yaml"))
+
+    @property
+    def raw_data_path(self) -> Path:
+        """Returns the path to the 'raw_data' directory of the managed session on the VRPC.
+
+        This directory functions as the root directory that stores all raw data acquired during training or experiment
+        runtime for a given session.
+        """
+        local_root_directory = Path(self.local_root_directory)
+        return local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name, "raw_data")
+
+    @property
+    def camera_frames_path(self) -> Path:
+        """Returns the path to the 'camera_frames' directory of the managed session.
+
+        This subdirectory is stored under the 'raw_data' directory and aggregates all video camera data.
+        """
+        return self.raw_data_path.joinpath("camera_frames")
+
+    @property
+    def zaber_positions_path(self) -> Path:
+        """Returns the path to the 'zaber_positions.yaml' file of the managed session.
+
+        This path is used to save the positions for all Zaber motors of the HeadBar and LickPort controllers at the
+        end of the experimental session.
+        """
+        return self.raw_data_path.joinpath("zaber_positions.yaml")
+
+    @property
+    def session_descriptor_path(self) -> Path:
+        """Returns the path to the 'session_descriptor.yaml' file of the managed session.
+
+        This path is used to save important session information to be viewed by experimenters post-runtime and to use
+        for further processing.
+        """
+        return self.raw_data_path.joinpath("session_descriptor.yaml")
+
+    @property
+    def hardware_configuration_path(self) -> Path:
+        """Returns the path to the 'hardware_configuration.yaml' file of the managed session.
+
+        This file stores hardware module parameters used to read and parse .npz log files during data processing.
+        """
+        return self.raw_data_path.joinpath("hardware_configuration.yaml")
+
+    @property
+    def previous_zaber_positions_path(self) -> Path:
+        """Returns the path to the 'zaber_positions.yaml' file of the previous session.
+
+        The file is stored inside the 'persistent_data' directory of the managed animal.
+        """
+        local_root_directory = Path(self.local_root_directory)
+        return local_root_directory.joinpath(
+            self.project_name, self.animal_id, "persistent_data", "zaber_positions.yaml"
+        )
+
+    @property
+    def mesoscope_root_path(self) -> Path:
+        """Returns the path to the root directory of the Mesoscope pc (ScanImagePC) used to store all
+        mesoscope-acquired data.
+        """
+        return Path(self.mesoscope_root_directory)
+
+    @property
+    def nas_root_path(self) -> Path:
+        """Returns the path to the root directory of the Synology NAS (Network Attached Storage) used to store all
+        training and experiment data after preprocessing (backup cold long-term storage)."""
+        return Path(self.nas_root_directory)
+
+    @property
+    def server_root_path(self) -> Path:
+        """Returns the path to the root directory of the BioHPC server used to process and store all training and e
+        experiment data (main long-term storage)."""
+        return Path(self.server_root_directory)
+
+    @property
+    def mesoscope_persistent_path(self) -> Path:
+        """Returns the path to the 'persistent_data' directory of the Mesoscope pc (ScanImagePC).
+
+        This directory is primarily used to store the reference MotionEstimator.me files for each animal.
+        """
+        return self.mesoscope_root_path.joinpath("persistent_data", self.project_name, self.animal_id)
+
+    @property
+    def local_metadata_path(self) -> Path:
+        """Returns the path to the 'metadata' directory of the managed animal on the VRPC."""
+        local_root_directory = Path(self.local_root_directory)
+        return local_root_directory.joinpath(self.project_name, self.animal_id, "metadata")
+
+    @property
+    def server_metadata_path(self) -> Path:
+        """Returns the path to the 'metadata' directory of the managed animal on the BioHPC server."""
+        return self.server_root_path.joinpath(self.project_name, self.animal_id, "metadata")
+
+    @property
+    def nas_metadata_path(self) -> Path:
+        """Returns the path to the 'metadata' directory of the managed animal on the Synology NAS."""
+        return self.nas_root_path.joinpath(self.project_name, self.animal_id, "metadata")
+
+    def preprocess_session_data(self) -> None:
+        """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
+        processing.
+
+        This method should be called at the end of each training and experiment runtime to compress and safely transfer
+        the data to its long-term storage destinations.
+
+        Notes:
+            The method will NOT delete the data from the VRPC or ScanImagePC. To safely remove the data, use the
+            purge-redundant-data CLI command. The data will only be removed if it has been marked for removal by our
+            data management algorithms, which ensure we have enough spare copies of the data elsewhere.
+        """
+        # Enables console, if it is not enabled
+        if not console.enabled:
+            console.enable()
+
+        message = "Initializing data preprocessing..."
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # If the instance manages a session that acquired mesoscope frames, renames the generic mesoscope_frames
+        # directory to include the session name. It is essential that this is done before preprocessing, as
+        # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
+        # session.
+        general_path = self.mesoscope_root_path.joinpath("mesoscope_frames")
+        session_specific_path = self.mesoscope_root_path.joinpath(f"{self.session_name}_mesoscope_frames")
+
+        # Note, the renaming only happens if the session-specific cache does not exist, the general
+        # mesoscope_frames cache exists, and it is not empty (has files inside).
+        if (
+            not session_specific_path.exists() and general_path.exists() and len(list[general_path.glob("*")]) > 0  # type: ignore
+        ):
+            general_path.rename(session_specific_path)
+            ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
+
+        # Compresses all log entries (.npy) into archive files (.npz)
+        _preprocess_log_directory(session_data=self, num_processes=31, remove_sources=True, verify_integrity=False)
+
+        # Renames all videos to use human-friendly names
+        _preprocess_video_names(session_data=self)
+
+        # Pulls mesoscope-acquired data from the ScanImagePC to the VRPC
+        _pull_mesoscope_data(
+            session_data=self,
+            num_threads=31,
+            remove_sources=True,
+            verify_transfer_integrity=True,
+        )
+
+        # Compresses all mesoscope-acquired frames and extracts their metadata
+        _preprocess_mesoscope_directory(
+            session_data=self,
+            num_processes=31,
+            remove_sources=True,
+            verify_integrity=True,
+            batch_size=100,
+        )
+
+        # Extracts and saves the surgery data to the metadata directories and writes the water restriction log data
+        # for the animal
+        _preprocess_google_sheet_data(session_data=self)
+
+        # Sends preprocessed data to the NAS and the BioHPC server
+        _push_data(
+            session_data=self,
+            parallel=True,
+            num_threads=15,
+        )
+
+        # Extracts adn saves animal surgery data and updates the water restriction log with animal runtime data.
+        _preprocess_google_sheet_data(session_data=self)
+
+        message = "Data preprocessing: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+
+@dataclass()
+class LickTrainingDescriptor(YamlConfig):
+    """This class is used to save the description information specific to lick training sessions as a .yaml file."""
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float = 0.0
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    average_reward_delay_s: int = 12
+    """Stores the center-point for the reward delay distribution, in seconds."""
+    maximum_deviation_from_average_s: int = 6
+    """Stores the deviation value, in seconds, used to determine the upper and lower bounds for the reward delay 
+    distribution."""
+    maximum_water_volume_ml: float = 1.0
+    """Stores the maximum volume of water the system is allowed to dispense during training."""
+    maximum_training_time_m: int = 40
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
+
+
+@dataclass()
+class RunTrainingDescriptor(YamlConfig):
+    """This class is used to save the description information specific to run training sessions as a .yaml file."""
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float = 0.0
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    final_running_speed_cm_s: float = 0.0
+    """Stores the final running speed threshold that was active at the end of training."""
+    final_speed_duration_s: float = 0.0
+    """Stores the final running duration threshold that was active at the end of training."""
+    initial_running_speed_cm_s: float = 0.0
+    """Stores the initial running speed threshold, in centimeters per second, used during training."""
+    initial_speed_duration_s: float = 0.0
+    """Stores the initial above-threshold running duration, in seconds, used during training."""
+    increase_threshold_ml: float = 0.0
+    """Stores the volume of water delivered to the animal, in milliliters, that triggers the increase in the running 
+    speed and duration thresholds."""
+    increase_running_speed_cm_s: float = 0.0
+    """Stores the value, in centimeters per second, used by the system to increment the running speed threshold each 
+    time the animal receives 'increase_threshold' volume of water."""
+    increase_speed_duration_s: float = 0.0
+    """Stores the value, in seconds, used by the system to increment the duration threshold each time the animal 
+    receives 'increase_threshold' volume of water."""
+    maximum_running_speed_cm_s: float = 0.0
+    """Stores the maximum running speed threshold, in centimeters per second, the system is allowed to use during 
+    training."""
+    maximum_speed_duration_s: float = 0.0
+    """Stores the maximum above-threshold running duration, in seconds, the system is allowed to use during training."""
+    maximum_water_volume_ml: float = 1.0
+    """Stores the maximum volume of water the system is allowed to dispensed during training."""
+    maximum_training_time_m: int = 40
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
+
+
+@dataclass()
+class MesoscopeExperimentDescriptor(YamlConfig):
+    """This class is used to save the description information specific to experiment sessions as a .yaml file."""
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float = 0.0
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -85,14 +532,23 @@ def _delete_directory(directory_path: Path) -> None:
 
     # Deletes files in parallel
     with ThreadPoolExecutor() as executor:
-        executor.map(os.unlink, files)
+        list(executor.map(os.unlink, files))  # Forces completion of all tasks\
 
     # Recursively deletes subdirectories
     for subdir in subdirectories:
         _delete_directory(subdir)
 
-    # Removes the now-empty directory
-    os.rmdir(directory_path)
+    # Removes the now-empty directory. Since Windows (ScanImagePC) is slow to release handles at some points, adds an
+    # optional delay step to give Windows time to release file handles.
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            os.rmdir(directory_path)
+            break  # Breaks early if the call succeeds
+        except Exception:
+            if attempt == max_attempts - 1:
+                break  # Breaks after 5 attempts
+            time.sleep(0.5)  # For each failed attempt, sleeps for 500 ms
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
@@ -475,7 +931,7 @@ def _process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path)
     )
 
 
-def _preprocess_video_names(raw_data_directory: Path) -> None:
+def _preprocess_video_names(session_data: SessionData) -> None:
     """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
 
     This is a minor preprocessing function primarily designed to make further data processing steps more human-readable.
@@ -485,11 +941,11 @@ def _preprocess_video_names(raw_data_directory: Path) -> None:
         (right camera).
 
     Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        session_data: The SessionData instance that manages the data for the processed session.
     """
 
     # Resolves the path to the camera frame directory
-    camera_frame_directory = raw_data_directory.joinpath("camera_frames")
+    camera_frame_directory = session_data.camera_frames_path
 
     # Renames the video files to use human-friendly names. Assumes the standard data acquisition configuration with 3
     # cameras and predefined camera IDs.
@@ -511,8 +967,7 @@ def _preprocess_video_names(raw_data_directory: Path) -> None:
 
 
 def _pull_mesoscope_data(
-    raw_data_directory: Path,
-    mesoscope_root_directory: Path,
+    session_data: SessionData,
     num_threads: int = 30,
     remove_sources: bool = True,
     verify_transfer_integrity: bool = True,
@@ -540,10 +995,7 @@ def _pull_mesoscope_data(
         reference for all further motion estimation procedures carried out during future sessions.
 
     Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
-        mesoscope_root_directory: The Path to the root directory that stores all experiment data on the ScanImagePC.
-        num_threads: The number of parallel threads used for transferring the data from ScanImage (mesoscope) PC to
-            the local machine.
+        session_data: The SessionData instance that manages the data for the processed session.
         remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
             Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
             this to True will only mark the data for removal. The data will not be removed until 'purge-data' command
@@ -551,14 +1003,9 @@ def _pull_mesoscope_data(
         verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
             performed before source folder is marked for removal from the ScanImagePC if remove_sources is True.
     """
-    # Overall, the path to raw_data folder looks like this: root/project/animal/session/raw_data. This indexes the
-    # session, project, and animal names from the path.
-    session_name = raw_data_directory.parents[0].name
-    animal_name = raw_data_directory.parents[1].name
-    project_name = raw_data_directory.parents[2].name
-
     # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
-    source = mesoscope_root_directory.joinpath(f"{session_name}_mesoscope_frames")
+    session_name = session_data.session_name
+    source = session_data.mesoscope_root_path.joinpath(f"{session_name}_mesoscope_frames")
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -568,7 +1015,7 @@ def _pull_mesoscope_data(
     # Otherwise, if the source exists and is not marked for deletion, pulls the frame to the target directory:
 
     # Precreates the temporary storage directory for the pulled data.
-    destination = raw_data_directory.joinpath("raw_mesoscope_frames")
+    destination = session_data.raw_data_path.joinpath("raw_mesoscope_frames")
     ensure_directory_exists(destination)
 
     # Defines the set of extensions to look for when verifying source folder contents
@@ -638,9 +1085,7 @@ def _pull_mesoscope_data(
     # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
     # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
     # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = mesoscope_root_directory.joinpath(
-        "persistent_data", project_name, animal_name, "MotionEstimator.me"
-    )
+    persistent_motion_estimator_path = session_data.mesoscope_persistent_path.joinpath("MotionEstimator.me")
     ensure_directory_exists(persistent_motion_estimator_path.parent)
     if not persistent_motion_estimator_path.exists():
         sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
@@ -668,7 +1113,7 @@ def _pull_mesoscope_data(
 
 
 def _preprocess_mesoscope_directory(
-    raw_data_directory: Path,
+    session_data: SessionData,
     num_processes: int,
     remove_sources: bool = True,
     batch: bool = False,
@@ -701,7 +1146,7 @@ def _preprocess_mesoscope_directory(
         pipeline.
 
     Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        session_data: The SessionData instance that manages the data for the processed session.
         num_processes: The maximum number of processes to use while processing the directory. Each process is used to
             compress a stack of TIFF files in parallel.
         remove_sources: Determines whether to remove the original TIFF files after they have been processed.
@@ -715,19 +1160,19 @@ def _preprocess_mesoscope_directory(
             number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the paths to the specific directories used during processing
-    image_directory = raw_data_directory.joinpath("raw_mesoscope_frames")  # Should exist inside the raw data directory
-    output_directory = raw_data_directory.joinpath("mesoscope_frames")
-    ensure_directory_exists(output_directory)  # Generates the directory
-
-    # Also resolves paths to the output files
-    frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
-    frame_variant_metadata_path = output_directory.joinpath("frame_variant_metadata.npz")
-    ops_path = output_directory.joinpath("ops.json")
+    image_directory = session_data.raw_data_path.joinpath("raw_mesoscope_frames")
 
     # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
     # acquired at all. Aborts processing early.
     if not image_directory.exists():
         return
+
+    # Otherwise, resolves the paths to the output directories and files
+    output_directory = session_data.raw_data_path.joinpath("mesoscope_frames")
+    ensure_directory_exists(output_directory)  # Generates the directory
+    frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
+    frame_variant_metadata_path = output_directory.joinpath("frame_variant_metadata.npz")
+    ops_path = output_directory.joinpath("ops.json")
 
     # Precreates the dictionary to store frame-variant metadata extracted from all TIFF frames before they are
     # compressed into BigTiff.
@@ -822,7 +1267,7 @@ def _preprocess_mesoscope_directory(
 
 
 def _preprocess_log_directory(
-    raw_data_directory: Path, num_processes: int, remove_sources: bool = True, verify_integrity: bool = False
+    session_data: SessionData, num_processes: int, remove_sources: bool = True, verify_integrity: bool = False
 ) -> None:
     """Compresses all .npy (uncompressed) log entries stored in the behavior log directory into one or more .npz
     archives.
@@ -832,7 +1277,7 @@ def _preprocess_log_directory(
     BioHPC server.
 
     Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
+        session_data: The SessionData instance that manages the data for the processed session.
         num_processes: The maximum number of processes to use while processing the directory.
         remove_sources: Determines whether to remove the original .npy files after they are compressed into .npz
             archives. It is recommended to have this option enabled.
@@ -844,7 +1289,7 @@ def _preprocess_log_directory(
         RuntimeError: If the target log directory contains both compressed and uncompressed log entries.
     """
     # Resolves the path to the log directory, using either the input or initialized logger class.
-    log_directory = raw_data_directory.joinpath("behavior_data_log")
+    log_directory = session_data.raw_data_path.joinpath("behavior_data_log")
 
     # Searches for compressed and uncompressed files inside the log directory
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
@@ -870,18 +1315,16 @@ def _preprocess_log_directory(
     # If both compressed and uncompressed log files existing in the same directory, aborts with an error
     elif len(compressed_files) > 0 and len(uncompressed_files) > 0:
         message = (
-            "The input log directory contains both compressed and uncompressed log files. Since compression overwrites "
-            "the .npz archive with the processed data, it is unsafe to proceed with log compression in automated mode."
-            "Manually back up the existing .npz files, remove them from the log directory and call the processing "
-            "method again."
+            f"The log directory for session {session_data.session_name} contains both compressed and uncompressed log "
+            f"files. Since compression overwrites the .npz archive with the processed data, it is unsafe to proceed "
+            f"with log compression in automated mode. Manually back up the existing .npz files, remove them from the "
+            f"log directory and call the processing method again."
         )
         console.error(message, error=RuntimeError)
 
 
 def _push_data(
-    raw_data_directory: Path,
-    server_root_directory: Path,
-    nas_root_directory: Path,
+    session_data: SessionData,
     parallel: bool = True,
     num_threads: int = 15,
 ) -> None:
@@ -897,10 +1340,7 @@ def _push_data(
         positions.
 
     Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
-        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
-            data.
-        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
+        session_data: The SessionData instance that manages the data for the processed session.
         parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
             data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
             of parallel threads used by each transfer process or the number of threads used to compute the
@@ -912,18 +1352,18 @@ def _push_data(
     """
 
     # Resolves source and destination paths
-    session_name = raw_data_directory.parents[0].name
-    animal_name = raw_data_directory.parents[1].name
-    project_name = raw_data_directory.parents[2].name
+    session_name = session_data.session_name
+    animal_name = session_data.animal_id
+    project_name = session_data.project_name
 
     # Resolves a tuple of destination paths
     destinations = (
-        nas_root_directory.joinpath(project_name, animal_name, session_name, "raw_data"),
-        server_root_directory.joinpath(project_name, animal_name, session_name, "raw_data"),
+        session_data.nas_root_path.joinpath(project_name, animal_name, session_name, "raw_data"),
+        session_data.server_root_path.joinpath(project_name, animal_name, session_name, "raw_data"),
     )
 
     # Computes the xxHash3-128 checksum for the source folder
-    calculate_directory_checksum(directory=raw_data_directory, num_processes=None, save_checksum=True)
+    calculate_directory_checksum(directory=session_data.raw_data_path, num_processes=None, save_checksum=True)
 
     # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
     if parallel:
@@ -931,7 +1371,7 @@ def _push_data(
             futures = {
                 executor.submit(
                     transfer_directory,
-                    source=raw_data_directory,
+                    source=session_data.raw_data_path,
                     destination=destination,
                     num_threads=num_threads,
                     verify_integrity=False,  # This is now done on the server directly
@@ -947,83 +1387,98 @@ def _push_data(
     else:
         for destination in destinations:
             transfer_directory(
-                source=raw_data_directory,
+                source=session_data.raw_data_path,
                 destination=destination,
                 num_threads=num_threads,
                 verify_integrity=False,  # This is now done on the server directly
             )
 
 
-def preprocess_session_directory(
-    raw_data_directory: Path, mesoscope_root_directory: Path, server_root_directory: Path, nas_root_directory: Path
-) -> None:
-    """Prepares the target session directory for long-term storage and further processing on the BioHPC server.
+def _preprocess_google_sheet_data(session_data: SessionData) -> None:
+    """Updates the water restriction log and the surgery_data.yaml file.
 
-    This function acts as the central API for all data preprocessing tasks. Primarily, data preprocessing is used to
-    aggregate all acquired data on the VRPC, compress the data to optimize network transmission and long-term NAS
-    storage, and uploads the data to NAS and the BioHPC server.
+    This internal method is called as part of preprocessing. Primarily, it is used to ensure that the surgery data
+    extracted and stored in the 'metadata' folder of each processed animal is actual. It also updates the water
+    restriction log for the managed animal to reflect the water received before and after runtime. This step improves
+    user experience by ensuring all relevant data is always kept together on the NAS and BioHPC server while preventing
+    the experimenter from manually updating the log after data preprocessing.
 
-    Notes:
-        This function is designed to safely handle all session types (training and experiment) and resume interrupted
-        preprocessing sessions. Therefore, it is safe to call this function on already preprocessed directories.
-
-        This function is heavily optimized for our VRPC specs and uses multiprocessing to preprocess sessions within
-        10-15 minutes after acquisition completion. It is designed to run in-parallel with preparing for the next
-        session, but should not run together with active session data acquisition.
-
-    Args:
-        raw_data_directory: The Path to the target session raw_data directory to be processed.
-        mesoscope_root_directory: The Path to the root directory used to store all mesoscope-acquired data on the
-            ScanImagePC.
-        server_root_directory: The Path to the BioHPC server root directory used to store all training and experiment
-            data.
-        nas_root_directory: The Path to the NAS root directory used to store all training and experiment data.
+    Raises:
+        ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
     """
 
-    # Enables console, if it is not enabled
-    if not console.enabled:
-        console.enable()
+    # Resolves the animal ID (name)
+    animal_id = int(session_data.animal_id)
 
-    message = "Initializing data preprocessing..."
+    message = f"Writing water restriction log entry..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Compresses all log entries (.npy) into archive files (.npz)
-    _preprocess_log_directory(
-        raw_data_directory=raw_data_directory, num_processes=31, remove_sources=True, verify_integrity=False
+    # Loads the session descriptor file to read the data needed to update the wr log
+    descriptor_path = session_data.session_descriptor_path
+    descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
+    if session_data.session_type == "lick_training":
+        descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type == "run_training":
+        descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type == "experiment":
+        descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
+    else:
+        message = (
+            f"Unable to extract the water restriction data from the session descriptor file for session "
+            f"{session_data.session_name}. Expected the session_type field of the SessionData instance to be one of "
+            f"the supported options (lick_training, run_training, experiment) but instead encountered "
+            f"{session_data.session_type}."
+        )
+        console.error(message, error=ValueError)
+
+        # This should not be reachable, it is here to appease mypy.
+        raise ValueError(message)  # pragma: no cover
+
+    # Calculates the total volume of water, in ml, the animal received during and after the session
+    training_water = round(descriptor.dispensed_water_volume_ml, ndigits=3)
+    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
+    total_water = training_water + experimenter_water
+
+    # Connects to the WR sheet and generates the new water restriction log entry
+    wr_sheet = WaterSheetData(
+        animal_id=animal_id,
+        credentials_path=Path(session_data.credentials_path),
+        sheet_id=session_data.water_log_sheet_id,
     )
 
-    # Renames all videos to use human-friendly names
-    _preprocess_video_names(raw_data_directory=raw_data_directory)
-
-    # Pulls mesoscope-acquired data from the ScanImagePC to the VRPC
-    _pull_mesoscope_data(
-        raw_data_directory=raw_data_directory,
-        mesoscope_root_directory=mesoscope_root_directory,
-        num_threads=31,
-        remove_sources=True,
-        verify_transfer_integrity=True,
+    wr_sheet.update_water_log(
+        mouse_weight=descriptor.mouse_weight_g,
+        water_ml=total_water,
+        experimenter_id=descriptor.experimenter,
     )
 
-    # Compresses all mesoscope-acquired frames and extracts their metadata
-    _preprocess_mesoscope_directory(
-        raw_data_directory=raw_data_directory,
-        num_processes=31,
-        remove_sources=True,
-        verify_integrity=True,
-        batch_size=100,
-    )
+    message = f"Water restriction log entry: written."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Sends preprocessed data to the NAS and the BioHPC server
-    _push_data(
-        raw_data_directory=raw_data_directory,
-        server_root_directory=server_root_directory,
-        nas_root_directory=nas_root_directory,
-        parallel=True,
-        num_threads=15,
-    )
-
-    message = "Data preprocessing: Complete."
+    message = f"Updating animal surgery data file..."
     console.echo(message=message, level=LogLevel.INFO)
+
+    # Resolves the paths to the surgery data files stored inside the metadata folder of the managed animal at each
+    # destination.
+    local_surgery_path = session_data.local_metadata_path.joinpath("surgery_metadata.yaml")
+    server_surgery_path = session_data.server_metadata_path.joinpath("surgery_metadata.yaml")
+    nas_surgery_path = session_data.nas_metadata_path.joinpath("surgery_metadata.yaml")
+
+    # Loads and parses the data from the surgery log Google Sheet file
+    sl_sheet = SurgerySheet(
+        project_name=session_data.project_name,
+        credentials_path=Path(session_data.credentials_path),
+        sheet_id=session_data.surgery_sheet_id,
+    )
+    data: SurgeryData = sl_sheet.extract_animal_data(animal_id=animal_id)
+
+    # Saves the data as a .yaml file locally, to the server, and the NAS.
+    data.to_yaml(local_surgery_path)
+    data.to_yaml(server_surgery_path)
+    data.to_yaml(nas_surgery_path)
+
+    message = f"Surgery data: saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
@@ -1081,9 +1536,9 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
 def purge_redundant_data(
     remove_ubiquitin: bool,
     remove_telomere: bool,
-    local_root_path: Path,
-    server_root_path: Path,
-    mesoscope_root_path: Path,
+    local_root_path: Path = Path("/media/Data/Experiments"),
+    server_root_path: Path = Path("/media/cbsuwsun/storage/sun_data"),
+    mesoscope_root_path: Path = Path("/home/cybermouse/scanimage/mesodata"),
 ) -> None:
     """Loops over ScanImagePC and VRPC directories that store training and experiment data and removes no longer
     necessary data caches.
@@ -1139,3 +1594,6 @@ def purge_redundant_data(
         message = "Purging redundant VRPC directories..."
         console.echo(message=message, level=LogLevel.INFO)
         _resolve_telomere_markers(server_root_path, local_root_path)
+
+    message = "Purging: Complete"
+    console.echo(message=message, level=LogLevel.SUCCESS)

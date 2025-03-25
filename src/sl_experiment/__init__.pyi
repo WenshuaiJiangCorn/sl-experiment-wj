@@ -6,8 +6,12 @@ from .experiment import (
 )
 from .data_processing import process_log_directory as process_log_directory
 from .data_preprocessing import (
+    SessionData as SessionData,
+    RunTrainingDescriptor as RunTrainingDescriptor,
+    LickTrainingDescriptor as LickTrainingDescriptor,
+    RuntimeHardwareConfiguration as RuntimeHardwareConfiguration,
+    MesoscopeExperimentDescriptor as MesoscopeExperimentDescriptor,
     purge_redundant_data as purge_redundant_data,
-    preprocess_session_directory as preprocess_session_directory,
 )
 
 __all__ = [
@@ -15,7 +19,11 @@ __all__ = [
     "vr_maintenance_logic",
     "run_train_logic",
     "run_experiment_logic",
-    "preprocess_session_directory",
     "purge_redundant_data",
     "process_log_directory",
+    "SessionData",
+    "LickTrainingDescriptor",
+    "RunTrainingDescriptor",
+    "MesoscopeExperimentDescriptor",
+    "RuntimeHardwareConfiguration",
 ]

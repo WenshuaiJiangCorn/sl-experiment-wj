@@ -7,7 +7,7 @@ from pynput import keyboard
 from _typeshed import Incomplete
 from numpy.typing import NDArray as NDArray
 from ataraxis_time import PrecisionTimer
-from ataraxis_data_structures import DataLogger, YamlConfig, SharedMemoryArray
+from ataraxis_data_structures import DataLogger, SharedMemoryArray
 from ataraxis_communication_interface import MQTTCommunication
 
 from .visualizers import BehaviorVisualizer as BehaviorVisualizer
@@ -23,62 +23,12 @@ from .module_interfaces import (
     ValveInterface as ValveInterface,
 )
 from .data_preprocessing import (
+    SessionData as SessionData,
+    RunTrainingDescriptor as RunTrainingDescriptor,
+    LickTrainingDescriptor as LickTrainingDescriptor,
     RuntimeHardwareConfiguration as RuntimeHardwareConfiguration,
-    preprocess_session_directory as preprocess_session_directory,
+    MesoscopeExperimentDescriptor as MesoscopeExperimentDescriptor,
 )
-from .google_sheet_tools import (
-    SurgeryData as SurgeryData,
-    SurgerySheet as SurgerySheet,
-    WaterSheetData as WaterSheetData,
-)
-
-@dataclass()
-class _LickTrainingDescriptor(YamlConfig):
-    """This class is used to save the description information specific to lick training sessions as a .yaml file."""
-
-    experimenter: str
-    mouse_weight_g: float
-    session_type: str = ...
-    dispensed_water_volume_ul: float = ...
-    average_reward_delay_s: int = ...
-    maximum_deviation_from_average_s: int = ...
-    maximum_water_volume_ml: float = ...
-    maximum_training_time_m: int = ...
-    experimenter_notes: str = ...
-    experimenter_given_water_volume_ml: float = ...
-
-@dataclass()
-class _RunTrainingDescriptor(YamlConfig):
-    """This class is used to save the description information specific to run training sessions as a .yaml file."""
-
-    experimenter: str
-    mouse_weight_g: float
-    session_type: str = ...
-    dispensed_water_volume_ul: float = ...
-    final_running_speed_cm_s: float = ...
-    final_speed_duration_s: float = ...
-    initial_running_speed_cm_s: float = ...
-    initial_speed_duration_s: float = ...
-    increase_threshold_ml: float = ...
-    increase_running_speed_cm_s: float = ...
-    increase_speed_duration_s: float = ...
-    maximum_running_speed_cm_s: float = ...
-    maximum_speed_duration_s: float = ...
-    maximum_water_volume_ml: float = ...
-    maximum_training_time_m: int = ...
-    experimenter_notes: str = ...
-    experimenter_given_water_volume_ml: float = ...
-
-@dataclass()
-class _MesoscopeExperimentDescriptor(YamlConfig):
-    """This class is used to save the description information specific to experiment sessions as a .yaml file."""
-
-    experimenter: str
-    mouse_weight_g: float
-    session_type: str = ...
-    dispensed_water_volume_ul: float = ...
-    experimenter_notes: str = ...
-    experimenter_given_water_volume_ml: float = ...
 
 @dataclass()
 class ExperimentState:
@@ -177,200 +127,7 @@ class _KeyboardListener:
         This is used during run training to manually update the running epoch duration threshold.
         """
 
-class SessionData:
-    """Provides methods for managing the data acquired during one experiment or training session.
-
-    This class functions as the central hub for collecting the data from all local PCs involved in the data acquisition
-    process and pushing it to the NAS and the BioHPC server. Its primary purpose is to maintain the session data
-    structure across all supported destinations and to efficiently and safely move the data to these destinations with
-    minimal redundancy and footprint. Additionally, this class generates the paths used by all other classes from
-    this library to determine where to load and saved various data during runtime.
-
-    As part of its initialization, the class generates the session directory for the input animal and project
-    combination. Session directories use the current UTC timestamp, down to microseconds, as the directory name. This
-    ensures that each session name is unique and preserves the overall session order.
-
-    Notes:
-        Do not call methods from this class directly. This class is intended to be used through the MesoscopeExperiment
-        and BehaviorTraining classes. The only reason the class is defined as public is to support reconfiguring major
-        source / destination paths (NAS, BioHPC, etc.).
-
-        It is expected that the server, nas, and mesoscope data directories are mounted on the host-machine via the
-        SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
-        the OS has full access to these directories and filesystems.
-
-        This class is specifically designed for working with raw data from a single animal participating in a single
-        experimental project session. Processed data is managed by the processing library methods and classes.
-
-        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each
-        experimental session 'raw_data' directory. The checksum verifies the data of each file and the paths to each
-        file relative to the 'raw_data' root directory.
-
-        This class also works with Sun lab Google Sheet logs to write water restriction data and read surgery data for
-        processed animals. Overall, this is aimed at centralizing all raw data processing under a single binding and to
-        collect all data in the same directory structure.
-
-    Args:
-        project_name: The name of the project managed by the class.
-        animal_name: The name of the animal managed by the class.
-        generate_mesoscope_paths: Determines whether the managed session uses ScanImage (mesoscope) PC. Training
-            sessions that do not use the Mesoscope do not need to resolve paths to mesoscope data folders and storage
-            directories.
-        surgery_sheet_id: The ID for the Google Sheet file used to store surgery information for the animals used in the
-            currently managed project. This is used to parse and write the surgery data for each managed animal into
-            its 'metadata' folder.
-        water_log_sheet_id: The ID for the Google Sheet file used to store water restriction information for the animals
-            used in the currently managed project. This is used to automatically update water restriction logs for each
-            animal during training or experiment sessions.
-        credentials_path: The path to the locally stored .JSON file that stores the service account credentials used to
-            read and write Google Sheet data.
-        local_root_directory: The path to the root directory where all projects are stored on the host-machine. Usually,
-            this is the 'Experiments' folder on the 16TB volume of the VRPC machine.
-        server_root_directory: The path to the root directory where all projects are stored on the BioHPC server
-            machine. Usually, this is the 'storage/SunExperiments' (RAID 6) volume of the BioHPC server.
-        nas_root_directory: The path to the root directory where all projects are stored on the Synology NAS. Usually,
-            this is the non-compressed 'raw_data' directory on one of the slow (RAID 6) volumes, such as Volume 1.
-        mesoscope_data_directory: The path to the directory where the mesoscope saves acquired frame data. Usually, this
-            directory is on the fast Data volume (NVME) and is cleared of data after each acquisition runtime, such as
-            the /mesodata/mesoscope_frames directory. Note, this class will delete and recreate the directory during its
-            runtime, so it is highly advised to make sure it does not contain any important non-session-related data.
-
-    Attributes:
-        _surgery_sheet_id: Stores the ID for the Google Sheet file used to store surgery information for the animals
-            used in the currently managed project.
-        _water_log_sheet_id: Stores the ID for the Google Sheet file used to store water restriction information for
-           the animals in the currently managed project.
-        _credentials_path: The path to the .JSON file that stores the service account credentials used to read and
-            write data from the surgery and water restriction Google Sheets.
-        _local: The path to the host-machine directory for the managed project, animal, and session combination.
-            This path points to the 'raw_data' subdirectory that stores all acquired and preprocessed session data.
-        _server: The path to the root BioHPC server directory.
-        _nas: The path to the root Synology NAS directory.
-        _mesoscope: The path to the root ScanImage PC (mesoscope) data directory. This directory is shared by
-            all projects, animals, and sessions.
-        _persistent: The path to the host-machine directory used to retain persistent data from previous session(s) of
-            the managed project and animal combination. For example, this directory is used to persist Zaber positions
-            and mesoscope motion estimator files when the original session directory is moved to nas and server.
-        _metadata: The path to the host-machine directory used to store the metadata information about the managed
-            project and animal combination. This information typically does not change across sessions, but it is also
-            exported to the nas and server, like the raw data.
-            directory. This directory ios used to persist motion estimator files between experimental sessions.
-        _project_name: Stores the name of the project whose data is managed by the class.
-        _animal_name: Stores the name of the animal whose data is managed by the class.
-        _session_name: Stores the name of the session directory whose data is managed by the class.
-        _mesoscope_frames_exist: A boolean flag used to trigger additional mesoscope_frame directory preprocessing.
-            This data preprocessing is not needed for runtimes that do not acquire mesoscope frames.
-    """
-
-    _surgery_sheet_id: str
-    _water_log_sheet_id: str
-    _credentials_path: Path
-    _local: Path
-    _persistent: Path
-    _metadata: Path
-    _project_name: str
-    _animal_name: str
-    _session_name: str
-    _mesoscope: Path
-    _server: Path
-    _nas: Path
-    _mesoscope_frames_exist: bool
-    def __init__(
-        self,
-        project_name: str,
-        animal_name: str,
-        surgery_sheet_id: str,
-        water_log_sheet_id: str,
-        generate_mesoscope_paths: bool = True,
-        credentials_path: Path = ...,
-        local_root_directory: Path = ...,
-        server_root_directory: Path = ...,
-        nas_root_directory: Path = ...,
-        mesoscope_data_directory: Path = ...,
-    ) -> None: ...
-    @property
-    def raw_data_path(self) -> Path:
-        """Returns the path to the 'raw_data' directory of the managed session.
-
-        The raw_data is the root directory for aggregating all acquired and preprocessed data. This path is primarily
-        used by MesoscopeExperiment class to determine where to save captured videos, data logs, and other acquired data
-        formats. After runtime, SessionData pulls all mesoscope frames into this directory.
-        """
-    @property
-    def camera_frames_path(self) -> Path:
-        """Returns the path to the camera_frames directory of the managed session.
-
-        This path is used during camera data preprocessing to store the videos and extracted frame timestamps for all
-        video cameras used to record behavior.
-        """
-    @property
-    def zaber_positions_path(self) -> Path:
-        """Returns the path to the zaber_positions.yaml file of the managed session.
-
-        This path is used to save the positions for all Zaber motors of the HeadBar and LickPort controllers at the
-        end of the experimental session. This allows restoring the motors to those positions during the following
-        experimental session(s).
-        """
-    @property
-    def session_descriptor_path(self) -> Path:
-        """Returns the path to the session_descriptor.yaml file of the managed session.
-
-        This path is used to save important session information to be viewed by experimenters post-runtime and to use
-        for further processing. This includes the type of the session (e.g. 'lick_training') and the total volume of
-        water delivered during runtime (important for water restriction).
-        """
-    @property
-    def hardware_configuration_path(self) -> Path:
-        """Returns the path to the hardware_configuration.yaml file of the managed session.
-
-        This file stores hardware module parameters used to read and parse .npz log files during data processing.
-        """
-    @property
-    def previous_zaber_positions_path(self) -> Path:
-        """Returns the path to the zaber_positions.yaml file of the previous session.
-
-        The file is stored inside the 'persistent' directory of the project and animal combination. The file is saved to
-        the persistent directory when the original session is moved to long-term storage. Loading the file allows
-        reusing LickPort and HeadBar motor positions across sessions. The contents of this file are updated after each
-        experimental or training session.
-        """
-    def write_water_restriction_data(self, experimenter_id: str, animal_weight: float, water_volume: float) -> None:
-        """Updates the water restriction log tab for the currently managed project and animal with the provided data.
-
-        This method should be called at the end of each training and experiment runtime to automatically update the
-        water restriction log with the data provided by experimenter and gathered automatically during runtime.
-        Primarily, this method is intended to streamline experiments by synchronizing the Google Sheet logs with the
-        data acquired during runtime.
-
-        Args:
-            experimenter_id: The ID of the experimenter who collected the data.
-            animal_weight: The weight of the animal in grams at the beginning of the runtime.
-            water_volume: The total volume of water delivered during the experimental session in milliliters. This
-                includes the water dispensed during runtime and the water given manually by the experimenter after
-                runtime.
-        """
-    def write_surgery_data(self) -> None:
-        """Extracts the surgery data for the currently managed project and animal combination from the surgery log
-        Google Sheet and saves it to the local, server and the NAS metadata directories.
-
-        This method is used to actualize the surgery data stored in the 'metadata' directories after each training or
-        experiment runtime. Although it is not necessary to always overwrite the metadata, since this takes very little
-        time, the current mode of operation is to always update this data.
-        """
-    def preprocess_session_data(self) -> None:
-        """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
-        processing.
-
-        This method should be called at the end of each training and experiment runtime to compress and safely transfer
-        the data to its long-term storage destinations.
-
-        Notes:
-            The method will NOT delete the data from the VRPC or ScanImagePC. To safely remove the data, use the
-            purge-redundant-data CLI command. The data will only be removed if it has been marked for removal by our
-            data management algorithms, which ensure we have enough spare copies of the data elsewhere.
-        """
-
-class MesoscopeExperiment:
+class _MesoscopeExperiment:
     """The base class for all mesoscope experiment runtimes.
 
     This class provides methods for conducting experiments using the Mesoscope-VR system. It abstracts most
@@ -454,7 +211,7 @@ class MesoscopeExperiment:
 
     _state_map: dict[int, str]
     _started: bool
-    descriptor: _MesoscopeExperimentDescriptor
+    descriptor: MesoscopeExperimentDescriptor
     _vr_state: int
     _experiment_state: int
     _timestamp_timer: PrecisionTimer
@@ -470,7 +227,7 @@ class MesoscopeExperiment:
     def __init__(
         self,
         session_data: SessionData,
-        descriptor: _MesoscopeExperimentDescriptor,
+        descriptor: MesoscopeExperimentDescriptor,
         cue_length_map: dict[int, float],
         screens_on: bool = False,
         experiment_state: int = 0,
@@ -584,7 +341,7 @@ class MesoscopeExperiment:
         in real time during the experiment session.
         """
 
-class BehaviorTraining:
+class _BehaviorTraining:
     """The base class for all behavior training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
@@ -648,7 +405,7 @@ class BehaviorTraining:
 
     _started: bool
     _lick_training: bool
-    descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor
+    descriptor: LickTrainingDescriptor | RunTrainingDescriptor
     _screen_on: bool
     _session_data: SessionData
     _logger: DataLogger
@@ -659,7 +416,7 @@ class BehaviorTraining:
     def __init__(
         self,
         session_data: SessionData,
-        descriptor: _LickTrainingDescriptor | _RunTrainingDescriptor,
+        descriptor: LickTrainingDescriptor | RunTrainingDescriptor,
         screens_on: bool = False,
         actor_port: str = "/dev/ttyACM0",
         sensor_port: str = "/dev/ttyACM1",
@@ -736,12 +493,9 @@ class BehaviorTraining:
         """
 
 def lick_training_logic(
-    project: str,
-    animal: str,
     experimenter: str,
     animal_weight: float,
-    surgery_log_id: str,
-    water_restriction_log_id: str,
+    session_data: SessionData,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     average_reward_delay: int = 12,
     maximum_deviation_from_mean: int = 6,
@@ -767,13 +521,9 @@ def lick_training_logic(
         to run lick training with parameters specific to each project.
 
     Args:
-        project: The name of the project the animal belongs to.
-        animal: The id (name) of the animal being trained.
         experimenter: The id of the experimenter conducting the training.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
-        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
-            trained animal.
+        session_data: The SessionData instance that manages the data acquired during training.
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
             microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
@@ -806,18 +556,15 @@ def vr_maintenance_logic(valve_calibration_data: tuple[tuple[int | float, int | 
     """
 
 def run_train_logic(
-    project: str,
-    animal: str,
     experimenter: str,
     animal_weight: float,
-    surgery_log_id: str,
-    water_restriction_log_id: str,
+    session_data: SessionData,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     initial_speed_threshold: float = 0.05,
     initial_duration_threshold: float = 0.05,
     speed_increase_step: float = 0.05,
-    duration_increase_step: float = 0.05,
-    increase_threshold: float = 0.1,
+    duration_increase_step: float = 0.0,
+    increase_threshold: float = 0.2,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
@@ -851,13 +598,9 @@ def run_train_logic(
         to run lick training with parameters specific to each project.
 
     Args:
-        project: The name of the project the animal belongs to.
-        animal: The id (name) of the animal being trained.
         experimenter: The id of the experimenter conducting the training.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
-        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
-            trained animal.
+        session_data: The SessionData instance that manages the data acquired during training.
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
             microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
@@ -885,12 +628,9 @@ def run_train_logic(
     """
 
 def run_experiment_logic(
-    project: str,
-    animal: str,
     experimenter: str,
     animal_weight: float,
-    surgery_log_id: str,
-    water_restriction_log_id: str,
+    session_data: SessionData,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     cue_length_map: dict[int, float],
     experiment_state_sequence: tuple[ExperimentState, ...],
@@ -918,13 +658,9 @@ def run_experiment_logic(
         project-specific parameters.
 
     Args:
-        project: The name of the project the animal belongs to.
-        animal: The id (name) of the animal running the experiment.
         experimenter: The id of the experimenter conducting the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        surgery_log_id: The ID for the Google Sheet file used to store surgery information for the trained animal.
-        water_restriction_log_id: The ID for the Google Sheet file used to store water restriction information for the
-            trained animal.
+        session_data: The SessionData instance that manages the data acquired during the experiment.
         valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
             the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
             microliters. This is used to determine how long to keep the valve open to deliver the specific volume of

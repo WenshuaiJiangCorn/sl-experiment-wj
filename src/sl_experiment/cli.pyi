@@ -14,8 +14,8 @@ from .zaber_bindings import (
     discover_zaber_devices as discover_zaber_devices,
 )
 from .data_preprocessing import (
+    SessionData as SessionData,
     purge_redundant_data as purge_redundant_data,
-    preprocess_session_directory as preprocess_session_directory,
 )
 
 valve_calibration_data: Incomplete
