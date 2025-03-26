@@ -1136,7 +1136,7 @@ class VideoSystems:
             preset=GPUEncoderPresets.FASTEST,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=30,
+            quantization_parameter=35,
         )
 
         # LEFT CAMERA. A 1080P security camera that is mounted on the left side from the mouse's perspective
