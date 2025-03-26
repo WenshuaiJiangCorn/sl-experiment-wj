@@ -145,7 +145,7 @@ class SessionData(YamlConfig):
 
         # If the session name is provided, ends the runtime early. This is here to support initializing the
         # SessionData class from the path to the root directory of a previous created session.
-        if self.session_name is not None:
+        if 'None' not in self.session_name:
             return
 
         # Acquires the UTC timestamp to use as the session name
@@ -237,7 +237,7 @@ class SessionData(YamlConfig):
             )
             console.error(message=message, error=FileNotFoundError)
 
-        return cls.from_yaml(file_path=path.joinpath("raw_data", "session_data.yaml"))  # type: ignore
+        return cls.from_yaml(file_path=path)  # type: ignore
 
     def to_path(self) -> None:
         """Saves the data of the instance to the 'raw_data' directory of the managed session as a 'session_data.yaml'
@@ -1511,6 +1511,10 @@ def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> 
             # If marker exists, removes the local (VRPC) raw_data directory
             deletion_candidates.append(raw_data_path)
 
+    # If there are no deleting candidates, returns without further processing
+    if len(deletion_candidates) < 1:
+        return
+
     # Iteratively removes all deletion candidates gathered above
     for candidate in tqdm(deletion_candidates, desc="Deleting redundant VRPC directories", unit="directory"):
         _delete_directory(directory_path=candidate)
@@ -1531,6 +1535,11 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
     # deletion
     file: Path
     deletion_candidates = [file.parent for file in mesoscope_root_path.rglob("ubiquitin.bin")]
+
+    # If there are no deleting candidates, returns without further processing
+    if len(deletion_candidates) < 1:
+        return
+
     for candidate in tqdm(deletion_candidates, desc="Deleting redundant ScanImagePC directories", unit="directory"):
         _delete_directory(directory_path=candidate)
 

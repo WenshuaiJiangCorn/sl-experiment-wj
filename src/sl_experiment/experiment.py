@@ -1264,6 +1264,29 @@ class _BehaviorTraining:
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
+        # Generates a snapshot of the runtime hardware configuration. In turn, this data is used to parse the .npz log
+        # files during processing. Note, lick training does not use the encoder and run training does not use the torque
+        # sensor.
+        if self._lick_training:
+            hardware_configuration = RuntimeHardwareConfiguration(
+                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                has_ttl=False,
+            )
+        else:
+            hardware_configuration = RuntimeHardwareConfiguration(
+                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                has_ttl=False,
+            )
+        hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
+        message = "Hardware configuration snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Enables body cameras. Starts frame saving for all cameras
         self._cameras.start_body_cameras()
         self._cameras.save_face_camera_frames()
