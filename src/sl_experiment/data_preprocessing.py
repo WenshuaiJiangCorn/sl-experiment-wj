@@ -376,7 +376,9 @@ class SessionData(YamlConfig):
         # Note, the renaming only happens if the session-specific cache does not exist, the general
         # mesoscope_frames cache exists, and it is not empty (has files inside).
         if (
-            not session_specific_path.exists() and general_path.exists() and len(list[general_path.glob("*")]) > 0  # type: ignore
+            not session_specific_path.exists()
+            and general_path.exists()
+            and len([path for path in general_path.glob("*")]) > 0
         ):
             general_path.rename(session_specific_path)
             ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory

@@ -1797,8 +1797,9 @@ def vr_maintenance_logic(
 
         # Notifies the user about supported calibration commands
         message = (
-            "Supported valve commands: open, close, reference, reward, calibrate_15, calibrate_30, calibrate_45, "
-            "calibrate_60. Supported break (wheel) commands: lock, unlock. Use 'q' command to terminate the runtime."
+            "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
+            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Use 'q' command to terminate "
+            "the runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -1814,6 +1815,20 @@ def vr_maintenance_logic(
                 message = f"Closing valve."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.toggle(state=False)
+
+            if command == "close_10":
+                message = f"Closing the valve after a 10-second delay..."
+                console.echo(message=message, level=LogLevel.INFO)
+                start = delay_timer.elapsed
+                previous_time = delay_timer.elapsed
+                while delay_timer.elapsed - start < 10:
+                    if previous_time != delay_timer.elapsed:
+                        previous_time = delay_timer.elapsed
+                        console.echo(
+                            message=f"Remaining time: {10 - (delay_timer.elapsed - start)} seconds.",
+                            level=LogLevel.INFO,
+                        )
+                valve.toggle(state=False)  # Closes the valve after a 10-second delay
 
             if command == "reward":
                 message = f"Delivering 5 uL water reward."
