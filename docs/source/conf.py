@@ -5,7 +5,7 @@ import importlib_metadata
 project = 'sl-experiment'
 # noinspection PyShadowingBuiltins
 copyright = '2025, Ivan Kondratyev & Sun Lab'
-authors = ['Ivan Kondratyev (Inkaros)', 'Natalie Yeung', 'Katlynn Ryu', 'Jasmine Si']
+authors = ['Ivan Kondratyev (Inkaros)', 'Kushaan Gupta', 'Natalie Yeung', 'Katlynn Ryu', 'Jasmine Si']
 # Extracts the project version from the .toml file.
 release = importlib_metadata.version("sl-experiment")
 
@@ -14,7 +14,7 @@ extensions = [
     'sphinx.ext.autodoc',        # To build documentation from python source code docstrings.
     'sphinx.ext.napoleon',       # To read google-style docstrings (works with autodoc module).
     'sphinx_autodoc_typehints',  # To parse typehints into documentation
-    'sphinx_rtd_theme',          # To format the documentation html using ReadTheDocs format.
+    'sphinx_rtd_theme',          # To format the documentation HTML using ReadTheDocs format.
     'sphinx_click',              # To read docstrings and command-line arguments from click-wrapped python functions.
     'sphinx_rtd_dark_mode'       # Enables dark mode for RTD theme.
 ]
@@ -49,5 +49,5 @@ typehints_use_signature_return = False
 # -- Options for HTML output -------------------------------------------------
 html_theme = 'sphinx_rtd_theme'  # Directs sphinx to use RTD theme
 
-# Mocks pynput import as real pynput import interferes with documentation process on Linux systems.
+# Mocks pynput import as real pynput import interferes with the documentation process on Linux systems.
 autodoc_mock_imports = ["pynput"]

@@ -1,8 +1,8 @@
 Welcome to sl-experiment API documentation page
 ===============================================
 
-sl-experiment is a Python library that provides the interfaces and runtime control bindings used to train animals and
-record experiment data in the Sun (NeuroAI) lab at Cornell university.
+sl-experiment is a Python library that provides tools to acquire, manage, and preprocess scientific data in the Sun
+(NeuroAI) lab.
 
 This library uses tools released as part of the 'Ataraxis' science-automation project, developed in the
 `Sun Lab <https://neuroai.github.io/sunlab/>`_ at Cornell University. The main purpose of this library is to specialize

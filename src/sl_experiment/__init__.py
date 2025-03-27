@@ -1,8 +1,8 @@
-"""A Python library that provides tools to record, manage, and process behavior data in the Sun (NeuroAI) lab.
+"""A Python library that provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab.
 
 See https://github.com/Sun-Lab-NBB/sl-experiment for more details.
 API documentation: https://sl-experiment.netlify.app/
-Authors: Ivan Kondratyev (Inkaros), Ku Natalie Yeung, Katlynn Ryu, Jasmine Si
+Authors: Ivan Kondratyev (Inkaros), Kushaan Gupta, Natalie Yeung, Katlynn Ryu, Jasmine Si
 """
 
 from .experiment import run_train_logic, lick_training_logic, run_experiment_logic, vr_maintenance_logic

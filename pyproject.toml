@@ -9,12 +9,16 @@ build-backend = "hatchling.build"
 [project]
 name = "sl-experiment"
 version = "1.0.0"
-description = "A Python library that provides the interfaces and runtime control bindings used to train animals and record experiment data in the Sun (NeuroAI) lab at Cornell university."
+description = "A Python library that provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
 authors = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
+    { name = "Kushaan Gupta", email = "kg574@cornell.edu"},
+    { name = "Natalie Yeung", email = "nyy4@cornell.edu" },
+    { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
+    { name = "Jasmine Si"}
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },

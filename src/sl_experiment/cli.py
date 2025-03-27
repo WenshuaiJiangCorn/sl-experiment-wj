@@ -458,17 +458,17 @@ def run_experiment(
 def preprocess_session(session_path: Path) -> None:
     """Preprocesses the target session's data.
 
-    Primarily, this command is intended to retry or resume failed or interrupted preprocessing runtimes.
-    Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
-    storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
-
     This command aggregates all session data on the VRPC, compresses the data to optimize it for network transmission
     and storage, and transfers the data to the NAS and the BioHPC cluster. It automatically skips already completed
     processing stages as necessary to optimize runtime performance.
+
+    Primarily, this command is intended to retry or resume failed or interrupted preprocessing runtimes.
+    Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
+    storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
     """
-    session_path = Path(session_path)
-    session_data = SessionData.from_path(path=session_path)
-    session_data.preprocess_session_data()
+    session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
+    session_data = SessionData.from_path(path=session_path)  # Restores SessionData from the cache .yaml file.
+    session_data.preprocess_session_data()  # Runs the preprocessing logic.
 
 
 @click.command()

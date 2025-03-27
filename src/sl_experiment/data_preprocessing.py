@@ -121,18 +121,18 @@ class SessionData(YamlConfig):
     """Stores the type of the session. Primarily, this determines how to read the session_descriptor.yaml file. Has 
     to be set to one of the three supported types: 'lick_training', 'run_training' or 'experiment'.
     """
-    credentials_path: str = "/media/Data/Experiments/sl-surgery-log-0f651e492767.json"
+    credentials_path: str
     """
     The path to the locally stored .JSON file that stores the service account credentials used to read and write Google 
     Sheet data. This is used to access and work with the surgery log and the water restriction log.
     """
-    local_root_directory: str = "/media/Data/Experiments"
+    local_root_directory: str
     """The path to the root directory where all projects are stored on the host-machine (VRPC)."""
-    server_root_directory: str = "/media/cbsuwsun/storage/sun_data"
+    server_root_directory: str
     """The path to the root directory where all projects are stored on the BioHPC server machine."""
-    nas_root_directory: str = "/home/cybermouse/nas/rawdata"
+    nas_root_directory: str
     """The path to the root directory where all projects are stored on the Synology NAS."""
-    mesoscope_root_directory: str = "/home/cybermouse/scanimage/mesodata"
+    mesoscope_root_directory: str
     """The path to the root directory used to store all mesoscope-acquired data on the ScanImagePC."""
     session_name: str = "None"
     """Stores the name of the session for which the data is acquired. This name is generated at class initialization 
@@ -145,7 +145,7 @@ class SessionData(YamlConfig):
 
         # If the session name is provided, ends the runtime early. This is here to support initializing the
         # SessionData class from the path to the root directory of a previous created session.
-        if 'None' not in self.session_name:
+        if "None" not in self.session_name:
             return
 
         # Acquires the UTC timestamp to use as the session name
@@ -1547,9 +1547,9 @@ def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
 def purge_redundant_data(
     remove_ubiquitin: bool,
     remove_telomere: bool,
-    local_root_path: Path = Path("/media/Data/Experiments"),
-    server_root_path: Path = Path("/media/cbsuwsun/storage/sun_data"),
-    mesoscope_root_path: Path = Path("/home/cybermouse/scanimage/mesodata"),
+    local_root_path: Path,
+    server_root_path: Path,
+    mesoscope_root_path: Path,
 ) -> None:
     """Loops over ScanImagePC and VRPC directories that store training and experiment data and removes no longer
     necessary data caches.

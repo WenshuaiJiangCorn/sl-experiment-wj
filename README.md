@@ -1,7 +1,6 @@
 # sl-experiment
 
-A Python library that provides the interfaces and runtime control bindings used to record experimental data in the Sun 
-(NeuroAI) lab at Cornell university.
+A Python library that provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab.
 
 ![PyPI - Version](https://img.shields.io/pypi/v/sl-experiment)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/sl-experiment)
@@ -202,7 +201,10 @@ We use [semantic versioning](https://semver.org/) for this project. For the vers
 ## Authors
 
 - Ivan Kondratyev ([Inkaros](https://github.com/Inkaros))
-- Jacob Groner ([Jgroner11](https://github.com/Jgroner11))
+- Kushaan Gupta ([Inkaros](https://github.com/kushaangupta))
+- Natalie Yeung
+- Katlynn Ryu ([katlynn-ryu](https://github.com/KatlynnRyu))
+- Jasmine Si
 
 ___
 
