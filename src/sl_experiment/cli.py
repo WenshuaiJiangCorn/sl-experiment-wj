@@ -149,6 +149,7 @@ def lick_training(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
     )
 
     # Runs the lick training session.
@@ -342,6 +343,7 @@ def run_training(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
     )
 
     # Runs the training session.
@@ -433,6 +435,7 @@ def run_experiment(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
     )
 
     # Runs the experiment session using the input parameters.
