@@ -23,10 +23,10 @@ from numpy.typing import NDArray
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
 
+from .data_classes import SessionData, RunTrainingDescriptor, LickTrainingDescriptor, MesoscopeExperimentDescriptor
 from .transfer_tools import transfer_directory
 from .packaging_tools import calculate_directory_checksum
 from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
-from .data_classes import SessionData, RunTrainingDescriptor, LickTrainingDescriptor, MesoscopeExperimentDescriptor
 
 
 def _delete_directory(directory_path: Path) -> None:

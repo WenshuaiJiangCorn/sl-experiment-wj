@@ -1,5 +1,6 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR system to position the
-HeadBar and LickPort manipulators."""
+HeadBar and LickPort manipulators. Primarily, the module builds on top of the bindings exposed by ZaberMotion library
+to specialize them for the specific requirements of the Mesoscope-VR system."""
 
 from typing import Any
 from dataclasses import field, dataclass

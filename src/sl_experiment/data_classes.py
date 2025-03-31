@@ -1,9 +1,49 @@
-from ataraxis_data_structures import YamlConfig
-from dataclasses import dataclass, field
+"""This module stores all classes used to manage, save, and load project and session data. This excludes the behavior
+and brain activity data, which is managed by the DataLogger and other specialized Ataraxis classes. Primarily, the
+classes provided by this module are used to configure and control the runtimes facilitated by this library. Also,
+many classes preserve critical runtime information, such as hardware configuration, between sessions and for future data
+analysis. All classes exposed by this module are intended for internal library use and should not be initialized
+directly by the users."""
+
+import re
 from pathlib import Path
-from ataraxis_time.time_helpers import get_timestamp
 import warnings
-from ataraxis_base_utilities import ensure_directory_exists, console, LogLevel
+from dataclasses import field, dataclass
+
+import appdirs
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+from ataraxis_data_structures import YamlConfig
+from ataraxis_time.time_helpers import get_timestamp
+
+
+def replace_root_path(path: Path) -> None:
+    """Replaces the path to the local root directory saved in the library's static configuration folder with the
+    provided path.
+
+    For the library to work as expected, the first time any project is created, it asks the user for the path to the
+    local directory where to keep all projects. This path is stored in the library-specific user directory and reused
+    for all future projects. To support replacing this path without searching for the hidden user data directory, this
+    function finds and updates the contents of the file that stores the local root path.
+
+    Notes:
+        This function should be used via the 'sl-replace-root-path' CLI command.
+
+    Args:
+        path: The path to the new local root directory.
+    """
+    # Resolves the path to the static .txt file used to store the local path to the root directory
+    app_dir = Path(appdirs.user_data_dir(appname="sl_experiment", appauthor="sun_lab"))
+    path_file = app_dir.joinpath("root_path.txt")
+
+    # In case this function is called before the app directory is created, ensures the app directory exists
+    ensure_directory_exists(path_file)
+
+    # Ensures that the input root directory exists
+    ensure_directory_exists(path)
+
+    # Replaces the contents of the root_path.txt file with the provided path
+    with open(path_file, "w") as f:
+        f.write(str(path))
 
 
 @dataclass()
@@ -11,14 +51,20 @@ class ProjectConfiguration(YamlConfig):
     """Stores the project-specific configuration parameters that do not change between different animals and runtime
     sessions.
 
-    An instance of this class is generated and saved as a .yaml file in the root directory of the project during the
-    first runtime for that project. After that, the stored data is reused for each new runtime session of the project.
+    An instance of this class is generated and saved as a .yaml file in the 'configuration' directory of the project
+    when it is created. After that, the stored data is reused for each training or experiment session executed for each
+    animal of the project.
 
     Notes:
         This class allows configuring this library to work for every project in the Sun lab while sharing (and hiding)
-        the internal APIs and runtime control functions across all projects. This achieves a streamlined user experience
-        (users do not see nor care about inner workings of this library), while supporting project-specific
-        customization.
+        the internal APIs and runtime control functions. This achieves a streamlined user experience, as users do not
+        see nor care about inner workings of this library, while supporting project-specific customization.
+
+        The class is primarily designed to specify the 'surgery_sheet_id' and the 'water_log_sheet_id' values,
+        which likely differ between projects. However, the class also allows configuring the hardware interfaces and
+        directory paths used during data acquisition. While this information should not change between projects, having
+        the ability to adjust them on a per-project basis removes the need to have new library releases to change
+        these configuration parameters if the need arises.
     """
 
     surgery_sheet_id: str = ""
@@ -30,46 +76,325 @@ class ProjectConfiguration(YamlConfig):
     by this instance. This is used to synchronize the information inside the water restriction log with the state of 
     the animal at the end of each training or experiment runtime.
     """
+    credentials_path: str | Path = Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json")
+    """
+    The path to the locally stored .JSON file that stores the service account credentials used to read and write Google 
+    Sheet data. This is used to access and work with the surgery log and the water restriction log. Usually, the same
+    service account is used across all projects.
+    """
+    local_root_directory: str | Path = Path("/media/Data/Experiments")
+    """The path to the root directory where all projects are stored on the host-machine (VRPC)."""
+    server_root_directory: str | Path = Path("/media/cbsuwsun/storage/sun_data")
+    """The path to the root directory where all projects are stored on the BioHPC server machine."""
+    nas_root_directory: str | Path = Path("/home/cybermouse/nas/rawdata")
+    """The path to the root directory where all projects are stored on the Synology NAS."""
+    mesoscope_root_directory: str | Path = Path("/home/cybermouse/scanimage/mesodata")
+    """The path to the root directory used to store all mesoscope-acquired data on the PC that manages the 
+    mesoscope (ScanImagePC)."""
+    face_camera_index: int = 0
+    """The index of the face camera in the list of all available Harvester-managed cameras."""
+    left_camera_index: int = 0
+    """The index of the left camera in the list of all available OpenCV-managed cameras."""
+    right_camera_index: int = 2
+    """The index of the right camera in the list of all available OpenCV-managed cameras."""
+    harvesters_cti_path: str | Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
+    """The path to the GeniCam CTI file used to connect to Harvesters-managed cameras."""
+    actor_port: str = "/dev/ttyACM0"
+    """The USB port used by the Actor Microcontroller."""
+    sensor_port: str = "/dev/ttyACM1"
+    """The USB port used by the Sensor Microcontroller."""
+    encoder_port: str = "/dev/ttyACM2"
+    """The USB port used by the Encoder Microcontroller."""
+    headbar_port: str = "/dev/ttyUSB0"
+    """The USB port used by the HeadBar Zaber motor controllers (devices)."""
+    lickport_port: str = "/dev/ttyUSB1"
+    """The USB port used by the LickPort Zaber motor controllers (devices)."""
+    valve_calibration_data: dict[int | float, int | float] | tuple[tuple[int | float, int | float], ...] = (
+        (15000, 1.8556),
+        (30000, 3.4844),
+        (45000, 7.1846),
+        (60000, 10.0854),
+    )
+    """ A dictionary or tuple of tuples that maps valve open times, in microseconds, to the dispensed volume of water, 
+    in microliters. During runtime, this data is used by the ValveModule to translate the requested reward volumes into
+    times the valve needs to be open to deliver the desired volume.
+    """
+
+    @classmethod
+    def from_path(cls, project_name: str) -> "ProjectConfiguration":
+        """Loads the project configuration parameters from a .yaml file and uses the loaded data to initialize a
+        ProjectConfiguration instance.
+
+        This method is called for each project runtime to reuse the configuration parameters generated at project
+        creation. When it is called for the first time (during new project creation), the method generates a default
+        configuration file and prompts the user to update the configuration before proceeding with the runtime.
+
+        Notes:
+            As part of its runtime, the method may prompt the user to provide the path to the local root directory.
+            This directory stores all project subdirectories and acts as the top level of the local data hierarchy.
+            The path to the directory will be saved in the static library-specific configuration file inside user's
+            data directory, so that it can be reused for all future runtimes. Use 'replace_root_path' function to
+            replace the path that is saved in this way.
+
+        Args:
+            project_name: the name of the project whose configuration file needs to be discovered and loaded.
+
+        Returns:
+            An initialized ProjectConfiguration instance.
+
+        Raises:
+            FileNotFoundError: If the data file is not found under the provided path or if the path does not point to a
+                .yaml file.
+        """
+
+        # Ensures console is enabled
+        if not console.enabled:
+            console.enable()
+
+        # Uses appdirs to localize user data directory. This serves as a static pointer to the storage directory where
+        # the path to the 'root' experiment directory can be safely stored between runtimes. This way, we can set the
+        # path once and reuse it for all future projects and runtimes.
+        app_dir = Path(appdirs.user_data_dir(appname="sl_experiment", appauthor="sun_lab"))
+        path_file = app_dir.joinpath("root_path.txt")
+
+        # If the .txt file that stores the local root path does not exist, prompts the user to provide the path to the
+        # local root directory and creates the root_path.txt file
+        if not path_file.exists():
+            # Gets the path to the local root directory from the user via command line input
+            message = (
+                "Unable to resolve the local root directory automatically. Provide the absolute path to the local "
+                "directory that stores all project-specific directories."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            root_path_str = input("Local root path: ")
+            root_path = Path(root_path_str)
+
+            # If necessary, generates the local root directory
+            ensure_directory_exists(root_path)
+
+            # Also ensures that the app directory exists, so that the path_file can be created below.
+            ensure_directory_exists(path_file)
+
+            # Saves the root path to the file
+            with open(path_file, "w") as f:
+                f.write(str(root_path))
+
+        # Otherwise, uses the root path and the project name to resolve the path to the project configuration directory
+        # and load the project configuration data.
+        else:
+            # Reads the root path from the file
+            with open(path_file, "r") as f:
+                root_path = Path(f.read().strip())
+
+        # Uses the root experiment directory path to generate the path to the target project's configuration file.
+        config_path = root_path.joinpath(project_name, "configurations", "project_configuration.yaml")
+        ensure_directory_exists(config_path)  # Ensures the directory tree for the config path exists.
+        if not config_path.exists():
+            message = (
+                f"Unable to load project configuration data from disk as no 'project_configuration.yaml' file found at "
+                f"the provided project path. Generating a precursor (default) configuration file at the "
+                f"specified path. Edit the file to specify project configuration before proceeding further to avoid "
+                f"runtime errors."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+
+            # Generates the default configuration instance and dumps it as a .yaml file. Note, as part of this process,
+            # the class generates the correct 'local_root_path' based on the path provided by the user.
+            precursor = ProjectConfiguration(local_root_directory=root_path.joinpath(project_name))
+            precursor._to_path(path=config_path)
+
+            # Waits for the user to manually configure the newly created file.
+            input(f"Enter anything to continue: ")
+
+        # Loads the data from the YAML file and initializes the class instance.
+        instance: ProjectConfiguration = cls.from_yaml(file_path=config_path)  # type: ignore
+
+        # Converts all paths loaded as strings to Path objects used inside the library
+        instance.mesoscope_root_directory = Path(instance.mesoscope_root_directory)
+        instance.nas_root_directory = Path(instance.nas_root_directory)
+        instance.server_root_directory = Path(instance.server_root_directory)
+        instance.credentials_path = Path(instance.credentials_path)
+        instance.harvesters_cti_path = Path(instance.harvesters_cti_path)
+
+        # Local root path is always re-computed using the data stored in the user data directory.
+        instance.local_root_directory = root_path.joinpath(project_name)
+
+        # Converts valve_calibration data from dictionary to a tuple of tuples format
+        if not isinstance(instance.valve_calibration_data, tuple):
+            instance.valve_calibration_data = tuple((k, v) for k, v in instance.valve_calibration_data.items())
+
+        # Partially verifies the loaded data. Most importantly, this step does not allow proceeding if the user did not
+        # replace the surgery log adn water restriction log placeholders with valid ID values.
+        instance._verify_data()
+
+        # Returns the initialized class instance to caller
+        return instance
+
+    def _to_path(self, path: Path) -> None:
+        """Saves the instance data to disk as a .yaml file.
+
+        This method is automatically called when the project is created. All future runtimes use the from_path() method
+        to load and reuse the configuration data saved to the .yaml file.
+
+        Args:
+            path: The path to the .yaml file to save the data to.
+        """
+
+        # Converts all Path objects to strings before dumping the data, as .yaml encoder does not properly recognize
+        # Path objects
+        self.local_root_directory = str(self.local_root_directory)
+        self.mesoscope_root_directory = str(self.mesoscope_root_directory)
+        self.nas_root_directory = str(self.nas_root_directory)
+        self.server_root_directory = str(self.server_root_directory)
+        self.credentials_path = str(self.credentials_path)
+        self.harvesters_cti_path = str(self.harvesters_cti_path)
+
+        # Converts valve calibration data into dictionary format
+        if isinstance(self.valve_calibration_data, tuple):
+            self.valve_calibration_data = {k: v for k, v in self.valve_calibration_data}
+
+        # Saves the data to the YAML file
+        self.to_yaml(file_path=path)
+
+        # As part of this runtime, also generates and dumps the 'default' experiment configuration. The user can then
+        # use the default file as an example tow rite their own experiment configurations.
+        example_experiment = ExperimentConfiguration()
+        example_experiment.to_yaml(path.parent.joinpath("default_experiment.yaml"))
+
+    def _verify_data(self) -> None:
+        """Verifies the data loaded from a .yaml file to ensure its validity.
+
+        Since this class is explicitly designed to be modified by the user, this verification step is carried out to
+        ensure that the loaded data matches expectations. This reduces the potential for user errors to impact the
+        runtime behavior of the library. This internal method is automatically called by the from_path() method.
+
+        Notes:
+            The method does not verify all fields loaded from the configuration file and instead focuses on paths and
+            Google Sheet IDs. The binding classes verify uSB ports and camera indices during instantiation.
+
+        Raises:
+            ValueError: If the loaded data does not match expected formats or values.
+        """
+
+        # Verifies Google Sheet ID formatting. Google Sheet IDs are usually 44 characters long, containing letters,
+        # numbers, hyphens, and underscores
+        pattern = r"^[a-zA-Z0-9_-]{44}$"
+        if not re.match(pattern, self.surgery_sheet_id):
+            message = (
+                f"Unable to verify the surgery_sheet_id field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a string with 44 characters, using letters, numbers, hyphens, and underscores, but found: "
+                f"{self.surgery_sheet_id}."
+            )
+            console.error(message=message, error=ValueError)
+        if not re.match(pattern, self.water_log_sheet_id):
+            message = (
+                f"Unable to verify the surgery_sheet_id field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a string with 44 characters, using letters, numbers, hyphens, and underscores, but found: "
+                f"{self.water_log_sheet_id}."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Verifies the path to the credentials' file and the path to the Harvesters CTI file:
+        if isinstance(self.credentials_path, Path) and (
+            not self.credentials_path.exists() or not self.credentials_path.suffix != ".json"
+        ):
+            message = (
+                f"Unable to verify the credentials_path field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a path to an existing .json file that stores the Google API service account credentials, "
+                f"but instead encountered the path to a non-json or non-existing file: {self.credentials_path}."
+            )
+            console.error(message=message, error=ValueError)
+        if isinstance(self.harvesters_cti_path, Path) and (
+            not self.harvesters_cti_path.exists() or not self.harvesters_cti_path.suffix != ".cti"
+        ):
+            message = (
+                f"Unable to verify the harvesters_cti_path field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a path to an existing .cti file that can be used to access a Genicam-compatible camera, "
+                f"but instead encountered the path to a non-cti or non-existing file: {self.harvesters_cti_path}."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Verifies directory paths:
+        if isinstance(self.mesoscope_root_directory, Path) and (
+            not self.mesoscope_root_directory.is_dir() or not self.mesoscope_root_directory.exists()
+        ):
+            message = (
+                f"Unable to verify the mesoscope_root_directory field loaded from the 'project_configuration.yaml' "
+                f"file. Expected a path to an existing filesystem-mounted directory, but instead encountered the path "
+                f"to a non-directory or non-existing directory: {self.mesoscope_root_directory}."
+            )
+            console.error(message=message, error=ValueError)
+        if isinstance(self.nas_root_directory, Path) and (
+            not self.nas_root_directory.is_dir() or not self.nas_root_directory.exists()
+        ):
+            message = (
+                f"Unable to verify the nas_root_directory field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a path to an existing filesystem-mounted directory, but instead encountered the path to a "
+                f"non-directory or non-existing directory: {self.nas_root_directory}."
+            )
+            console.error(message=message, error=ValueError)
+        if isinstance(self.server_root_directory, Path) and (
+            not self.server_root_directory.is_dir() or not self.server_root_directory.exists()
+        ):
+            message = (
+                f"Unable to verify the server_root_directory field loaded from the 'project_configuration.yaml' file. "
+                f"Expected a path to an existing filesystem-mounted directory, but instead encountered the path to a "
+                f"non-directory or non-existing directory: {self.server_root_directory}."
+            )
+            console.error(message=message, error=ValueError)
 
 
 @dataclass()
 class ExperimentState:
-    """Encapsulates the information used to set and maintain the Mesoscope-VR state-machine according to the desired
-    experiment state.
+    """Encapsulates the information used to set and maintain the desired Mesoscope-VR and experiment state.
 
-    Primarily, experiment runtime logic is resolved by the Unity game engine. However, the Mesoscope-VR system
-    configuration may need to change throughout the experiment, for example, between the run and rest configurations.
+    Primarily, experiment runtime logic (experiment task logic) is resolved by the Unity game engine. However, the
+    Mesoscope-VR system configuration may also need to change throughout the experiment to optimize the runtime by
+    disabling or reconfiguring specific hardware modules. For example, some experiment stages may require the running
+    wheel to be locked to prevent the animal from running, but others may require it to be unlocked, to facilitate
+    running behavior.
+
     Overall, the Mesoscope-VR system functions like a state-machine, with multiple statically configured states that
-    can be activated and maintained throughout the experiment. During runtime, the main function expects a sequence of
-    ExperimentState instances that will be traversed, start-to-end, to determine the flow of the experiment runtime.
+    can be activated and maintained throughout the experiment. During runtime, the runtime control function expects a
+    sequence of ExperimentState instances that will be traversed, start-to-end, to determine the flow of the experiment
+    runtime.
+
+    Notes:
+        Do not instantiate this class directly. It is managed by the ExperimentConfiguration wrapper class.
     """
 
     experiment_state_code: int
     """The integer code of the experiment state. Experiment states do not have a predefined meaning, Instead, each 
     project is expected to define and follow its own experiment state code mapping. Typically, the experiment state 
-    code is used to denote major experiment stages, such as 'baseline', 'task1', 'cooldown', etc. Note, the same 
+    code is used to denote major experiment stages, such as 'baseline', 'task', 'cooldown', etc. Note, the same 
     experiment state code can be used by multiple sequential ExperimentState instances to change the VR system states 
     while maintaining the same experiment state."""
     vr_state_code: int
-    """One of the supported VR system state-codes. Currently, the Mesoscope-VR system supports 2 state codes. State 
-    code 1 denotes 'REST' state and code 2 denotes 'RUN' state. In the rest state, the running wheel is locked and the
-    screens are off. In the run state, the screens are on and the wheel is unlocked. Note, multiple consecutive 
-    ExperimentState instances with different experiment state codes can reuse the same VR state code."""
+    """One of the supported VR system state-codes. Currently, the Mesoscope-VR system supports two state codes. State 
+    code '1' denotes 'REST' state and code '2' denotes 'RUN' state. Note, multiple consecutive ExperimentState 
+    instances with different experiment state codes can reuse the same VR state code."""
     state_duration_s: float
     """The time, in seconds, to maintain the current combination of the experiment and VR states."""
 
 
 @dataclass()
 class ExperimentConfiguration(YamlConfig):
-    """Stores the data that describes a single experiment session runtime.
+    """Stores the configuration of a single experiment runtime.
 
     Primarily, this includes the sequence of experiment and Virtual Reality (Mesoscope-VR) states that define the flow
-    of the experiment runtime. Currently, an instance of this class is generated during the first runtime for each
-    animal and is saved inside the 'metadata' folder for that animal. it is expected that the user manually adjusts the
-    'default' instance as necessary to define the experiment runtime for each animal.
+    of the experiment runtime. During runtime, the main control function traverses the sequence of states stored in
+    this class instance start-to-end in the exact order specified by the user. Together with custom Unity projects, this
+    class allows flexibly implementing a wide range of experiments.
+
+    Each project should define one or more experiment configurations and save them as .yaml files inside the project
+    'configuration' folder. The name for each configuration file is defined by the user and is used to identify and load
+    the experiment configuration when 'sl-run-experiment' CLI command is executed.
     """
 
     cue_map: dict[int, float] = field(default_factory=lambda: {0: 30.0, 1: 30.0, 2: 30.0, 3: 30.0, 4: 30.0})
+    """A dictionary that maps each integer-code associated with a wall cue used in the Virtual Reality experiment 
+    environment to its length in real-world centimeters. It is used to map each VR cue to the distance the animal needs
+    to travel to fully traverse the wall cue region from start to end."""
     experiment_states: dict[str, ExperimentState] = field(
         default_factory=lambda: {
             "baseline": ExperimentState(experiment_state_code=1, vr_state_code=1, state_duration_s=30),
@@ -77,13 +402,17 @@ class ExperimentConfiguration(YamlConfig):
             "cooldown": ExperimentState(experiment_state_code=3, vr_state_code=1, state_duration_s=15),
         }
     )
+    """A dictionary that uses human-readable state-names as keys and ExperimentState instances as values. Each 
+    ExperimentState instance represents a phase of the experiment."""
 
 
 @dataclass()
 class RuntimeHardwareConfiguration(YamlConfig):
-    """This class is used to save the runtime hardware configuration information as a .yaml file.
+    """This class is used to save the runtime hardware configuration parameters as a .yaml file.
 
-    This information is used to read the data saved to the .npz log files during runtime during data processing.
+    This information is used to read and decode the data saved to the .npz log files during runtime during data
+    processing. Although these parameters are generally not expected to change between runtimes, a new instance of this
+    class is saved during each runtime.
 
     Notes:
         All fields in this dataclass initialize to None. During log processing, any log associated with a hardware
@@ -105,38 +434,218 @@ class RuntimeHardwareConfiguration(YamlConfig):
     """BreakInterface instance property."""
     lick_threshold: int | None = None
     """BreakInterface instance property."""
-    scale_coefficient: float | None = None
+    valve_scale_coefficient: float | None = None
     """ValveInterface instance property."""
-    nonlinearity_exponent: float | None = None
+    valve_nonlinearity_exponent: float | None = None
     """ValveInterface instance property."""
     torque_per_adc_unit: float | None = None
     """TorqueInterface instance property."""
-    initially_on: bool | None = None
+    screens_initially_on: bool | None = None
     """ScreenInterface instance property."""
-    has_ttl: bool | None = None
+    recorded_mesoscope_ttl: bool | None = None
     """TTLInterface instance property."""
+
+
+@dataclass()
+class LickTrainingDescriptor(YamlConfig):
+    """This class is used to save the description information specific to lick training sessions as a .yaml file.
+
+    The information stored in this class instance is filled in two steps. The main runtime function fills most fields
+    of the class, before it is saved as a .yaml file. After runtime, the experimenter manually fills leftover fields,
+    such as 'experimenter_notes,' before the class instance is transferred to the long-term storage destination.
+
+    The fully filled instance data is also used during preprocessing to write the water restriction log entry for the
+    trained animal.
+    """
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    minimum_reward_delay: int
+    """Stores the minimum delay, in seconds, that can separate the delivery of two consecutive water rewards."""
+    maximum_reward_delay_s: int
+    """Stores the maximum delay, in seconds, that can separate the delivery of two consecutive water rewards."""
+    maximum_water_volume_ml: float
+    """Stores the maximum volume of water the system is allowed to dispense during training."""
+    maximum_training_time_m: int
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter replaces this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
+
+
+@dataclass()
+class RunTrainingDescriptor(YamlConfig):
+    """This class is used to save the description information specific to run training sessions as a .yaml file.
+
+    The information stored in this class instance is filled in two steps. The main runtime function fills most fields
+    of the class, before it is saved as a .yaml file. After runtime, the experimenter manually fills leftover fields,
+    such as 'experimenter_notes,' before the class instance is transferred to the long-term storage destination.
+
+    The fully filled instance data is also used during preprocessing to write the water restriction log entry for the
+    trained animal.
+    """
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float = 0.0
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    final_running_speed_cm_s: float = 0.0
+    """Stores the final running speed threshold that was active at the end of training."""
+    final_speed_duration_s: float = 0.0
+    """Stores the final running duration threshold that was active at the end of training."""
+    initial_running_speed_cm_s: float = 0.0
+    """Stores the initial running speed threshold, in centimeters per second, used during training."""
+    initial_speed_duration_s: float = 0.0
+    """Stores the initial above-threshold running duration, in seconds, used during training."""
+    increase_threshold_ml: float = 0.0
+    """Stores the volume of water delivered to the animal, in milliliters, that triggers the increase in the running 
+    speed and duration thresholds."""
+    increase_running_speed_cm_s: float = 0.0
+    """Stores the value, in centimeters per second, used by the system to increment the running speed threshold each 
+    time the animal receives 'increase_threshold' volume of water."""
+    increase_speed_duration_s: float = 0.0
+    """Stores the value, in seconds, used by the system to increment the duration threshold each time the animal 
+    receives 'increase_threshold' volume of water."""
+    maximum_running_speed_cm_s: float = 0.0
+    """Stores the maximum running speed threshold, in centimeters per second, the system is allowed to use during 
+    training."""
+    maximum_speed_duration_s: float = 0.0
+    """Stores the maximum above-threshold running duration, in seconds, the system is allowed to use during training."""
+    maximum_water_volume_ml: float = 1.0
+    """Stores the maximum volume of water the system is allowed to dispensed during training."""
+    maximum_training_time_m: int = 40
+    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
+
+
+@dataclass()
+class MesoscopeExperimentDescriptor(YamlConfig):
+    """This class is used to save the description information specific to experiment sessions as a .yaml file.
+
+    The information stored in this class instance is filled in two steps. The main runtime function fills most fields
+    of the class, before it is saved as a .yaml file. After runtime, the experimenter manually fills leftover fields,
+    such as 'experimenter_notes,' before the class instance is transferred to the long-term storage destination.
+
+    The fully filled instance data is also used during preprocessing to write the water restriction log entry for the
+    animal participating in the experiment runtime.
+
+    Notes:
+        Critically, this class is used to save the mesoscope objective coordinates in the 'persistent' directory of an
+        animal after each experiment session. This information is used during the following experiment runtimes to help
+        the experimenter to restore the Mesoscope to the same position used during the previous session. This has to be
+        done manually, as ThorLabs does not provide an API to work with the Mesoscope motors directly at this time.
+    """
+
+    experimenter: str
+    """The ID of the experimenter running the session."""
+    mouse_weight_g: float
+    """The weight of the animal, in grams, at the beginning of the session."""
+    dispensed_water_volume_ml: float = 0.0
+    """Stores the total water volume, in milliliters, dispensed during runtime."""
+    experimenter_notes: str = "Replace this with your notes."
+    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
+    notes made during runtime."""
+    experimenter_given_water_volume_ml: float = 0.0
+    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
+    """
+    mesoscope_x_position: float = 0.0
+    """The X-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_y_position: float = 0.0
+    """The Y-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_z_position: float = 0.0
+    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_roll_position: float = 0.0
+    """The Roll-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+
+
+@dataclass()
+class ZaberPositions(YamlConfig):
+    """This class is used to save Zaber motor positions as .yaml file to reuse them between sessions.
+
+    The class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
+    (axes). It is used to both store Zaber motor positions for each session for future analysis and to (optionally)
+    restore the same Zaber motor positions across consecutive experimental sessions for the same project and animal
+    combination.
+
+    Notes:
+        This class is designed to be used internally by other classes from this library. Do not instantiate or load
+        this class from .yaml files manually. Do not modify the data stored inside the .yaml file unless you know what
+        you are doing.
+
+        All positions are saved using native motor units. All class fields initialize to default placeholders that are
+        likely NOT safe to apply to the VR system. Do not apply the positions loaded from the file unless you are
+        certain they are safe to use.
+
+        Exercise caution when working with Zaber motors. The motors are powerful enough to damage the surrounding
+        equipment and manipulated objects.
+    """
+
+    headbar_z: int = 0
+    """The absolute position, in native motor units, of the HeadBar z-axis motor."""
+    headbar_pitch: int = 0
+    """The absolute position, in native motor units, of the HeadBar pitch-axis motor."""
+    headbar_roll: int = 0
+    """The absolute position, in native motor units, of the HeadBar roll-axis motor."""
+    lickport_z: int = 0
+    """The absolute position, in native motor units, of the LickPort z-axis motor."""
+    lickport_x: int = 0
+    """The absolute position, in native motor units, of the LickPort x-axis motor."""
+    lickport_y: int = 0
+    """The absolute position, in native motor units, of the LickPort y-axis motor."""
+
+
+@dataclass()
+class MesoscopePositions(YamlConfig):
+    """This class stores the x, y, z, and roll Mesoscope axis coordinates.
+
+    The class is used to persist the Mesoscope axis coordinates between experiment sessions. This is used to help the
+    experimenter to position the Mesoscope at the same position across multiple imaging sessions.
+
+    Notes:
+        The same information as in this class is stored in the MesoscopeExperimentDescriptor class. The key difference
+        is that the data from this class is kept in the 'persistent' VRPC directory and updated with each session, while
+        each descriptor is permanently stored in each session raw_data directory.
+    """
+
+    mesoscope_x_position: float = 0.0
+    """The X-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_y_position: float = 0.0
+    """The Y-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_z_position: float = 0.0
+    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
+    mesoscope_roll_position: float = 0.0
+    """The Roll-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
 
 
 @dataclass
 class SessionData(YamlConfig):
     """Provides methods for managing the data acquired during one experiment or training session.
 
-    This class functions as the central hub for collecting the data from all local PCs involved in the data acquisition
-    process and pushing it to the NAS and the BioHPC server. Its primary purpose is to maintain the session data
-    structure across all supported destinations and to efficiently and safely move the data to these destinations with
-    minimal redundancy and footprint. Additionally, this class generates the paths used by all other classes from
-    this library to determine where to load and saved various data during runtime. Finally, it also carries out basic
-    data preprocessing to optimize raw data for network transmission and long-term storage.
+    The primary purpose of this class is to maintain the session data structure across all supported destinations. It
+    generates the paths used by all other classes from this library to determine used to save and load various session
+    data during runtime.
 
     As part of its initialization, the class generates the session directory for the input animal and project
     combination. Session directories use the current UTC timestamp, down to microseconds, as the directory name. This
     ensures that each session name is unique and preserves the overall session order.
 
     Notes:
-        Do not call methods from this class directly. This class is intended to be used primarily through the runtime
-        logic functions from the experiment.py module and general command-line-interfaces installed with the library.
-        The only reason the class is defined as public is to support reconfiguring data destinations and session details
-        when implementing custom CLI functions for projects that use this library.
+        This class is intended to be used internally by other library classes. Do not instantiate or use this class
+        directly.
 
         It is expected that the server, NAS, and mesoscope data directories are mounted on the host-machine via the
         SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
@@ -144,10 +653,6 @@ class SessionData(YamlConfig):
 
         This class is specifically designed for working with raw data from a single animal participating in a single
         experimental project session. Processed data is managed by the processing library methods and classes.
-
-        This class generates an xxHash-128 checksum stored inside the ax_checksum.txt file at the root of each
-        experimental session 'raw_data' directory. The checksum verifies the data of each file and the paths to each
-        file relative to the 'raw_data' root directory.
     """
 
     # Main attributes that are expected to be provided by the user during class initialization
@@ -157,62 +662,66 @@ class SessionData(YamlConfig):
     """The ID code of the animal for which the data is acquired."""
     surgery_sheet_id: str
     """The ID for the Google Sheet file that stores surgery information for the animal whose data is managed by this 
-    instance. This is used to parse and write the surgery data for each managed animal into its 'metadata' folder, so 
-    that the surgery data is always kept together with the rest of the training and experiment data."""
+    instance."""
     water_log_sheet_id: str
     """The ID for the Google Sheet file that stores water restriction information for the animal whose data is managed 
-    by this instance. This is used to synchronize the information inside the water restriction log with the state of 
-    the animal at the end of each training or experiment runtime.
+    by this instance.
     """
     session_type: str
     """Stores the type of the session. Primarily, this determines how to read the session_descriptor.yaml file. Has 
     to be set to one of the three supported types: 'lick_training', 'run_training' or 'experiment'.
     """
-    credentials_path: str
+    credentials_path: str | Path
     """
     The path to the locally stored .JSON file that stores the service account credentials used to read and write Google 
     Sheet data. This is used to access and work with the surgery log and the water restriction log.
     """
-    local_root_directory: str
+    local_root_directory: str | Path
     """The path to the root directory where all projects are stored on the host-machine (VRPC)."""
-    server_root_directory: str
+    server_root_directory: str | Path
     """The path to the root directory where all projects are stored on the BioHPC server machine."""
-    nas_root_directory: str
+    nas_root_directory: str | Path
     """The path to the root directory where all projects are stored on the Synology NAS."""
-    mesoscope_root_directory: str
+    mesoscope_root_directory: str | Path
     """The path to the root directory used to store all mesoscope-acquired data on the ScanImagePC."""
     session_name: str = "None"
     """Stores the name of the session for which the data is acquired. This name is generated at class initialization 
     based on the current microsecond-accurate timestamp. Do NOT manually provide this name at class initialization.
     Use 'from_path' class method to initialize a SessionData instance for an already existing session data directory.
     """
+    experiment_name: str | None = None
+    """Stores the name of the experiment configuration file. If the session_name attribute is 'experiment,' this filed
+    is used to communicate the specific experiment configuration used by the session. During runtime, this is 
+    used to load the experiment configuration (to run the experiment) and to save the experiment configuration to the
+    session raw_data folder. If the session is not an experiment session, this is statically set to None."""
 
     def __post_init__(self) -> None:
         """Generates the session name and creates the session directory structure on all involved PCs."""
 
-        # If the session name is provided, ends the runtime early. This is here to support initializing the
-        # SessionData class from the path to the root directory of a previous created session.
+        # If the session name is provided, ends the runtime early. This supports initializing the
+        # SessionData class from the path to the root directory of a previous created session, which is used during
+        # runtime-independent data preprocessing.
         if "None" not in self.session_name:
             return
 
         # Acquires the UTC timestamp to use as the session name
         self.session_name = str(get_timestamp(time_separator="-"))
 
-        # Converts root strings to Path objects.
-        local_root_directory = Path(self.local_root_directory)
-        server_root_directory = Path(self.server_root_directory)
-        nas_root_directory = Path(self.nas_root_directory)
-        mesoscope_root_directory = Path(self.mesoscope_root_directory)
+        # Ensures all root directory paths are stored as Path objects.
+        self.local_root_directory = Path(self.local_root_directory)
+        self.server_root_directory = Path(self.server_root_directory)
+        self.nas_root_directory = Path(self.nas_root_directory)
+        self.mesoscope_root_directory = Path(self.mesoscope_root_directory)
 
         # Constructs the session directory path and generates the directory
-        raw_session_path = local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name)
+        raw_session_path = self.local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name)
 
         # Handles potential session name conflicts
         counter = 0
         while raw_session_path.exists():
             counter += 1
             new_session_name = f"{self.session_name}_{counter}"
-            raw_session_path = local_root_directory.joinpath(self.project_name, self.animal_id, new_session_name)
+            raw_session_path = self.local_root_directory.joinpath(self.project_name, self.animal_id, new_session_name)
 
         # If a conflict is detected and resolved, warns the user about the resolved conflict.
         if counter > 0:
@@ -230,32 +739,38 @@ class SessionData(YamlConfig):
         # Generates the directory structures on all computers used in data management:
         # Raw Data directory and all subdirectories.
         ensure_directory_exists(
-            local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name, "raw_data")
+            self.local_root_directory.joinpath(self.project_name, self.animal_id, self.session_name, "raw_data")
         )
         ensure_directory_exists(
-            local_root_directory.joinpath(
+            self.local_root_directory.joinpath(
                 self.project_name, self.animal_id, self.session_name, "raw_data", "camera_frames"
             )
         )
         ensure_directory_exists(
-            local_root_directory.joinpath(
+            self.local_root_directory.joinpath(
                 self.project_name, self.animal_id, self.session_name, "raw_data", "mesoscope_frames"
             )
         )
         ensure_directory_exists(
-            local_root_directory.joinpath(
+            self.local_root_directory.joinpath(
                 self.project_name, self.animal_id, self.session_name, "raw_data", "behavior_data_log"
             )
         )
 
-        ensure_directory_exists(local_root_directory.joinpath(self.project_name, self.animal_id, "persistent_data"))
-        ensure_directory_exists(nas_root_directory.joinpath(self.project_name, self.animal_id, self.session_name))
-        ensure_directory_exists(server_root_directory.joinpath(self.project_name, self.animal_id, self.session_name))
-        ensure_directory_exists(local_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
-        ensure_directory_exists(server_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
-        ensure_directory_exists(nas_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
-        ensure_directory_exists(mesoscope_root_directory.joinpath("mesoscope_frames"))
-        ensure_directory_exists(mesoscope_root_directory.joinpath("persistent_data", self.project_name, self.animal_id))
+        ensure_directory_exists(
+            self.local_root_directory.joinpath(self.project_name, self.animal_id, "persistent_data")
+        )
+        ensure_directory_exists(self.nas_root_directory.joinpath(self.project_name, self.animal_id, self.session_name))
+        ensure_directory_exists(
+            self.server_root_directory.joinpath(self.project_name, self.animal_id, self.session_name)
+        )
+        ensure_directory_exists(self.local_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(self.server_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(self.nas_root_directory.joinpath(self.project_name, self.animal_id, "metadata"))
+        ensure_directory_exists(self.mesoscope_root_directory.joinpath("mesoscope_frames"))
+        ensure_directory_exists(
+            self.mesoscope_root_directory.joinpath("persistent_data", self.project_name, self.animal_id)
+        )
 
     @classmethod
     def from_path(cls, path: Path) -> "SessionData":
@@ -284,7 +799,18 @@ class SessionData(YamlConfig):
             )
             console.error(message=message, error=FileNotFoundError)
 
-        return cls.from_yaml(file_path=path)  # type: ignore
+        # Loads class data
+        instance: SessionData = cls.from_yaml(file_path=path)  # type: ignore
+
+        # Ensures all loaded paths are stored as Path objects.
+        instance.local_root_directory = Path(instance.local_root_directory)
+        instance.mesoscope_root_directory = Path(instance.mesoscope_root_directory)
+        instance.nas_root_directory = Path(instance.nas_root_directory)
+        instance.server_root_directory = Path(instance.server_root_directory)
+        instance.credentials_path = Path(instance.credentials_path)
+
+        # Returns the instance to caller
+        return instance
 
     def to_path(self) -> None:
         """Saves the data of the instance to the 'raw_data' directory of the managed session as a 'session_data.yaml'
@@ -294,6 +820,14 @@ class SessionData(YamlConfig):
         data processing. This also serves as the repository for the identification information about the project,
         animal, and session that generated the data.
         """
+
+        # Converts all Paths objects to strings before dumping the data to YAML.
+        self.local_root_directory = str(self.local_root_directory)
+        self.mesoscope_root_directory = str(self.mesoscope_root_directory)
+        self.nas_root_directory = str(self.nas_root_directory)
+        self.server_root_directory = str(self.server_root_directory)
+        self.credentials_path = str(self.credentials_path)
+
         self.to_yaml(file_path=self.raw_data_path.joinpath("session_data.yaml"))
 
     @property
@@ -394,101 +928,31 @@ class SessionData(YamlConfig):
         """Returns the path to the 'metadata' directory of the managed animal on the Synology NAS."""
         return self.nas_root_path.joinpath(self.project_name, self.animal_id, "metadata")
 
+    @property
+    def experiment_configuration_path(self) -> Path:
+        """Returns the path to the .yaml file that stores the configuration of the experiment runtime for the managed
+        session.
 
-@dataclass()
-class LickTrainingDescriptor(YamlConfig):
-    """This class is used to save the description information specific to lick training sessions as a .yaml file."""
+        This information is used during runtime to determine how to run the experiment.
+        """
+        local_root_directory = Path(self.local_root_directory)
+        return local_root_directory.joinpath(self.project_name, "configurations", f"{self.experiment_name}.yaml")
 
-    experimenter: str
-    """The ID of the experimenter running the session."""
-    mouse_weight_g: float
-    """The weight of the animal, in grams, at the beginning of the session."""
-    dispensed_water_volume_ml: float = 0.0
-    """Stores the total water volume, in milliliters, dispensed during runtime."""
-    average_reward_delay_s: int = 12
-    """Stores the center-point for the reward delay distribution, in seconds."""
-    maximum_deviation_from_average_s: int = 6
-    """Stores the deviation value, in seconds, used to determine the upper and lower bounds for the reward delay 
-    distribution."""
-    maximum_water_volume_ml: float = 1.0
-    """Stores the maximum volume of water the system is allowed to dispense during training."""
-    maximum_training_time_m: int = 40
-    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
-    experimenter_notes: str = "Replace this with your notes."
-    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
-    notes made during runtime."""
-    experimenter_given_water_volume_ml: float = 0.0
-    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
-    """
+    @property
+    def local_experiment_configuration_path(self) -> Path:
+        """Returns the path to the .yaml file used to save the managed session's experiment configuration.
 
+        This is used to preserve the experiment configuration inside the raw_data directory of the managed session.
+        """
+        return self.raw_data_path.joinpath(f"{self.experiment_name}.yaml")
 
-@dataclass()
-class RunTrainingDescriptor(YamlConfig):
-    """This class is used to save the description information specific to run training sessions as a .yaml file."""
+    @property
+    def previous_mesoscope_positions_path(self) -> Path:
+        """Returns the path to the 'mesoscope_positions.yaml' file of the previous session.
 
-    experimenter: str
-    """The ID of the experimenter running the session."""
-    mouse_weight_g: float
-    """The weight of the animal, in grams, at the beginning of the session."""
-    dispensed_water_volume_ml: float = 0.0
-    """Stores the total water volume, in milliliters, dispensed during runtime."""
-    final_running_speed_cm_s: float = 0.0
-    """Stores the final running speed threshold that was active at the end of training."""
-    final_speed_duration_s: float = 0.0
-    """Stores the final running duration threshold that was active at the end of training."""
-    initial_running_speed_cm_s: float = 0.0
-    """Stores the initial running speed threshold, in centimeters per second, used during training."""
-    initial_speed_duration_s: float = 0.0
-    """Stores the initial above-threshold running duration, in seconds, used during training."""
-    increase_threshold_ml: float = 0.0
-    """Stores the volume of water delivered to the animal, in milliliters, that triggers the increase in the running 
-    speed and duration thresholds."""
-    increase_running_speed_cm_s: float = 0.0
-    """Stores the value, in centimeters per second, used by the system to increment the running speed threshold each 
-    time the animal receives 'increase_threshold' volume of water."""
-    increase_speed_duration_s: float = 0.0
-    """Stores the value, in seconds, used by the system to increment the duration threshold each time the animal 
-    receives 'increase_threshold' volume of water."""
-    maximum_running_speed_cm_s: float = 0.0
-    """Stores the maximum running speed threshold, in centimeters per second, the system is allowed to use during 
-    training."""
-    maximum_speed_duration_s: float = 0.0
-    """Stores the maximum above-threshold running duration, in seconds, the system is allowed to use during training."""
-    maximum_water_volume_ml: float = 1.0
-    """Stores the maximum volume of water the system is allowed to dispensed during training."""
-    maximum_training_time_m: int = 40
-    """Stores the maximum time, in minutes, the system is allowed to run the training for."""
-    experimenter_notes: str = "Replace this with your notes."
-    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
-    notes made during runtime."""
-    experimenter_given_water_volume_ml: float = 0.0
-    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
-    """
-
-
-@dataclass()
-class MesoscopeExperimentDescriptor(YamlConfig):
-    """This class is used to save the description information specific to experiment sessions as a .yaml file."""
-
-    experimenter: str
-    """The ID of the experimenter running the session."""
-    mouse_weight_g: float
-    """The weight of the animal, in grams, at the beginning of the session."""
-    dispensed_water_volume_ml: float = 0.0
-    """Stores the total water volume, in milliliters, dispensed during runtime."""
-    experimenter_notes: str = "Replace this with your notes."
-    """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
-    notes made during runtime."""
-    experimenter_given_water_volume_ml: float = 0.0
-    """The additional volume of water, in milliliters, administered by the experimenter to the animal after the session.
-    """
-
-
-import sys
-
-y = ExperimentConfiguration()
-opath = Path("/home/cybermouse/Desktop/test/out.yaml")
-# y.to_yaml(file_path=opath)
-x = ExperimentConfiguration.from_yaml(file_path=opath)
-print(x)
-sys.exit(111)
+        The file is stored inside the 'persistent_data' directory of the managed animal.
+        """
+        local_root_directory = Path(self.local_root_directory)
+        return local_root_directory.joinpath(
+            self.project_name, self.animal_id, "persistent_data", "mesoscope_positions.yaml"
+        )

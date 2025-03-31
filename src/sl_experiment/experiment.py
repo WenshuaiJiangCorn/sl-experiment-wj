@@ -22,15 +22,16 @@ from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
 from .visualizers import BehaviorVisualizer
-from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
-from .module_interfaces import BreakInterface, ValveInterface
-from .data_preprocessing import (
+from .data_classes import (
     SessionData,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
     RuntimeHardwareConfiguration,
     MesoscopeExperimentDescriptor,
 )
+from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
+from .module_interfaces import BreakInterface, ValveInterface
+from .data_preprocessing import preprocess_session_data
 
 
 class _KeyboardListener:
@@ -549,10 +550,10 @@ class _MesoscopeExperiment:
             maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
             minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
             lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-            scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-            nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+            scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+            nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
             torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-            initially_on=self._microcontrollers.screens.initially_on,
+            initially_on=self._microcontrollers.screens.screens_initially_on,
             has_ttl=True,
         )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
@@ -1245,16 +1246,16 @@ class _BehaviorTraining:
             hardware_configuration = RuntimeHardwareConfiguration(
                 torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
                 has_ttl=False,
             )
         else:
             hardware_configuration = RuntimeHardwareConfiguration(
                 cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+                nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
                 has_ttl=False,
             )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
@@ -1527,8 +1528,8 @@ def lick_training_logic(
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
-        average_reward_delay_s=average_reward_delay,
-        maximum_deviation_from_average_s=maximum_deviation_from_mean,
+        maximum_reward_delay_s=average_reward_delay,
+        minimum_reward_delay=maximum_deviation_from_mean,
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         experimenter=experimenter,

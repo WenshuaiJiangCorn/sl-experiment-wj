@@ -66,6 +66,7 @@ dependencies = [
     "pyqt6>=6,<7",
     "pyarrow>=19,<20",
     "pynput>=1,<2",
+    "appdirs>=1,<2",
 ]
 
 [project.urls]
@@ -94,6 +95,7 @@ condarun = [
     "polars>=1,<2",
     "pyarrow>=19,<20",
     "pynput>=1,<2",
+    "appdirs>=1,<2",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
@@ -124,6 +126,13 @@ conda = [
     # Distribution
     "twine>=6,<7",
     "grayskull>=2,<3",
+
+    # Types:
+    "types-appdirs>=1,<2",
+    "types-tqdm>=4,<5",
+    "types-tabulate>=0,<1",
+    "scipy-stubs>=1,<2",
+
 ]
 
 # Dependencies known to not be installable with conda for at least one supported development platform
@@ -135,9 +144,6 @@ noconda = [
     "uv>=0,<1",
 
     # Types:
-    "types-tqdm>=4,<5",
-    "types-tabulate>=0,<1",
-    "scipy-stubs>=1,<2",
     "types-pynput>=1,<2",
     "google-api-python-client-stubs>=1,<2",
 

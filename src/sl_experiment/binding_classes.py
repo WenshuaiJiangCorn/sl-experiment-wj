@@ -1,8 +1,10 @@
-"""This module provides classes that bind all Mesoscope-VR components (cameras, microcontrollers, Zaber motors). They
-are used to streamline the API used to interface with these components during experimental and training runtimes."""
+"""This module provides classes that bind Ataraxis library classes for all Mesoscope-VR components
+(cameras, microcontrollers, Zaber motors). These bindings streamline the API used to interface with these components
+during experiment and training runtimes. Critically, these classes statically define optimal runtime configuration
+parameters for all managed components. Source code refactoring and a new library release are required each time these
+settings need to be updated."""
 
 from pathlib import Path
-from dataclasses import dataclass
 
 import numpy as np
 from ataraxis_video_system import (
@@ -15,9 +17,10 @@ from ataraxis_video_system import (
     OutputPixelFormats,
 )
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import DataLogger, YamlConfig, SharedMemoryArray
+from ataraxis_data_structures import DataLogger, SharedMemoryArray
 from ataraxis_communication_interface import MicroControllerInterface
 
+from .data_classes import ZaberPositions
 from .zaber_bindings import ZaberAxis, ZaberConnection
 from .module_interfaces import (
     TTLInterface,
@@ -30,55 +33,20 @@ from .module_interfaces import (
 )
 
 
-@dataclass()
-class ZaberPositions(YamlConfig):
-    """This class is used to save and restore Zaber motor positions between sessions by saving them as .yaml file.
-
-    The class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
-    (axes). It is used to both store Zaber motor positions for each session for future analysis and to (optionally)
-    restore the same Zaber motor positions across consecutive experimental sessions for the same project and animal
-    combination.
-
-    Notes:
-        This class is designed to be used internally by other classes from this library. Do not instantiate or load
-        this class from .yaml files manually. Do not modify the data stored inside the .yaml file unless you know what
-        you are doing.
-
-        All positions are saved using native motor units. All class fields initialize to default placeholders that are
-        likely NOT safe to apply to the VR system. Do not apply the positions loaded from the file unless you are
-        certain they are safe to use.
-
-        Exercise caution when working with Zaber motors. The motors are powerful enough to damage the surrounding
-        equipment and manipulated objects.
-    """
-
-    headbar_z: int = 0
-    """The absolute position, in native motor units, of the HeadBar z-axis motor."""
-    headbar_pitch: int = 0
-    """The absolute position, in native motor units, of the HeadBar pitch-axis motor."""
-    headbar_roll: int = 0
-    """The absolute position, in native motor units, of the HeadBar roll-axis motor."""
-    lickport_z: int = 0
-    """The absolute position, in native motor units, of the LickPort z-axis motor."""
-    lickport_x: int = 0
-    """The absolute position, in native motor units, of the LickPort x-axis motor."""
-    lickport_y: int = 0
-    """The absolute position, in native motor units, of the LickPort y-axis motor."""
-
-
 class HeadBar:
     """Interfaces with Zaber motors that control the position of the HeadBar manipulator arm.
 
     This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes. It is used
     by the major runtime classes, such as MesoscopeExperiment, to interface with HeadBar motors. The class is designed
-    to transition the HeadBar between a small set of predefined states and should not be used directly by the user.
+    to transition the HeadBar between a set of predefined states and should not be used directly by the user.
 
     Notes:
         This class does not contain the guards that notify users about risks associated with moving the motors. Do not
         use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
         mesoscope, or harm the animal.
 
-        To fine-tune the position of any HeadBar motors in real time, use the main Zaber interface from the VRPC.
+        To fine-tune the position of any HeadBar motors in real time, use the main Zaber Launcher interface
+        (https://software.zaber.com/zaber-launcher/download) installed on the VRPC.
 
         Unless you know that the motors are homed and not parked, always call the prepare_motors() method before
         calling any other methods. Otherwise, Zaber controllers will likely ignore the issued commands.
@@ -318,14 +286,15 @@ class LickPort:
 
     This class abstracts working with Zaber motors that move the LickPort in Z, X, and Y axes. It is used
     by the major runtime classes, such as MesoscopeExperiment, to interface with LickPort motors. The class is designed
-    to transition the LickPort between a small set of predefined states and should not be used directly by the user.
+    to transition the LickPort between a set of predefined states and should not be used directly by the user.
 
     Notes:
         This class does not contain the guards that notify users about risks associated with moving the motors. Do not
         use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
         mesoscope, or harm the animal.
 
-        To fine-tune the position of any LickPort motors in real time, use the main Zaber interface from the VRPC.
+        To fine-tune the position of any HeadBar motors in real time, use the main Zaber Launcher interface
+        (https://software.zaber.com/zaber-launcher/download) installed on the VRPC.
 
         Unless you know that the motors are homed and not parked, always call the prepare_motors() method before
         calling any other methods. Otherwise, Zaber controllers will likely ignore the issued commands.
@@ -573,11 +542,8 @@ class MicroControllerInterfaces:
 
     Notes:
         This class is primarily intended to be used internally by the MesoscopeExperiment and BehavioralTraining
-        classes. Our valve calibration CLI uses this class directly to calibrate the water valve, but this is a unique
-        use scenario. Do not initialize this class directly unless you know what you are doing.
-
-        This class is calibrated and statically configured for the Mesoscope-VR system used in the Sun lab. Source code
-        refactoring will likely be necessary to adapt the class to other runtime conditions.
+        classes. Our vr-maintenance CLI (sl-maintain-vr) uses this class directly to calibrate the water valve, but
+        this is a unique use scenario. Do not initialize this class directly unless you know what you are doing.
 
         Calling the initializer does not start the underlying processes. Use the start() method before issuing other
         commands to properly initialize all remote processes. This design is intentional and is used during experiment
@@ -587,9 +553,6 @@ class MicroControllerInterfaces:
         data_logger: The initialized DataLogger instance used to log the data generated by the managed microcontrollers.
             For most runtimes, this argument is resolved by the MesoscopeExperiment or BehavioralTraining classes that
             initialize this class.
-        screens_on: Determines whether the VR screens are ON when this class is initialized. Since there is no way of
-            getting this information via hardware, the initial screen state has to be supplied as an argument. The class
-            will manage and track the state after initialization.
         actor_port: The USB port used by the Actor Microcontroller.
         sensor_port: The USB port used by the Sensor Microcontroller.
         encoder_port: The USB port used by the Encoder Microcontroller.
@@ -626,23 +589,19 @@ class MicroControllerInterfaces:
     def __init__(
         self,
         data_logger: DataLogger,
-        screens_on: bool = False,
-        actor_port: str = "/dev/ttyACM0",
-        sensor_port: str = "/dev/ttyACM1",
-        encoder_port: str = "/dev/ttyACM2",
-        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
-            (15000, 1.8556),
-            (30000, 3.4844),
-            (45000, 7.1846),
-            (60000, 10.0854),
-        ),
+        screens_on: bool,
+        actor_port: str,
+        sensor_port: str,
+        encoder_port: str,
+        valve_calibration_data: tuple[tuple[int | float, int | float], ...],
         debug: bool = False,
     ) -> None:
         # Initializes the start state tracker first
         self._started: bool = False
 
         self._previous_volume: float = 0.0
-        self._screen_state: bool = screens_on  # Tracks the current screen state
+        #  Tracks the current screen state. Assumes the screens are always OFF at class initialization.
+        self._screen_state: bool = False
 
         # Verifies water valve calibration data.
         if not isinstance(valve_calibration_data, tuple) or not all(
@@ -1052,16 +1011,13 @@ class VideoSystems:
     as .mp4 video files.
 
     This class interfaces with the three AVS cameras used during various runtimes to record animal behavior: the face
-    camera and the body cameras (the left camera and the right camera). The face camera is a high-grade scientific
+    camera and the two body cameras (the left camera and the right camera). The face camera is a high-grade scientific
     camera that records the animal's face and pupil. The left and right cameras are lower-end security cameras recording
     the animal's body from the left and right sides.
 
     Notes:
         This class is primarily intended to be used internally by the MesoscopeExperiment and BehavioralTraining
         classes. Do not initialize this class directly unless you know what you are doing.
-
-        This class is calibrated and statically configured for the Mesoscope-VR system used in the Sun lab. Source code
-        refactoring will likely be necessary to adapt the class to other runtime conditions.
 
         Calling the initializer does not start the underlying processes. Call the appropriate start() method to start
         acquiring and displaying face and body camera frames (there is a separate method for these two groups). Call
@@ -1100,10 +1056,10 @@ class VideoSystems:
         self,
         data_logger: DataLogger,
         output_directory: Path,
-        face_camera_index: int = 0,
-        left_camera_index: int = 0,
-        right_camera_index: int = 2,
-        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        face_camera_index: int,
+        left_camera_index: int,
+        right_camera_index: int,
+        harvesters_cti_path: Path,
     ) -> None:
         # Creates the _started flags first to avoid leaks if the initialization method fails.
         self._face_camera_started: bool = False
