@@ -3,7 +3,7 @@ from pathlib import Path
 from _typeshed import Incomplete
 
 from .experiment import (
-    ExperimentState as ExperimentState,
+    _ExperimentState as ExperimentState,
     run_train_logic as run_train_logic,
     lick_training_logic as lick_training_logic,
     run_experiment_logic as run_experiment_logic,

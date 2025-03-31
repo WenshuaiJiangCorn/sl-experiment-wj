@@ -1,5 +1,7 @@
 """This module provides classes that abstract working with Sun lab's Mesoscope-VR system to acquire training or
-experiment data."""
+experiment data. Primarily, this includes the project and experiment configuration classes and the functions that
+contain the logic for various runtimes supported by this library.
+"""
 
 import os
 import copy
@@ -7,7 +9,6 @@ import json
 from typing import Any
 from pathlib import Path
 import tempfile
-from dataclasses import dataclass
 from multiprocessing import Process
 
 from tqdm import tqdm
@@ -30,33 +31,6 @@ from .data_preprocessing import (
     RuntimeHardwareConfiguration,
     MesoscopeExperimentDescriptor,
 )
-
-
-@dataclass()
-class ExperimentState:
-    """Encapsulates the information used to set and maintain the Mesoscope-VR state-machine according to the desired
-    experiment state.
-
-    Primarily, experiment runtime logic is resolved by the Unity game engine. However, the Mesoscope-VR system
-    configuration may need to change throughout the experiment, for example, between the run and rest configurations.
-    Overall, the Mesoscope-VR system functions like a state-machine, with multiple statically configured states that
-    can be activated and maintained throughout the experiment. During runtime, the main function expects a sequence of
-    ExperimentState instances that will be traversed, start-to-end, to determine the flow of the experiment runtime.
-    """
-
-    experiment_state_code: int
-    """The integer code of the experiment state. Experiment states do not have a predefined meaning, Instead, each 
-    project is expected to define and follow its own experiment state code mapping. Typically, the experiment state 
-    code is used to denote major experiment stages, such as 'baseline', 'task1', 'cooldown', etc. Note, the same 
-    experiment state code can be used by multiple sequential ExperimentState instances to change the VR system states 
-    while maintaining the same experiment state."""
-    vr_state_code: int
-    """One of the supported VR system state-codes. Currently, the Mesoscope-VR system supports 2 state codes. State 
-    code 1 denotes 'REST' state and code 2 denotes 'RUN' state. In the rest state, the running wheel is locked and the
-    screens are off. In the run state, the screens are on and the wheel is unlocked. Note, multiple consecutive 
-    ExperimentState instances with different experiment state codes can reuse the same VR state code."""
-    state_duration_s: float
-    """The time, in seconds, to maintain the current combination of the experiment and VR states."""
 
 
 class _KeyboardListener:
@@ -2255,7 +2229,7 @@ def run_experiment_logic(
     session_data: SessionData,
     valve_calibration_data: tuple[tuple[int | float, int | float], ...],
     cue_length_map: dict[int, float],
-    experiment_state_sequence: tuple[ExperimentState, ...],
+    experiment_state_sequence: tuple[_ExperimentState, ...],
 ) -> None:
     """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 

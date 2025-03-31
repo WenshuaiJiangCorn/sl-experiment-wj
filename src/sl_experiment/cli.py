@@ -6,12 +6,12 @@ from pathlib import Path
 import click
 
 from .experiment import (
-    ExperimentState,
     run_train_logic,
     lick_training_logic,
     run_experiment_logic,
     vr_maintenance_logic,
 )
+from .data_classes import ExperimentState
 from .zaber_bindings import CRCCalculator, discover_zaber_devices
 from .data_preprocessing import SessionData, purge_redundant_data
 
@@ -149,7 +149,7 @@ def lick_training(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
-        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata",
     )
 
     # Runs the lick training session.
@@ -343,7 +343,7 @@ def run_training(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
-        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata",
     )
 
     # Runs the training session.
@@ -435,7 +435,7 @@ def run_experiment(
         local_root_directory="/media/Data/Experiments",
         server_root_directory="/media/cbsuwsun/storage/sun_data",
         nas_root_directory="/home/cybermouse/nas/rawdata",
-        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata"
+        mesoscope_root_directory="/home/cybermouse/scanimage/mesodata",
     )
 
     # Runs the experiment session using the input parameters.
