@@ -1,5 +1,5 @@
 """This module provides classes and methods used to interface with Google Sheet files to extract the stored data or
-write new data. primarily, these tools are used to synchronize the data acquired and stored during training and
+write new data. Primarily, these tools are used to synchronize the data acquired and stored during training and
 experiment runtimes with the data inside the lab's Google Sheets."""
 
 import re
@@ -17,6 +17,8 @@ from ataraxis_base_utilities import console
 from ataraxis_data_structures import YamlConfig
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+
+from .data_classes import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
 
 # Stores schemas for supported date formats.
 _supported_date_formats: set[str] = {"%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"}
@@ -92,10 +94,16 @@ def _convert_date_time_to_timestamp(date: str, time: str) -> int:
 
 
 def _extract_coordinate_value(substring: str) -> float:
-    """Extracts the numerical value from the input stereotactic coordinate substring.
+    """Extracts the numeric value from the input stereotactic coordinate substring.
 
     This worker function is used to extract the numeric value for each implant and injection coordinate parsed from the
     Google Sheet data.
+
+    Args:
+        substring: The stereotactic coordinate substring that contains the numeric value to be extracted.
+
+    Returns:
+        The extracted numeric value, formatted as a float.
 
     Raises:
         ValueError: If the input substring does not contain a numerical value for the anatomical coordinate.
@@ -126,9 +134,11 @@ def _parse_stereotactic_coordinates(coordinate_string: str) -> tuple[float, floa
     Notes:
         This method expects the coordinates to be stored as a string formatted as: "-1.8 AP, 2 ML, .25 DV".
 
+    Args:
+        coordinate_string: The input string containing the stereotactic coordinates, formatted as described above.
+
     Returns:
         The tuple of 3 floats, each storing the numeric value of the coordinates in the following order: AP, ML, DV.
-
     """
     ap_coordinate = 0.0
     ml_coordinate = 0.0
@@ -150,6 +160,12 @@ def _convert_index_to_column_letter(index: int) -> str:
 
     This is used when parsing the available headers from the Google Sheet to generate the initial column-to-header
     mapping dictionary.
+
+     Args:
+        index: The 0-based column index to be converted.
+
+    Returns:
+        The Excel-style column letter corresponding to the input index.
     """
     result = ""
     while index >= 0:
@@ -166,161 +182,23 @@ def _replace_empty_values(row_data: list[str]) -> list[str | None]:
 
     Args:
         row_data: The list of cell values from a single Google Sheet row.
+
+    Returns:
+        The filtered version of the input list.
     """
     return [None if cell.strip().lower() in {"", "n/a", "--", "---"} else cell for cell in row_data]
 
 
-@dataclass()
-class SubjectData:
-    """Stores the subject (mouse) ID information."""
-
-    id: int
-    """Stores the unique ID (name) of the subject. Assumes all mice are given a numeric ID, rather than a string name.
-    """
-    ear_punch: str
-    """Stores the ear tag location of the subject."""
-    sex: str
-    """Stores the gender of the subject."""
-    genotype: str
-    """Stores the genotype of the subject."""
-    date_of_birth_us: int
-    """Stores the date of birth of the subject as the number of microseconds elapsed since UTC epoch onset."""
-    weight_g: float
-    """Stores the weight of the subject pre-surgery, in grams."""
-    cage: int
-    """Stores the number of the latest cage used to house the subject."""
-    location_housed: str
-    """Stores the latest location used to house the subject after the surgery."""
-    status: str
-    """Stores the latest status of the subject (alive / deceased)."""
-
-
-@dataclass()
-class ProcedureData:
-    """Stores the general information about the surgical procedure."""
-
-    surgery_start_us: int
-    """Stores the date and time when the surgery was started as microseconds elapsed since UTC epoch onset."""
-    surgery_end_us: int
-    """Stores the date and time when the surgery has ended as microseconds elapsed since UTC epoch onset."""
-    surgeon: str
-    """Stores the name or ID of the surgeon. If the intervention was carrie out by multiple surgeon, all participating
-    surgeon names and IDs are stored as part of the same string."""
-    protocol: str
-    """Stores the experiment protocol number (ID) used during the surgery."""
-    surgery_notes: str
-    """Stores surgeon's notes taken during the surgery."""
-    post_op_notes: str
-    """Stores surgeon's notes taken during the post-surgery recovery period."""
-
-
-@dataclass
-class ImplantData:
-    """Stores the information about a single implantation performed during surgery.
-
-    Multiple ImplantData instances are used at the same time if the surgery involved multiple implants.
-    """
-
-    implant: str
-    """The descriptive name of the implant."""
-    implant_target: str
-    """The name of the brain region or cranium section targeted by the implant."""
-    implant_code: int
-    """The manufacturer code or internal reference code for the implant. This code is used to identify the implant in 
-    additional datasheets and lab ordering documents."""
-    implant_ap_coordinate_mm: float
-    """Stores implant's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
-    implant_ml_coordinate_mm: float
-    """Stores implant's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
-    implant_dv_coordinate_mm: float
-    """Stores implant's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
-
-
-@dataclass
-class InjectionData:
-    """Stores the information about a single injection performed during surgery.
-
-    Multiple InjectionData instances are used at the same time if the surgery involved multiple injections.
-    """
-
-    injection: str
-    """The descriptive name of the injection."""
-    injection_target: str
-    """The name of the brain region targeted by the injection."""
-    injection_volume_nl: float
-    """The volume of substance, in nanoliters, delivered during the injection."""
-    injection_code: int
-    """The manufacturer code or internal reference code for the injected substance. This code is used to identify the 
-    substance in additional datasheets and lab ordering documents."""
-    injection_ap_coordinate_mm: float
-    """Stores injection's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
-    injection_ml_coordinate_mm: float
-    """Stores injection's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
-    injection_dv_coordinate_mm: float
-    """Stores injection's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
-
-
-@dataclass
-class DrugData:
-    """Stores the information about all drugs administered to the subject before, during, and immediately after the
-    surgery.
-    """
-
-    lactated_ringers_solution_volume_ml: float
-    """Stores the volume of Lactated Ringer's Solution (LRS) administered during surgery, in ml."""
-    lactated_ringers_solution_code: int
-    """Stores the manufacturer code or internal reference code for Lactated Ringer's Solution (LRS). This code is used 
-    to identify the LRS batch in additional datasheets and lab ordering documents."""
-    ketoprofen_volume_ml: float
-    """Stores the volume of ketoprofen administered during surgery, in ml."""
-    ketoprofen_code: int
-    """Stores the manufacturer code or internal reference code for ketoprofen. This code is used to identify the 
-    ketoprofen batch in additional datasheets and lab ordering documents."""
-    buprenorphine_volume_ml: float
-    """Stores the volume of buprenorphine administered during surgery, in ml."""
-    buprenorphine_code: int
-    """Stores the manufacturer code or internal reference code for buprenorphine. This code is used to identify the 
-    buprenorphine batch in additional datasheets and lab ordering documents."""
-    dexamethasone_volume_ml: float
-    """Stores the volume of dexamethasone administered during surgery, in ml."""
-    dexamethasone_code: int
-    """Stores the manufacturer code or internal reference code for dexamethasone. This code is used to identify the 
-    dexamethasone batch in additional datasheets and lab ordering documents."""
-
-
-@dataclass
-class SurgeryData(YamlConfig):
-    """Aggregates all data for a single mouse surgery procedure.
-
-    This class aggregates other dataclass instances that store specific data about the surgical procedure. Primarily, it
-    is used to save the data as a .yaml file to the metadata directory of each animal used in every Sun lab project.
-    This way, the surgery data is always stored alongside the behavior and brain activity data collected during training
-    and experiments.
-    """
-
-    subject: SubjectData
-    """Stores the ID information about the subject (mouse)."""
-    procedure: ProcedureData
-    """Stores general data about the surgical procedure."""
-    drugs: DrugData
-    """Stores the data about the substances subcutaneously injected into the subject before, during and immediately 
-    after the surgical intervention."""
-    implants: list[ImplantData]
-    """Stores the data for all cranial and transcranial implants introduced to the subject during the procedure."""
-    injections: list[InjectionData]
-    """Stores the data about all substances infused into the brain of the subject during the surgery."""
-
-
 class SurgerySheet:
-    """Encapsulates and provides access to the target Google Sheet that contains lab surgery logs.
+    """Encapsulates the access to the target Google Sheet that contains lab surgery logs.
 
     This class uses Google Sheets API to connect to and extract the data stored in the surgery log Google Sheet file.
-    It functions as the central access point used to extract surgery data for each animal and project combination. The
-    extracted data is stored with the rest of the experiment and training data acquired as part of the project.
+    It functions as the central access point used to extract surgery data for each animal and project combination and
+    save it as a .yaml file alongside other recorded training or experiment data.
 
     Notes:
         This class is purpose-built to work with the specific surgery log format used in the Sun lab. If the target
-        sheet or project tab layout does not conform to expectations, this class will likely not perform as intended.
+        sheet or project tab layout does not conform to expectations, this class will likely not behave as intended.
 
     Args:
         project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
@@ -745,13 +623,13 @@ class WaterSheetData:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
-    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str) -> None:
+    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_name: str) -> None:
         """Updates the water restriction log for the managed animal with today's training or experiment data.
 
         This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water
-        restriction log with the experimenter-provided data, extracted from the descriptor .yaml file. This allows
-        experimenters to only enter 'manually' gathered data once, instead of entering it both in the .yaml file and
-        the Google Sheet log.
+        restriction log with the runtime data. Primarily, this is used to keep a record of behavior interventions and to
+        streamline experimenter experience by automatically synchronizing the Google Sheet log with the data logged
+        during runtime.
 
         Notes:
             For this method to work as intended, the target water restriction log tab must be pre-filled with dates
@@ -760,9 +638,11 @@ class WaterSheetData:
 
         Args:
             mouse_weight: The weight of the mouse, in grams, at the beginning of the training or experiment session.
-            water_ml: The volume of water, in milliliters, given to the animal automatically (during runtime) and
-                manually (by the experimenter, after runtime).
+            water_ml: The combined volume of water, in milliliters, given to the animal automatically (during runtime)
+                and manually (by the experimenter, after runtime).
             experimenter_id: The ID of the experimenter running the training or experiment session.
+            session_name: The name (type) of the training or experiment session. This is written to the 'behavior'
+                column to describe the type of activity performed by the animal during runtime.
         """
         # Gets today's date
         today = datetime.now().strftime("%-m/%-d/%y")
@@ -778,6 +658,7 @@ class WaterSheetData:
         self._write_value("weight (g)", row_index, mouse_weight)
         self._write_value("given by:", row_index, experimenter_id)
         self._write_value("water given (ml)", row_index, water_ml)
+        self._write_value("behavior", row_index, session_name)
         self._write_value("time", row_index, current_time)
 
     def _find_date_row(self, target_date: str) -> int:

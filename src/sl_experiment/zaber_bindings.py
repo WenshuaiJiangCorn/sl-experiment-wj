@@ -1,6 +1,6 @@
-"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR system to position the
-HeadBar and LickPort manipulators. Primarily, the module builds on top of the bindings exposed by ZaberMotion library
-to specialize them for the specific requirements of the Mesoscope-VR system."""
+"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR system. Primarily, the
+module builds on top of the bindings exposed by ZaberMotion library to specialize them for the specific requirements of
+the Mesoscope-VR system."""
 
 from typing import Any
 from dataclasses import field, dataclass
@@ -150,8 +150,8 @@ class CRCCalculator:
     """A CRC32-XFER checksum calculator that works with raw bytes or pythonic strings.
 
     This utility class exposes methods that generate CRC checksum labels and bytes objects, which are primarily used by
-    Ataraxis-Zaber binding classes to verify that Zaber devices have been configured to work with this binding
-    library.
+    Zaber binding classes to verify that Zaber devices have been configured to work with the binding interface exposed
+    by this library.
 
     Attributes:
         _calculator: Stores the configured Calculator class object used to calculate the checksums.
@@ -206,11 +206,8 @@ class _ZaberSettings:
     interface.
 
     Notes:
-        This class only lists the settings used by the classes of this library.
-
-        Since this class is a simple static structure, it is not tested directly by pytest functions, unlike the
-        functional classes. That said, the class is tested indirectly while testing the functional classes, as they
-        rely on this utility class during their runtimes.
+        This class only lists the settings used by the classes of this module and does not cover all available Zaber
+        settings.
     """
 
     device_temperature: str = SettingConstants.SYSTEM_TEMPERATURE
@@ -266,14 +263,10 @@ class _ZaberUnits:
     """Exposes methods for selecting appropriate Zaber units used when communicating with the motor, based on the
     selected motor type and colloquial unit family.
 
-    This class is primarily designed to de-couple colloquial unit names used by the UI from the Zaber-defined unit
+    This class is primarily designed to de-couple colloquial unit names used by our API from the Zaber-defined unit
     names, which is critical for reading and writing hardware settings and when issuing certain commands. To do so,
     after the initial configuration, use class properties to retrieve the necessary units (e.g: for displacement,
     velocity, or acceleration).
-
-    Notes:
-        This class is intended exclusively for within-library use and should only be initialized by ZaberAxis instances.
-        Do not call or use this class directly!
     """
 
     # This dictionary conditionally maps Zaber units to colloquial names, factoring in the type of the motor.
@@ -322,11 +315,11 @@ class _ZaberUnits:
 class ZaberAxis:
     """Interfaces with a Zaber axis (motor).
 
-    This class is the lowest member of the tri-class hierarchy used to control Zaber motors during experiments.
+    This class is the lowest member of the tri-class hierarchy used to control Zaber motors during runtime.
 
     Notes:
         This class uses 'millimeters' for linear motors and 'degrees' for rotary motors. These units were chosen due to
-        making the most sense for our use case and context.
+        achieving the best balance between precision and ease of use for the experimenters in the lab.
 
     Args:
         motor: Axis class instance that controls the hardware of the motor. This class should be instantiated

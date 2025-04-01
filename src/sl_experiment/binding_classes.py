@@ -1,8 +1,7 @@
-"""This module provides classes that bind Ataraxis library classes for all Mesoscope-VR components
-(cameras, microcontrollers, Zaber motors). These bindings streamline the API used to interface with these components
-during experiment and training runtimes. Critically, these classes statically define optimal runtime configuration
-parameters for all managed components. Source code refactoring and a new library release are required each time these
-settings need to be updated."""
+"""This module binds Ataraxis classes for all Mesoscope-VR components (cameras, microcontrollers, Zaber motors). These
+bindings streamline the API used to interface with these components during experiment and training runtimes. Critically,
+these classes statically define optimal runtime configuration parameters for all managed components. Source code
+refactoring and a new library release are required each time these settings need to be updated."""
 
 from pathlib import Path
 
@@ -589,7 +588,6 @@ class MicroControllerInterfaces:
     def __init__(
         self,
         data_logger: DataLogger,
-        screens_on: bool,
         actor_port: str,
         sensor_port: str,
         encoder_port: str,
@@ -633,7 +631,7 @@ class MicroControllerInterfaces:
             debug=debug,
         )
         self.valve = ValveInterface(valve_calibration_data=valve_calibration_data, debug=debug)
-        self.screens = ScreenInterface(initially_on=screens_on, debug=debug)
+        self.screens = ScreenInterface(initially_on=False, debug=debug)
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(

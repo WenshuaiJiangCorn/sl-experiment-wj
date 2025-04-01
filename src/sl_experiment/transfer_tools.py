@@ -1,6 +1,6 @@
-"""This module provides methods for moving data between the local machine, the Synology NAS drive, and the Sun lab
-BioHPC cluster. All methods in this module expect that the destinations and sources are mounted on the host file-system
-and use the os tools for moving the data.
+"""This module provides methods for moving data between the local machine, the ScanImage (Mesoscope) PC, the Synology
+NAS drive, and the lab BioHPC cluster. All methods in this module expect that the destinations and sources are mounted
+on the host file-system and use the os tools for moving the data.
 """
 
 import shutil
@@ -47,7 +47,7 @@ def transfer_directory(source: Path, destination: Path, num_threads: int = 1, ve
         The method executes a multithreading copy operation. It does not clean up the source files. That job is handed
         to the SessionData class, which also executes the copy operation simultaneously for multiple destinations.
 
-        if the method is configured to verify transferred file integrity, it reruns the xxHash3-128 checksum calculation
+        If the method is configured to verify transferred file integrity, it reruns the xxHash3-128 checksum calculation
         and compares the returned checksum to the one stored in the source directory. The method assumes that all input
         directories contain the 'ax_checksum.txt' file that stores the 'source' directory checksum at the highest level
         of the input directory tree.

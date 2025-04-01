@@ -24,10 +24,13 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .visualizers import BehaviorVisualizer
 from .data_classes import (
     SessionData,
+    ProjectConfiguration,
+    ExperimentConfiguration,
+    HardwareConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
-    RuntimeHardwareConfiguration,
     MesoscopeExperimentDescriptor,
+    MesoscopePositions,
 )
 from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
 from .module_interfaces import BreakInterface, ValveInterface
@@ -38,13 +41,13 @@ class _KeyboardListener:
     """Monitors the keyboard input for various runtime control signals and changes internal flags to communicate
     detected signals.
 
-    This class is used during all training runtimes to allow the user to manually control some aspects of the
-    Mesoscope-VR system and runtime. For example, it is used to abort the training runtime early and manually deliver
-    rewards via the lick-tube.
+    This class is used during all training runtimes to allow the user to manually control various aspects of the
+    Mesoscope-VR system and runtime. For example, it is used to abort the runtime early by gracefully stopping all
+    runtime assets and running data preprocessing.
 
     Notes:
         This monitor may pick up keyboard strokes directed at other applications during runtime. While our unique key
-        combination is likely to not be used elsewhere, exercise caution when using other applications alongside the
+        combinations are likely not used elsewhere, exercise caution when using other applications alongside the
         runtime code.
 
         The monitor runs in a separate process (on a separate core) and sends the data to the main process via
@@ -207,56 +210,30 @@ class _MesoscopeExperiment:
     This class provides methods for conducting experiments using the Mesoscope-VR system. It abstracts most
     low-level interactions with the VR system and the mesoscope via a simple high-level state API.
 
-    This class also provides methods for limited preprocessing of the collected data. The preprocessing methods are
-    designed to be executed after each experiment runtime to prepare the data for long-term storage and transmission
-    over the network. Preprocessing methods use multiprocessing to optimize runtime performance and assume that the
-    VRPC is kept mostly idle during data preprocessing.
-
     Notes:
-        Calling this initializer does not start the Mesoscope-VR components. Use the start() method before issuing other
-        commands to properly initialize all remote processes. This class reserves up to 11 CPU cores during runtime.
-
-        Use the 'axtl-ports' cli command to discover the USB ports used by Ataraxis Micro Controller (AMC) devices.
-
-        Use the 'axvs-ids' cli command to discover the camera indices used by the Harvesters-managed and
-        OpenCV-managed cameras.
-
-        Use the 'sl-devices' cli command to discover the serial ports used by the Zaber motion controllers.
+        Calling this initializer does not initialize all Mesoscope-VR assets. Use the start() method before issuing
+        other commands to properly initialize all remote processes.
 
         This class statically reserves the id code '1' to label its log entries. Make sure no other Ataraxis class, such
         as MicroControllerInterface or VideoSystem, uses this id code.
 
     Args:
-        session_data: An initialized SessionData instance. This instance is used to transfer the data between VRPC,
-            ScanImagePC, BioHPC server, and the NAS during runtime. Each instance is initialized for the specific
-            project, animal, and session combination for which the data is acquired.
-        descriptor: A partially configured _LickTrainingDescriptor or _RunTrainingDescriptor instance. This instance is
-            used to store session-specific information in a human-readable format.
-        cue_length_map: A dictionary that maps each integer-code associated with a wall cue used in the Virtual Reality
-            experiment environment to its length in real-world centimeters. Ity is used to map each VR cue to the
-            distance the mouse needs to travel to fully traverse the wall cue region from start to end.
-        screens_on: Communicates whether the VR screens are currently ON at the time of class initialization.
-        experiment_state: The integer code that represents the initial state of the experiment. Experiment state codes
-            are used to mark different stages of each experiment (such as rest_1, run_1, rest_2, etc...). During
-            analysis, these codes can be used to segment experimental data into sections.
-        actor_port: The USB port used by the actor Microcontroller.
-        sensor_port: The USB port used by the sensor Microcontroller.
-        encoder_port: The USB port used by the encoder Microcontroller.
-        headbar_port: The USB port used by the headbar Zaber motor controllers (devices).
-        lickport_port: The USB port used by the lickport Zaber motor controllers (devices).
-        unity_ip: The IP address of the MQTT broker used to communicate with the Unity game engine.
-        unity_port: The port number of the MQTT broker used to communicate with the Unity game engine.
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters.
-        face_camera_index: The index of the face camera in the list of all available Harvester-managed cameras.
-        left_camera_index: The index of the left camera in the list of all available OpenCV-managed cameras.
-        right_camera_index: The index of the right camera in the list of all available OpenCV-managed cameras.
-        harvesters_cti_path: The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.
+        project_configuration: An initialized ProjectConfiguration instance that specifies the runtime parameters to
+            use for this experiment session. This is used internally to initialize all other Mesoscope-VR assets.
+        experiment_configuration: An initialized ExperimentConfiguration instance that specifies experiment-related
+            parameters used during this session's runtime. Primarily, this instance is used to extract the VR cue to
+            distance map and to save the experiment configuration to the output directory at runtime initialization.
+        session_data: An initialized SessionData instance used to control the flow of data during acquisition and
+            preprocessing. Each instance is initialized for the specific project, animal, and session combination for
+            which the data is acquired.
+        session_descriptor: A partially configured MesoscopeExperimentDescriptor instance. This instance is used to
+            store session-specific information in a human-readable format.
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
         descriptor: Stores the session descriptor instance.
+        _session_data: Stores the SessionData instance.
+        _experiment_configuration: Stores the ExperimentConfiguration instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
@@ -275,12 +252,6 @@ class _MesoscopeExperiment:
         _source_id: Stores the unique identifier code for this class instance. The identifier is used to mark log
             entries made by this class instance and has to be unique across all sources that log data at the same time,
             such as MicroControllerInterfaces and VideoSystems.
-        _cue_map: Stores the dictionary that maps integer-codes associated with each VR wall cue with
-            its length in centimeters.
-        _session_data: Stores the SessionData instance used to manage the acquired data.
-
-    Raises:
-        TypeError: If session_data or cue_length_map arguments have invalid types.
     """
 
     # Maps integer VR state codes to human-readable string-names.
@@ -288,28 +259,10 @@ class _MesoscopeExperiment:
 
     def __init__(
         self,
+        project_configuration: ProjectConfiguration,
+        experiment_configuration: ExperimentConfiguration,
         session_data: SessionData,
-        descriptor: MesoscopeExperimentDescriptor,
-        cue_length_map: dict[int, float],
-        screens_on: bool = False,
-        experiment_state: int = 0,
-        actor_port: str = "/dev/ttyACM0",
-        sensor_port: str = "/dev/ttyACM1",
-        encoder_port: str = "/dev/ttyACM2",
-        headbar_port: str = "/dev/ttyUSB0",
-        lickport_port: str = "/dev/ttyUSB1",
-        unity_ip: str = "127.0.0.1",
-        unity_port: int = 1883,
-        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
-            (15000, 1.8556),
-            (30000, 3.4844),
-            (45000, 7.1846),
-            (60000, 10.0854),
-        ),
-        face_camera_index: int = 0,
-        left_camera_index: int = 0,
-        right_camera_index: int = 2,
-        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        session_descriptor: MesoscopeExperimentDescriptor,
     ) -> None:
         # Activates the console to display messages to the user if the console is disabled when the class is
         # instantiated.
@@ -318,37 +271,25 @@ class _MesoscopeExperiment:
 
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
-        self.descriptor: MesoscopeExperimentDescriptor = descriptor
 
-        # Input verification:
-        if not isinstance(session_data, SessionData):
-            message = (
-                f"Unable to initialize the MesoscopeExperiment class. Expected a SessionData instance for "
-                f"'session_data' argument, but instead encountered {session_data} of type "
-                f"{type(session_data).__name__}."
-            )
-            console.error(message=message, error=TypeError)
-        if not isinstance(cue_length_map, dict):
-            message = (
-                f"Unable to initialize the MesoscopeExperiment class. Expected a dictionary for 'cue_length_map' "
-                f"argument, but instead encountered {cue_length_map} of type {type(cue_length_map).__name__}."
-            )
-            console.error(message=message, error=TypeError)
+        # Saves partially initialized descriptor instance to class attribute, so that it can be updated and shared
+        # with the central runtime control function at the end of the experiment.
+        self.descriptor: MesoscopeExperimentDescriptor = session_descriptor
+
+        # Since SessionData resolves session directory structure at initialization, the instance is ready to resolve
+        # all paths used by the experiment class instance.
+        self._session_data: SessionData = session_data
+
+        # Also saves the ExperimentConfiguration instance to class attribute, as it is used during the start() method
+        # runtime
+        self._experiment_configuration: ExperimentConfiguration = experiment_configuration
 
         # Defines other flags used during runtime:
-        self._vr_state: int = 0  # Stores the current state of the VR system
-        self._experiment_state: int = experiment_state  # Stores user-defined experiment state
-        self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
+        # VR and Experiment states are initialized to 0 by default.
+        self._vr_state: int = 0
+        self._experiment_state: int = 0
         self._source_id: np.uint8 = np.uint8(1)  # Reserves source ID code 1 for this class
-
-        # This dictionary is used to convert distance traveled by the animal into the corresponding sequence of
-        # traversed cues (corridors).
-        self._cue_map: dict[int, float] = cue_length_map
-
-        # Saves the SessionData instance to an attribute so that it can be used from class methods. Since SessionData
-        # resolves session directory structure at initialization, the instance is ready to resolve all paths used by
-        # the experiment class instance.
-        self._session_data: SessionData = session_data
+        self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
 
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
@@ -364,11 +305,10 @@ class _MesoscopeExperiment:
         # Initializes the binding class for all MicroController Interfaces.
         self._microcontrollers: MicroControllerInterfaces = MicroControllerInterfaces(
             data_logger=self._logger,
-            screens_on=screens_on,
-            actor_port=actor_port,
-            sensor_port=sensor_port,
-            encoder_port=encoder_port,
-            valve_calibration_data=valve_calibration_data,
+            actor_port=project_configuration.actor_port,
+            sensor_port=project_configuration.sensor_port,
+            encoder_port=project_configuration.encoder_port,
+            valve_calibration_data=project_configuration.valve_calibration_data,
             debug=False,
         )
 
@@ -376,17 +316,17 @@ class _MesoscopeExperiment:
         # exclusively to verify that the Unity is running and to collect the sequence of VR wall cues used by the task.
         monitored_topics = ("CueSequence/",)
         self._unity: MQTTCommunication = MQTTCommunication(
-            ip=unity_ip, port=unity_port, monitored_topics=monitored_topics
+            ip=project_configuration.unity_ip, port=project_configuration.unity_port, monitored_topics=monitored_topics
         )
 
         # Initializes the binding class for all VideoSystems.
         self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
             output_directory=self._session_data.camera_frames_path,
-            face_camera_index=face_camera_index,
-            left_camera_index=left_camera_index,
-            right_camera_index=right_camera_index,
-            harvesters_cti_path=harvesters_cti_path,
+            face_camera_index=project_configuration.face_camera_index,
+            left_camera_index=project_configuration.left_camera_index,
+            right_camera_index=project_configuration.right_camera_index,
+            harvesters_cti_path=project_configuration.harvesters_cti_path,
         )
 
         # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
@@ -401,10 +341,12 @@ class _MesoscopeExperiment:
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
-            headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+            headbar_port=project_configuration.headbar_port,
+            zaber_positions_path=self._session_data.previous_zaber_positions_path,
         )
         self.LickPort: LickPort = LickPort(
-            lickport_port=lickport_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+            lickport_port=project_configuration.lickport_port,
+            zaber_positions_path=self._session_data.previous_zaber_positions_path,
         )
 
     def start(self) -> None:
@@ -499,11 +441,27 @@ class _MesoscopeExperiment:
         message = "HeadBar: Positioned."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
-            "Preparing to move the LickPort into position. Mount the animal onto the VR rig and install the mesoscope "
-            "objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably run the task."
-        )
+        # If previous mesoscope positions were saved, loads the coordinates and uses them to augment the message to the
+        # user.
+        if self._session_data.previous_mesoscope_positions_path.exists():
+            previous_positions = MesoscopePositions.from_yaml(
+                file_path=self._session_data.previous_mesoscope_positions_path
+            )
+            # Gives user time to mount the animal and requires confirmation before proceeding further.
+            message = (
+                f"Preparing to move the LickPort into position. Mount the animal onto the VR rig and install the "
+                f"mesoscope objetive. If necessary, adjust the HeadBar position to make sure the animal can "
+                f"comfortably run the task. Previous mesoscope coordinates are: "
+                f"x={previous_positions.mesoscope_x_position}, y={previous_positions.mesoscope_y_position}, "
+                f"z={previous_positions.mesoscope_z_position}, roll={previous_positions.mesoscope_roll_position}."
+            )
+        else:
+            # Gives user time to mount the animal and requires confirmation before proceeding further.
+            message = (
+                "Preparing to move the LickPort into position. Mount the animal onto the VR rig and install the "
+                "mesoscope objetive. If necessary, adjust the HeadBar position to make sure the animal can comfortably "
+                "run the task."
+            )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
@@ -544,20 +502,25 @@ class _MesoscopeExperiment:
 
         # Generates a snapshot of the runtime hardware configuration. In turn, this data is used to parse the .npz log
         # files during processing.
-        hardware_configuration = RuntimeHardwareConfiguration(
-            cue_map=self._cue_map,
+        hardware_configuration = HardwareConfiguration(
+            cue_map=self._experiment_configuration.cue_map,
             cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
             maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
             minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
             lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-            scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-            nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+            valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+            valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
             torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-            initially_on=self._microcontrollers.screens.screens_initially_on,
-            has_ttl=True,
+            screens_initially_on=self._microcontrollers.screens.screens_initially_on,
+            recorded_mesoscope_ttl=True,
         )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
         message = "Hardware configuration snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Also saves the ExperimentConfiguration instance to the session folder.
+        self._experiment_configuration.to_yaml(self._session_data.local_experiment_configuration_path)
+        message = "Experiment configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Enables body cameras. Starts frame saving for all cameras
@@ -668,6 +631,21 @@ class _MesoscopeExperiment:
         delivered_water = self._microcontrollers.total_delivered_volume
         # Overwrites the delivered water volume with the volume recorded over the runtime.
         self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
+
+        # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
+        # coordinates with the positions loaded from the persistent storage file. This way, if the user used the same
+        # coordinates as last time, they do not need to update the mesoscope coordinates when manually editing the
+        # descriptor.
+        if self._session_data.previous_mesoscope_positions_path.exists():
+            previous_coordinates = MesoscopePositions.from_yaml(
+                file_path=self._session_data.previous_mesoscope_positions_path
+            )
+            self.descriptor.mesoscope_x_position = previous_coordinates.mesoscope_x_position
+            self.descriptor.mesoscope_y_position = previous_coordinates.mesoscope_y_position
+            self.descriptor.mesoscope_z_position = previous_coordinates.mesoscope_z_position
+            self.descriptor.mesoscope_roll_position = previous_coordinates.mesoscope_roll_position
+
+        # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
         self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
@@ -741,8 +719,21 @@ class _MesoscopeExperiment:
         message = "HeadBar and LickPort motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
+        # Extracts the mesoscope coordinates from the user-updated descriptor file and saves them as a
+        # MesoscopePositions object to the persistent folder of the managed animal. This is used to assist the
+        # experimenter in restoring the Mesoscope to the same position during the following runtimes.
+        mesoscope_positions = MesoscopePositions(
+            mesoscope_x_position=descriptor.mesoscope_x_position,
+            mesoscope_y_position=descriptor.mesoscope_y_position,
+            mesoscope_z_position=descriptor.mesoscope_z_position,
+            mesoscope_roll_position=descriptor.mesoscope_roll_position,
+        )
+        mesoscope_positions.to_yaml(file_path=self._session_data.previous_mesoscope_positions_path)
+        message = "Mesoscope objective position snapshot: Created."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Preprocesses the session data
-        self._session_data.preprocess_session_data()
+        preprocess_session_data(session_data=self._session_data)
 
         message = "MesoscopeExperiment runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -963,46 +954,24 @@ class _BehaviorTraining:
     system. It abstracts most low-level interactions with the VR system and the mesoscope via a simple
     high-level state API.
 
-    This class also provides methods for limited preprocessing of the collected data. The preprocessing methods are
-    designed to be executed after each training runtime to prepare the data for long-term storage and transmission
-    over the network. Preprocessing methods use multiprocessing to optimize runtime performance and assume that the
-    VRPC is kept mostly idle during data preprocessing.
-
     Notes:
         Calling this initializer does not start the Mesoscope-VR components. Use the start() method before issuing other
-        commands to properly initialize all remote processes. This class reserves up to 11 CPU cores during runtime.
-
-        Use the 'axtl-ports' cli command to discover the USB ports used by Ataraxis Micro Controller (AMC) devices.
-
-        Use the 'axvs-ids' cli command to discover the camera indices used by the Harvesters-managed and
-        OpenCV-managed cameras.
-
-        Use the 'sl-devices' cli command to discover the serial ports used by the Zaber motion controllers.
+        commands to properly initialize all remote processes.
 
     Args:
-        session_data: An initialized SessionData instance. This instance is used to transfer the data between VRPC,
-            BioHPC server, and the NAS during runtime. Each instance is initialized for the specific project, animal,
-            and session combination for which the data is acquired.
-        descriptor: A partially configured _LickTrainingDescriptor or _RunTrainingDescriptor instance. This instance is
-            used to store session-specific information in a human-readable format.
-        screens_on: Communicates whether the VR screens are currently ON at the time of class initialization.
-        actor_port: The USB port used by the actor Microcontroller.
-        sensor_port: The USB port used by the sensor Microcontroller.
-        encoder_port: The USB port used by the encoder Microcontroller.
-        headbar_port: The USB port used by the headbar Zaber motor controllers (devices).
-        lickport_port: The USB port used by the lickport Zaber motor controllers (devices).
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters.
-        face_camera_index: The index of the face camera in the list of all available Harvester-managed cameras.
-        left_camera_index: The index of the left camera in the list of all available OpenCV-managed cameras.
-        right_camera_index: The index of the right camera in the list of all available OpenCV-managed cameras.
-        harvesters_cti_path: The path to the GeniCam CTI file used to connect to Harvesters-managed cameras.
+        project_configuration: An initialized ProjectConfiguration instance that specifies the runtime parameters to
+            use for this experiment session. This is used internally to initialize all other Mesoscope-VR assets.
+        session_data: An initialized SessionData instance used to control the flow of data during acquisition and
+            preprocessing. Each instance is initialized for the specific project, animal, and session combination for
+            which the data is acquired.
+        session_descriptor: A partially configured LickTrainingDescriptor or RunTrainingDescriptor instance. This
+            instance is used to store session-specific information in a human-readable format.
 
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
         _lick_training: Tracks the training state used by the instance, which is required for log parsing.
         descriptor: Stores the session descriptor instance.
+        _session_data: Stores the SessionData instance.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers and video
             cameras.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
@@ -1011,33 +980,13 @@ class _BehaviorTraining:
             runtime.
         HeadBar: Stores the HeadBar class instance that interfaces with all HeadBar manipulator motors.
         LickPort: Stores the LickPort class instance that interfaces with all LickPort manipulator motors.
-        _screen_on: Tracks whether the VR displays are currently ON.
-        _session_data: Stores the SessionData instance used to manage the acquired data.
-
-    Raises:
-        TypeError: If session_data argument has an invalid type.
     """
 
     def __init__(
         self,
+        project_configuration: ProjectConfiguration,
         session_data: SessionData,
-        descriptor: LickTrainingDescriptor | RunTrainingDescriptor,
-        screens_on: bool = False,
-        actor_port: str = "/dev/ttyACM0",
-        sensor_port: str = "/dev/ttyACM1",
-        encoder_port: str = "/dev/ttyACM2",
-        headbar_port: str = "/dev/ttyUSB0",
-        lickport_port: str = "/dev/ttyUSB1",
-        valve_calibration_data: tuple[tuple[int | float, int | float], ...] = (
-            (15000, 1.8556),
-            (30000, 3.4844),
-            (45000, 7.1846),
-            (60000, 10.0854),
-        ),
-        face_camera_index: int = 0,
-        left_camera_index: int = 0,
-        right_camera_index: int = 2,
-        harvesters_cti_path: Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
+        session_descriptor: LickTrainingDescriptor | RunTrainingDescriptor,
     ) -> None:
         # Activates the console to display messages to the user if the console is disabled when the class is
         # instantiated.
@@ -1050,19 +999,7 @@ class _BehaviorTraining:
         # Determines the type of training carried out by the instance. This is needed for log parsing and
         # SessionDescriptor generation.
         self._lick_training: bool = False
-        self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = descriptor
-
-        # Input verification:
-        if not isinstance(session_data, SessionData):
-            message = (
-                f"Unable to initialize the BehaviorTraining class. Expected a SessionData instance for "
-                f"'session_data' argument, but instead encountered {session_data} of type "
-                f"{type(session_data).__name__}."
-            )
-            console.error(message=message, error=TypeError)
-
-        # Defines other flags used during runtime:
-        self._screen_on: bool = screens_on  # Usually this would be false, but this is not guaranteed
+        self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = session_descriptor
 
         # Saves the SessionData instance to an attribute so that it can be used from class methods. Since SessionData
         # resolves session directory structure at initialization, the instance is ready to resolve all paths used by
@@ -1083,10 +1020,10 @@ class _BehaviorTraining:
         # Initializes the binding class for all MicroController Interfaces.
         self._microcontrollers: MicroControllerInterfaces = MicroControllerInterfaces(
             data_logger=self._logger,
-            actor_port=actor_port,
-            sensor_port=sensor_port,
-            encoder_port=encoder_port,
-            valve_calibration_data=valve_calibration_data,
+            actor_port=project_configuration.actor_port,
+            sensor_port=project_configuration.sensor_port,
+            encoder_port=project_configuration.encoder_port,
+            valve_calibration_data=project_configuration.valve_calibration_data,
             debug=False,
         )
 
@@ -1094,10 +1031,10 @@ class _BehaviorTraining:
         self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
             output_directory=self._session_data.camera_frames_path,
-            face_camera_index=face_camera_index,
-            left_camera_index=left_camera_index,
-            right_camera_index=right_camera_index,
-            harvesters_cti_path=harvesters_cti_path,
+            face_camera_index=project_configuration.face_camera_index,
+            left_camera_index=project_configuration.left_camera_index,
+            right_camera_index=project_configuration.right_camera_index,
+            harvesters_cti_path=project_configuration.harvesters_cti_path,
         )
 
         # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
@@ -1112,10 +1049,12 @@ class _BehaviorTraining:
 
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
-            headbar_port=headbar_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+            headbar_port=project_configuration.headbar_port,
+            zaber_positions_path=self._session_data.previous_zaber_positions_path,
         )
         self.LickPort: LickPort = LickPort(
-            lickport_port=lickport_port, zaber_positions_path=self._session_data.previous_zaber_positions_path
+            lickport_port=project_configuration.lickport_port,
+            zaber_positions_path=self._session_data.previous_zaber_positions_path,
         )
 
     def start(self) -> None:
@@ -1243,20 +1182,20 @@ class _BehaviorTraining:
         # files during processing. Note, lick training does not use the encoder and run training does not use the torque
         # sensor.
         if self._lick_training:
-            hardware_configuration = RuntimeHardwareConfiguration(
+            hardware_configuration = HardwareConfiguration(
                 torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-                nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
-                has_ttl=False,
+                valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+                recorded_mesoscope_ttl=False,
             )
         else:
-            hardware_configuration = RuntimeHardwareConfiguration(
+            hardware_configuration = HardwareConfiguration(
                 cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-                nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
-                has_ttl=False,
+                valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+                recorded_mesoscope_ttl=False,
             )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
         message = "Hardware configuration snapshot: Generated."
@@ -1392,7 +1331,7 @@ class _BehaviorTraining:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Preprocesses the session data
-        self._session_data.preprocess_session_data()
+        preprocess_session_data(session_data=self._session_data)
 
         message = "Data preprocessing: Complete. BehaviorTraining runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1473,45 +1412,30 @@ class _BehaviorTraining:
 
 def lick_training_logic(
     experimenter: str,
+    project_name: str,
+    animal_id: str,
     animal_weight: float,
-    session_data: SessionData,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    average_reward_delay: int = 12,
-    maximum_deviation_from_mean: int = 6,
+    minimum_reward_delay: int = 6,
+    maximum_reward_delay: int = 18,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
 ) -> None:
-    """Encapsulates the logic used to train animals how to operate the lick port.
+    """Encapsulates the logic used to train animals to operate the lick port.
 
     The lick training consists of delivering randomly spaced 5 uL water rewards via the solenoid valve to teach the
     animal that water comes out of the lick port. Each reward is delivered after a pseudorandom delay. Reward delay
-    sequence is generated before training runtime by sampling a uniform distribution centered at 'average_reward_delay'
-    with lower and upper bounds defined by 'maximum_deviation_from_mean'. The training continues either until the valve
+    sequence is generated before training runtime by sampling a uniform distribution that ranges from
+    'minimum_reward_delay' to 'maximum_reward_delay'. The training continues either until the valve
     delivers the 'maximum_water_volume' in milliliters or until the 'maximum_training_time' in minutes is reached,
     whichever comes first.
 
-    Notes:
-        This function acts on top of the BehaviorTraining class and provides the overriding logic for the lick
-        training process. During experiments, runtime logic is handled by Unity game engine, so specialized control
-        functions are only required when training the animals without Unity.
-
-        This function contains all necessary logic to set up, execute, and terminate the training. This includes data
-        acquisition, preprocessing, and distribution. All lab projects should implement a CLI that calls this function
-        to run lick training with parameters specific to each project.
-
     Args:
-        experimenter: The id of the experimenter conducting the training.
+        experimenter: The ID (net-ID) of the experimenter conducting the training.
+        project_name: The name of the project to which the trained animal belongs.
+        animal_id: The numeric ID of the animal being trained.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        session_data: The SessionData instance that manages the data acquired during training.
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
-            water used during training and experiments to reward the animal.
-        average_reward_delay: The average time, in seconds, that separates two reward deliveries. This is used to
-            generate the reward delay sequence as the center of the uniform distribution from which delays are sampled.
-        maximum_deviation_from_mean: The maximum deviation from the average reward delay, in seconds. This determines
-            the upper and lower boundaries for the data sampled from the uniform distribution centered at the
-            average_reward_delay.
+        minimum_reward_delay: The minimum time, in seconds, that has to pass between delivering two consecutive rewards.
+        maximum_reward_delay: The maximum time, in seconds, that can pass between delivering two consecutive rewards.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
     """
@@ -1522,36 +1446,43 @@ def lick_training_logic(
     message = f"Initializing lick training runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
+    # Uses project name to load the project configuration data
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_path(project_name=project_name)
+
+    # Uses information stored in the project configuration to initialize the SessionData instance for the session
+    session_data = SessionData(
+        project_name=project_name,
+        animal_id=animal_id,
+        surgery_sheet_id=project_configuration.surgery_sheet_id,
+        water_log_sheet_id=project_configuration.water_log_sheet_id,
+        session_type="Lick training",
+        credentials_path=project_configuration.credentials_path,
+        local_root_directory=project_configuration.local_root_directory,
+        server_root_directory=project_configuration.server_root_directory,
+        nas_root_directory=project_configuration.nas_root_directory,
+        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+    )
+
     # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
     # being able to run preprocessing on the data if runtime fails.
     session_data.to_path()
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
-        maximum_reward_delay_s=average_reward_delay,
-        minimum_reward_delay=maximum_deviation_from_mean,
+        maximum_reward_delay_s=maximum_reward_delay,
+        minimum_reward_delay=minimum_reward_delay,
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
+        dispensed_water_volume_ml=0.00,
     )
 
-    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
-    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
+    # Initializes the main runtime interface class.
     runtime = _BehaviorTraining(
+        project_configuration=project_configuration,
         session_data=session_data,
-        descriptor=descriptor,
-        actor_port="/dev/ttyACM0",
-        sensor_port="/dev/ttyACM1",
-        encoder_port="/dev/ttyACM2",
-        headbar_port="/dev/ttyUSB0",
-        lickport_port="/dev/ttyUSB1",
-        face_camera_index=0,
-        left_camera_index=0,
-        right_camera_index=2,
-        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
-        screens_on=False,
-        valve_calibration_data=valve_calibration_data,
+        session_descriptor=descriptor,
     )
 
     # Initializes the timer used to enforce reward delays
@@ -1563,16 +1494,12 @@ def lick_training_logic(
     message = f"Generating the pseudorandom reward delay sequence..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Computes lower and upper boundaries for the reward delay
-    lower_bound = average_reward_delay - maximum_deviation_from_mean
-    upper_bound = average_reward_delay + maximum_deviation_from_mean
-
     # Converts maximum volume to uL and divides it by 5 uL (reward size) to get the number of delays to sample from
     # the delay distribution
     num_samples = np.floor((maximum_water_volume * 1000) / 5).astype(np.uint64)
 
     # Generates samples from a uniform distribution within delay bounds
-    samples = np.random.uniform(lower_bound, upper_bound, num_samples)
+    samples = np.random.uniform(minimum_reward_delay, maximum_reward_delay, num_samples)
 
     # Calculates cumulative training time for each sampled delay. This communicates the total time passed when each
     # reward is delivered to the animal
@@ -1668,7 +1595,7 @@ def lick_training_logic(
             delay_timer.reset()
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
-        delay_timer.delay_noblock(lower_bound * 1000000)  # Converts to microseconds before delaying
+        delay_timer.delay_noblock(minimum_reward_delay * 1000000)  # Converts to microseconds before delaying
 
     except Exception as e:
         message = (
@@ -1693,11 +1620,8 @@ def lick_training_logic(
     runtime.stop()
 
 
-def vr_maintenance_logic(
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-) -> None:
-    """Encapsulates the logic used to interface with the hardware modules to maintain the solenoid valve and the
-    running wheel.
+def vr_maintenance_logic(project_name: str) -> None:
+    """Encapsulates the logic used to maintain the solenoid valve and the running wheel.
 
     This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
     contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
@@ -1705,19 +1629,19 @@ def vr_maintenance_logic(
     is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly interval.
 
     Args:
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters.
-
-    Notes:
-        This runtime will position the Zaber motors to facilitate working with the valve and the wheel.
+        project_name: The name of the project whose configuration data should be used when interfacing with the solenoid
+            valve. Primarily, this is used to extract valve calibration data to perform valve 'referencing' (testing)
+            procedure.
     """
     # Enables the console
     if not console.enabled:
         console.enable()
 
-    message = f"Initializing valve interface runtime..."
+    message = f"Initializing Mesoscope-VR maintenance runtime..."
     console.echo(message=message, level=LogLevel.INFO)
+
+    # Uses the input project name to load the valve calibration data
+    project_configuration = ProjectConfiguration.from_path(project_name=project_name)
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
@@ -1750,7 +1674,9 @@ def vr_maintenance_logic(
 
         # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
         # time.
-        valve: ValveInterface = ValveInterface(valve_calibration_data=valve_calibration_data, debug=True)
+        valve: ValveInterface = ValveInterface(
+            valve_calibration_data=project_configuration.valve_calibration_data, debug=True
+        )
         wheel: BreakInterface = BreakInterface(debug=True)
         controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
@@ -1790,7 +1716,7 @@ def vr_maintenance_logic(
         lickport.calibrate_position(wait_until_idle=True)
         headbar.wait_until_idle()
 
-        message = f"HeadBar and LickPort motors: Positioned for calibration runtime."
+        message = f"HeadBar and LickPort motors: Positioned for Mesoscope-VR maintenance runtime."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user about supported calibration commands
@@ -1877,14 +1803,14 @@ def vr_maintenance_logic(
                 wheel.toggle(state=False)
 
             if command == "q":
-                message = f"Terminating valve calibration runtime."
+                message = f"Terminating Mesoscope-VR maintenance runtime."
                 console.echo(message=message, level=LogLevel.INFO)
                 break
 
         # Instructs the user to remove the objective and the animal before resetting all zaber motors.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during calibration, such as "
-            "water collection flasks, from the Mesoscope-VR cage."
+            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during Mesoscope-VR "
+            "maintenance, such as water collection flasks, from the Mesoscope-VR cage."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -1916,18 +1842,18 @@ def vr_maintenance_logic(
 
 def run_train_logic(
     experimenter: str,
+    project_name: str,
+    animal_id: str,
     animal_weight: float,
-    session_data: SessionData,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    initial_speed_threshold: float = 0.05,
-    initial_duration_threshold: float = 0.05,
+    initial_speed_threshold: float = 0.40,
+    initial_duration_threshold: float = 0.40,
     speed_increase_step: float = 0.05,
-    duration_increase_step: float = 0.0,
-    increase_threshold: float = 0.2,
+    duration_increase_step: float = 0.01,
+    increase_threshold: float = 0.1,
     maximum_speed_threshold: float = 10.0,
     maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
-    maximum_training_time: int = 40,
+    maximum_training_time: int = 20,
 ) -> None:
     """Encapsulates the logic used to train animals how to run on the VR wheel.
 
@@ -1958,12 +1884,9 @@ def run_train_logic(
 
     Args:
         experimenter: The id of the experimenter conducting the training.
+        project_name: The name of the project to which the trained animal belongs.
+        animal_id: The numeric ID of the animal being trained.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        session_data: The SessionData instance that manages the data acquired during training.
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
-            water used during training and experiments to reward the animal.
         initial_speed_threshold: The initial speed threshold, in centimeters per second, that the animal must maintain
             to receive water rewards.
         initial_duration_threshold: The initial duration threshold, in seconds, that the animal must maintain
@@ -2015,18 +1938,7 @@ def run_train_logic(
     # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = _BehaviorTraining(
         session_data=session_data,
-        descriptor=descriptor,
-        actor_port="/dev/ttyACM0",
-        sensor_port="/dev/ttyACM1",
-        encoder_port="/dev/ttyACM2",
-        headbar_port="/dev/ttyUSB0",
-        lickport_port="/dev/ttyUSB1",
-        face_camera_index=0,
-        left_camera_index=0,
-        right_camera_index=2,
-        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
-        screens_on=False,
-        valve_calibration_data=valve_calibration_data,
+        session_descriptor=descriptor,
     )
 
     # Initializes the timers used during runtime
@@ -2292,7 +2204,7 @@ def run_experiment_logic(
     # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = _MesoscopeExperiment(
         session_data=session_data,
-        descriptor=descriptor,
+        session_descriptor=descriptor,
         cue_length_map=cue_length_map,
         actor_port="/dev/ttyACM0",
         sensor_port="/dev/ttyACM1",

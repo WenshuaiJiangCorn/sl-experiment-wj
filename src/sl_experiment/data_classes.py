@@ -1,9 +1,12 @@
-"""This module stores all classes used to manage, save, and load project and session data. This excludes the behavior
-and brain activity data, which is managed by the DataLogger and other specialized Ataraxis classes. Primarily, the
-classes provided by this module are used to configure and control the runtimes facilitated by this library. Also,
-many classes preserve critical runtime information, such as hardware configuration, between sessions and for future data
-analysis. All classes exposed by this module are intended for internal library use and should not be initialized
-directly by the users."""
+"""This module provides classes that manage, save, and load varius library-generated data. Primarily, this data can be
+categorized as configuration data, session runtime data, or general non-session data. Configuration data is typically
+user-addressable (via editing the corresponding .yaml file) and is used to configure the runtime managed by the library.
+This includes data managed by the ProjectConfiguration and ExperimentConfiguration classes, for example. Session runtime
+data is generated during runtime and specifically excludes animal-generated behavior data (which is managed by the
+DataLogger and other Ataraxis classes). Examples of this data can be found in the ZaberPositions or MesoscopePosition
+classes. General non-runtime data currently includes animal surgery data (and, in the future, other 'metadata'). This
+data is stored in SurgeryData class instance. Regardless of data-type, all classes and methods from this module are not
+intended to be called by users directly."""
 
 import re
 from pathlib import Path
@@ -17,16 +20,13 @@ from ataraxis_time.time_helpers import get_timestamp
 
 
 def replace_root_path(path: Path) -> None:
-    """Replaces the path to the local root directory saved in the library's static configuration folder with the
+    """Replaces the path to the local root directory saved in the library's static configuration file with the
     provided path.
 
-    For the library to work as expected, the first time any project is created, it asks the user for the path to the
-    local directory where to keep all projects. This path is stored in the library-specific user directory and reused
-    for all future projects. To support replacing this path without searching for the hidden user data directory, this
-    function finds and updates the contents of the file that stores the local root path.
-
-    Notes:
-        This function should be used via the 'sl-replace-root-path' CLI command.
+    When the library is used for the first time, it asks the user to provide the path to the local directory where to
+    save all projects managed by the library. This path is stored in the default user directory file, and it is reused
+    for all future projects. To support replacing this path without searching for the default user directory
+    (usually hidden), this function finds and updates the contents of the file that stores the local root path.
 
     Args:
         path: The path to the new local root directory.
@@ -63,8 +63,7 @@ class ProjectConfiguration(YamlConfig):
         The class is primarily designed to specify the 'surgery_sheet_id' and the 'water_log_sheet_id' values,
         which likely differ between projects. However, the class also allows configuring the hardware interfaces and
         directory paths used during data acquisition. While this information should not change between projects, having
-        the ability to adjust them on a per-project basis removes the need to have new library releases to change
-        these configuration parameters if the need arises.
+        the ability to adjust it on a per-project basis may be helpful in the future.
     """
 
     surgery_sheet_id: str = ""
@@ -78,12 +77,14 @@ class ProjectConfiguration(YamlConfig):
     """
     credentials_path: str | Path = Path("/media/Data/Experiments/sl-surgery-log-0f651e492767.json")
     """
-    The path to the locally stored .JSON file that stores the service account credentials used to read and write Google 
-    Sheet data. This is used to access and work with the surgery log and the water restriction log. Usually, the same
-    service account is used across all projects.
+    The path to the locally stored .JSON file that contains the service account credentials used to read and write 
+    Google Sheet data. This is used to access and work with the surgery log and the water restriction log. Usually, the 
+    same service account is used across all projects.
     """
     local_root_directory: str | Path = Path("/media/Data/Experiments")
-    """The path to the root directory where all projects are stored on the host-machine (VRPC)."""
+    """The path to the root directory where all projects are stored on the host-machine (VRPC). Note, this is always 
+    written automatically when the class is saved to disk or loaded from disk, so manually writing this value is 
+    pointless."""
     server_root_directory: str | Path = Path("/media/cbsuwsun/storage/sun_data")
     """The path to the root directory where all projects are stored on the BioHPC server machine."""
     nas_root_directory: str | Path = Path("/home/cybermouse/nas/rawdata")
@@ -94,11 +95,12 @@ class ProjectConfiguration(YamlConfig):
     face_camera_index: int = 0
     """The index of the face camera in the list of all available Harvester-managed cameras."""
     left_camera_index: int = 0
-    """The index of the left camera in the list of all available OpenCV-managed cameras."""
+    """The index of the left body camera in the list of all available OpenCV-managed cameras."""
     right_camera_index: int = 2
-    """The index of the right camera in the list of all available OpenCV-managed cameras."""
+    """The index of the right body camera in the list of all available OpenCV-managed cameras."""
     harvesters_cti_path: str | Path = Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti")
-    """The path to the GeniCam CTI file used to connect to Harvesters-managed cameras."""
+    """The path to the GeniCam CTI file used to connect to Harvesters-managed cameras. Currently, this is only used by 
+    the face camera."""
     actor_port: str = "/dev/ttyACM0"
     """The USB port used by the Actor Microcontroller."""
     sensor_port: str = "/dev/ttyACM1"
@@ -109,13 +111,19 @@ class ProjectConfiguration(YamlConfig):
     """The USB port used by the HeadBar Zaber motor controllers (devices)."""
     lickport_port: str = "/dev/ttyUSB1"
     """The USB port used by the LickPort Zaber motor controllers (devices)."""
+    unity_ip: str = "127.0.0.1"
+    """The IP address of the MQTT broker used to communicate with the Unity game engine. Note, this is only used during 
+    experiment runtimes. Training runtimes ignore this parameter."""
+    unity_port: int = 1883
+    """The port number of the MQTT broker used to communicate with the Unity game engine. Note, this is only used during
+    experiment runtimes. Training runtimes ignore this parameter."""
     valve_calibration_data: dict[int | float, int | float] | tuple[tuple[int | float, int | float], ...] = (
         (15000, 1.8556),
         (30000, 3.4844),
         (45000, 7.1846),
         (60000, 10.0854),
     )
-    """ A dictionary or tuple of tuples that maps valve open times, in microseconds, to the dispensed volume of water, 
+    """A dictionary or tuple of tuples that maps valve open times, in microseconds, to the dispensed volume of water, 
     in microliters. During runtime, this data is used by the ValveModule to translate the requested reward volumes into
     times the valve needs to be open to deliver the desired volume.
     """
@@ -133,27 +141,23 @@ class ProjectConfiguration(YamlConfig):
             As part of its runtime, the method may prompt the user to provide the path to the local root directory.
             This directory stores all project subdirectories and acts as the top level of the local data hierarchy.
             The path to the directory will be saved in the static library-specific configuration file inside user's
-            data directory, so that it can be reused for all future runtimes. Use 'replace_root_path' function to
-            replace the path that is saved in this way.
+            default data directory, so that it can be reused for all future runtimes. Use 'replace_root_path' function
+            to replace the path that is saved in this way.
 
         Args:
             project_name: the name of the project whose configuration file needs to be discovered and loaded.
 
         Returns:
             An initialized ProjectConfiguration instance.
-
-        Raises:
-            FileNotFoundError: If the data file is not found under the provided path or if the path does not point to a
-                .yaml file.
         """
 
         # Ensures console is enabled
         if not console.enabled:
             console.enable()
 
-        # Uses appdirs to localize user data directory. This serves as a static pointer to the storage directory where
-        # the path to the 'root' experiment directory can be safely stored between runtimes. This way, we can set the
-        # path once and reuse it for all future projects and runtimes.
+        # Uses appdirs to localize default user data directory. This serves as a static pointer to the storage directory
+        # where the path to the 'root' experiment directory can be safely stored between runtimes. This way, we can set
+        # the path once and reuse it for all future projects and runtimes.
         app_dir = Path(appdirs.user_data_dir(appname="sl_experiment", appauthor="sun_lab"))
         path_file = app_dir.joinpath("root_path.txt")
 
@@ -187,7 +191,7 @@ class ProjectConfiguration(YamlConfig):
                 root_path = Path(f.read().strip())
 
         # Uses the root experiment directory path to generate the path to the target project's configuration file.
-        config_path = root_path.joinpath(project_name, "configurations", "project_configuration.yaml")
+        config_path = root_path.joinpath(project_name, "configuration", "project_configuration.yaml")
         ensure_directory_exists(config_path)  # Ensures the directory tree for the config path exists.
         if not config_path.exists():
             message = (
@@ -200,7 +204,7 @@ class ProjectConfiguration(YamlConfig):
 
             # Generates the default configuration instance and dumps it as a .yaml file. Note, as part of this process,
             # the class generates the correct 'local_root_path' based on the path provided by the user.
-            precursor = ProjectConfiguration(local_root_directory=root_path.joinpath(project_name))
+            precursor = ProjectConfiguration(local_root_directory=root_path)
             precursor._to_path(path=config_path)
 
             # Waits for the user to manually configure the newly created file.
@@ -217,7 +221,7 @@ class ProjectConfiguration(YamlConfig):
         instance.harvesters_cti_path = Path(instance.harvesters_cti_path)
 
         # Local root path is always re-computed using the data stored in the user data directory.
-        instance.local_root_directory = root_path.joinpath(project_name)
+        instance.local_root_directory = root_path
 
         # Converts valve_calibration data from dictionary to a tuple of tuples format
         if not isinstance(instance.valve_calibration_data, tuple):
@@ -257,7 +261,7 @@ class ProjectConfiguration(YamlConfig):
         self.to_yaml(file_path=path)
 
         # As part of this runtime, also generates and dumps the 'default' experiment configuration. The user can then
-        # use the default file as an example tow rite their own experiment configurations.
+        # use the default file as an example to write their own experiment configurations.
         example_experiment = ExperimentConfiguration()
         example_experiment.to_yaml(path.parent.joinpath("default_experiment.yaml"))
 
@@ -407,12 +411,11 @@ class ExperimentConfiguration(YamlConfig):
 
 
 @dataclass()
-class RuntimeHardwareConfiguration(YamlConfig):
+class HardwareConfiguration(YamlConfig):
     """This class is used to save the runtime hardware configuration parameters as a .yaml file.
 
-    This information is used to read and decode the data saved to the .npz log files during runtime during data
-    processing. Although these parameters are generally not expected to change between runtimes, a new instance of this
-    class is saved during each runtime.
+    This information is used to read and decode the data saved to the .npz log files during runtime as part of data
+    processing.
 
     Notes:
         All fields in this dataclass initialize to None. During log processing, any log associated with a hardware
@@ -574,24 +577,20 @@ class MesoscopeExperimentDescriptor(YamlConfig):
 
 @dataclass()
 class ZaberPositions(YamlConfig):
-    """This class is used to save Zaber motor positions as .yaml file to reuse them between sessions.
+    """This class is used to save Zaber motor positions as a .yaml file to reuse them between sessions.
 
     The class is specifically designed to store, save, and load the positions of the LickPort and HeadBar motors
-    (axes). It is used to both store Zaber motor positions for each session for future analysis and to (optionally)
-    restore the same Zaber motor positions across consecutive experimental sessions for the same project and animal
-    combination.
+    (axes). It is used to both store Zaber motor positions for each session for future analysis and to restore the same
+    Zaber motor positions across consecutive runtimes for the same project and animal combination.
 
     Notes:
-        This class is designed to be used internally by other classes from this library. Do not instantiate or load
-        this class from .yaml files manually. Do not modify the data stored inside the .yaml file unless you know what
-        you are doing.
-
         All positions are saved using native motor units. All class fields initialize to default placeholders that are
         likely NOT safe to apply to the VR system. Do not apply the positions loaded from the file unless you are
         certain they are safe to use.
 
         Exercise caution when working with Zaber motors. The motors are powerful enough to damage the surrounding
-        equipment and manipulated objects.
+        equipment and manipulated objects. Do not modify the data stored inside the .yaml file unless you know what you
+        are doing.
     """
 
     headbar_z: int = 0
@@ -610,10 +609,10 @@ class ZaberPositions(YamlConfig):
 
 @dataclass()
 class MesoscopePositions(YamlConfig):
-    """This class stores the x, y, z, and roll Mesoscope axis coordinates.
+    """This class is used to save the Mesoscope position as a .yaml file to reuse it between experiment sessions.
 
-    The class is used to persist the Mesoscope axis coordinates between experiment sessions. This is used to help the
-    experimenter to position the Mesoscope at the same position across multiple imaging sessions.
+    Primarily, the class is used to help the experimenter to position the Mesoscope at the same position across
+    multiple imaging sessions.
 
     Notes:
         The same information as in this class is stored in the MesoscopeExperimentDescriptor class. The key difference
@@ -636,7 +635,7 @@ class SessionData(YamlConfig):
     """Provides methods for managing the data acquired during one experiment or training session.
 
     The primary purpose of this class is to maintain the session data structure across all supported destinations. It
-    generates the paths used by all other classes from this library to determine used to save and load various session
+    generates the paths used by all other classes from this library to determine where to save and load various session
     data during runtime.
 
     As part of its initialization, the class generates the session directory for the input animal and project
@@ -644,9 +643,6 @@ class SessionData(YamlConfig):
     ensures that each session name is unique and preserves the overall session order.
 
     Notes:
-        This class is intended to be used internally by other library classes. Do not instantiate or use this class
-        directly.
-
         It is expected that the server, NAS, and mesoscope data directories are mounted on the host-machine via the
         SMB or equivalent protocol. All manipulations with these destinations are carried out with the assumption that
         the OS has full access to these directories and filesystems.
@@ -669,7 +665,7 @@ class SessionData(YamlConfig):
     """
     session_type: str
     """Stores the type of the session. Primarily, this determines how to read the session_descriptor.yaml file. Has 
-    to be set to one of the three supported types: 'lick_training', 'run_training' or 'experiment'.
+    to be set to one of the three supported types: 'Lick training', 'Run training' or 'Experiment'.
     """
     credentials_path: str | Path
     """
@@ -690,7 +686,7 @@ class SessionData(YamlConfig):
     Use 'from_path' class method to initialize a SessionData instance for an already existing session data directory.
     """
     experiment_name: str | None = None
-    """Stores the name of the experiment configuration file. If the session_name attribute is 'experiment,' this filed
+    """Stores the name of the experiment configuration file. If the session_name attribute is 'experiment', this filed
     is used to communicate the specific experiment configuration used by the session. During runtime, this is 
     used to load the experiment configuration (to run the experiment) and to save the experiment configuration to the
     session raw_data folder. If the session is not an experiment session, this is statically set to None."""
@@ -933,10 +929,11 @@ class SessionData(YamlConfig):
         """Returns the path to the .yaml file that stores the configuration of the experiment runtime for the managed
         session.
 
-        This information is used during runtime to determine how to run the experiment.
+        This information is used during runtime to determine how to run the experiment, and the target file should be
+        stored in the shared project 'configuration' directory.
         """
         local_root_directory = Path(self.local_root_directory)
-        return local_root_directory.joinpath(self.project_name, "configurations", f"{self.experiment_name}.yaml")
+        return local_root_directory.joinpath(self.project_name, "configuration", f"{self.experiment_name}.yaml")
 
     @property
     def local_experiment_configuration_path(self) -> Path:
@@ -950,9 +947,151 @@ class SessionData(YamlConfig):
     def previous_mesoscope_positions_path(self) -> Path:
         """Returns the path to the 'mesoscope_positions.yaml' file of the previous session.
 
-        The file is stored inside the 'persistent_data' directory of the managed animal.
+        The file is stored inside the 'persistent_data' directory of the managed animal and is used to help restore the
+        Mesoscope to the same position during following session(s).
         """
         local_root_directory = Path(self.local_root_directory)
         return local_root_directory.joinpath(
             self.project_name, self.animal_id, "persistent_data", "mesoscope_positions.yaml"
         )
+
+
+@dataclass()
+class SubjectData:
+    """Stores the surgical procedure subject (mouse) ID information."""
+
+    id: int
+    """Stores the unique ID (name) of the subject. Assumes all mice are given a numeric ID, rather than a string name.
+    """
+    ear_punch: str
+    """Stores the ear tag location of the subject."""
+    sex: str
+    """Stores the gender of the subject."""
+    genotype: str
+    """Stores the genotype of the subject."""
+    date_of_birth_us: int
+    """Stores the date of birth of the subject as the number of microseconds elapsed since UTC epoch onset."""
+    weight_g: float
+    """Stores the weight of the subject pre-surgery, in grams."""
+    cage: int
+    """Stores the number of the latest cage used to house the subject."""
+    location_housed: str
+    """Stores the latest location used to house the subject after the surgery."""
+    status: str
+    """Stores the latest status of the subject (alive / deceased)."""
+
+
+@dataclass()
+class ProcedureData:
+    """Stores the general information about the surgical procedure."""
+
+    surgery_start_us: int
+    """Stores the date and time when the surgery was started as microseconds elapsed since UTC epoch onset."""
+    surgery_end_us: int
+    """Stores the date and time when the surgery has ended as microseconds elapsed since UTC epoch onset."""
+    surgeon: str
+    """Stores the name or ID of the surgeon. If the intervention was carrie out by multiple surgeon, all participating
+    surgeon names and IDs are stored as part of the same string."""
+    protocol: str
+    """Stores the experiment protocol number (ID) used during the surgery."""
+    surgery_notes: str
+    """Stores surgeon's notes taken during the surgery."""
+    post_op_notes: str
+    """Stores surgeon's notes taken during the post-surgery recovery period."""
+
+
+@dataclass
+class ImplantData:
+    """Stores the information about a single implantation performed during surgery.
+
+    Multiple ImplantData instances are used at the same time if the surgery involved multiple implants.
+    """
+
+    implant: str
+    """The descriptive name of the implant."""
+    implant_target: str
+    """The name of the brain region or cranium section targeted by the implant."""
+    implant_code: int
+    """The manufacturer code or internal reference code for the implant. This code is used to identify the implant in 
+    additional datasheets and lab ordering documents."""
+    implant_ap_coordinate_mm: float
+    """Stores implant's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
+    implant_ml_coordinate_mm: float
+    """Stores implant's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
+    implant_dv_coordinate_mm: float
+    """Stores implant's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
+
+
+@dataclass
+class InjectionData:
+    """Stores the information about a single injection performed during surgery.
+
+    Multiple InjectionData instances are used at the same time if the surgery involved multiple injections.
+    """
+
+    injection: str
+    """The descriptive name of the injection."""
+    injection_target: str
+    """The name of the brain region targeted by the injection."""
+    injection_volume_nl: float
+    """The volume of substance, in nanoliters, delivered during the injection."""
+    injection_code: int
+    """The manufacturer code or internal reference code for the injected substance. This code is used to identify the 
+    substance in additional datasheets and lab ordering documents."""
+    injection_ap_coordinate_mm: float
+    """Stores injection's antero-posterior stereotactic coordinate, in millimeters, relative to bregma."""
+    injection_ml_coordinate_mm: float
+    """Stores injection's medial-lateral stereotactic coordinate, in millimeters, relative to bregma."""
+    injection_dv_coordinate_mm: float
+    """Stores injection's dorsal-ventral stereotactic coordinate, in millimeters, relative to bregma."""
+
+
+@dataclass
+class DrugData:
+    """Stores the information about all drugs administered to the subject before, during, and immediately after the
+    surgical procedure.
+    """
+
+    lactated_ringers_solution_volume_ml: float
+    """Stores the volume of Lactated Ringer's Solution (LRS) administered during surgery, in ml."""
+    lactated_ringers_solution_code: int
+    """Stores the manufacturer code or internal reference code for Lactated Ringer's Solution (LRS). This code is used 
+    to identify the LRS batch in additional datasheets and lab ordering documents."""
+    ketoprofen_volume_ml: float
+    """Stores the volume of ketoprofen administered during surgery, in ml."""
+    ketoprofen_code: int
+    """Stores the manufacturer code or internal reference code for ketoprofen. This code is used to identify the 
+    ketoprofen batch in additional datasheets and lab ordering documents."""
+    buprenorphine_volume_ml: float
+    """Stores the volume of buprenorphine administered during surgery, in ml."""
+    buprenorphine_code: int
+    """Stores the manufacturer code or internal reference code for buprenorphine. This code is used to identify the 
+    buprenorphine batch in additional datasheets and lab ordering documents."""
+    dexamethasone_volume_ml: float
+    """Stores the volume of dexamethasone administered during surgery, in ml."""
+    dexamethasone_code: int
+    """Stores the manufacturer code or internal reference code for dexamethasone. This code is used to identify the 
+    dexamethasone batch in additional datasheets and lab ordering documents."""
+
+
+@dataclass
+class SurgeryData(YamlConfig):
+    """Aggregates all data for a single mouse surgery procedure.
+
+    This class aggregates other dataclass instances that store specific data about the surgical procedure. Primarily, it
+    is used to save the data as a .yaml file to the metadata directory of each animal used in every lab project.
+    This way, the surgery data is always stored alongside the behavior and brain activity data collected during training
+    and experiment runtimes.
+    """
+
+    subject: SubjectData
+    """Stores the ID information about the subject (mouse)."""
+    procedure: ProcedureData
+    """Stores general data about the surgical procedure."""
+    drugs: DrugData
+    """Stores the data about the substances subcutaneously injected into the subject before, during and immediately 
+    after the surgical intervention."""
+    implants: list[ImplantData]
+    """Stores the data for all cranial and transcranial implants introduced to the subject during the procedure."""
+    injections: list[InjectionData]
+    """Stores the data about all substances infused into the brain of the subject during the surgery."""

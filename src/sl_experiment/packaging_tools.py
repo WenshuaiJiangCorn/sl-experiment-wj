@@ -1,5 +1,5 @@
-"""This module provides methods for packaging experimental session data for transmission to the NAS or Sun lab
-data cluster. The methods from this module work in tandem with methods offered by transfer_tools.py.
+"""This module provides methods for packaging session runtime data for transmission over the network. The methods from
+this module work in tandem with methods offered by transfer_tools.py to ensure the integrity of the transferred data.
 """
 
 import os

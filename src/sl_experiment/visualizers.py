@@ -1,5 +1,5 @@
-"""This module provides Visualizer classes to render animal training and experiment task performance data in real
-time."""
+"""This module provides the Visualizer class, a major training and experiment runtime UI element used to provide
+real-time feedback on the animal's task performance and task parameters."""
 
 import numpy as np
 import matplotlib
@@ -103,6 +103,10 @@ class BehaviorVisualizer:
     This class is used to visualize the key behavioral metrics collected from animals performing experiment or training
     sessions in the Mesoscope-VR system. Note, the class is statically configured to generate the plots for all
     supported metrics, even if some of them are not used during a particular session.
+
+    Notes:
+        This class is designed to run in the main thread of the runtime context. To update the visualized data, ensure
+        that the 'update' class method is called repeatedly during runtime.
 
     Args:
         lick_tracker: The SharedMemoryArray instance exposed by the LickInterface class that communicates the number of

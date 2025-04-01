@@ -23,10 +23,16 @@ from numpy.typing import NDArray
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
 
-from .data_classes import SessionData, RunTrainingDescriptor, LickTrainingDescriptor, MesoscopeExperimentDescriptor
+from .data_classes import (
+    SessionData,
+    SurgeryData,
+    RunTrainingDescriptor,
+    LickTrainingDescriptor,
+    MesoscopeExperimentDescriptor,
+)
 from .transfer_tools import transfer_directory
 from .packaging_tools import calculate_directory_checksum
-from .google_sheet_tools import SurgeryData, SurgerySheet, WaterSheetData
+from .google_sheet_tools import SurgerySheet, WaterSheetData
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -74,6 +80,13 @@ def _get_stack_number(tiff_path: Path) -> int | None:
 
     This is used to sort all TIFF stacks in a directory before recompressing them with LERC scheme. Like
     other helpers, this helper is also used to identify and remove non-mesoscope TIFFs from the dataset.
+
+    Args:
+        tiff_path: The path to the TIFF file to evaluate.
+
+    Returns:
+        The number of frames contained in the TIFF stack file or None to indicate that the input file is not a valid
+        mesoscope TIFF stack.
     """
     try:
         return int(tiff_path.stem.split("_")[-1])  # ScanImage appends _acquisition#_file# to files, we use file# here.
@@ -145,6 +158,9 @@ def _process_stack(
         batch_size: The number of frames to process at the same time. This directly determines the RAM footprint of
             this function, as frames are kept in RAM during compression. Note, verification doubles the RAM footprint,
             as it requires both compressed and uncompressed data to be kept in RAM for comparison.
+
+    Returns:
+        A dictionary containing the extracted frame-variant ScanImage metadata for the processed stack.
     """
     # Generates the file handle for the current stack
     with tifffile.TiffFile(tiff_path) as stack:
@@ -450,9 +466,10 @@ def _process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path)
 
 
 def _preprocess_video_names(session_data: SessionData) -> None:
-    """Renames the video files generated during runtime to use human-friendly camera names, rather than ID-codes.
+    """Renames the video (camera) files generated during runtime to use human-friendly camera names, rather than
+    ID-codes.
 
-    This is a minor preprocessing function primarily designed to make further data processing steps more human-readable.
+    This is a minor preprocessing function primarily designed to make further data processing steps more human-friendly.
 
     Notes:
         This function assumes that the runtime uses 3 cameras with IDs 51 (face camera), 62 (left camera), and 73
@@ -490,7 +507,7 @@ def _pull_mesoscope_data(
     remove_sources: bool = True,
     verify_transfer_integrity: bool = True,
 ) -> None:
-    """Pulls the frames acquired by the mesoscope from the ScanImagePC to the VRPC.
+    """Pulls the data acquired by the Mesoscope from the ScanImagePC to the VRPC.
 
     This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
     before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
@@ -937,17 +954,17 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the data needed to update the wr log
     descriptor_path = session_data.session_descriptor_path
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    if session_data.session_type == "lick_training":
+    if session_data.session_type == "Lick training":
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type == "run_training":
+    elif session_data.session_type == "Run training":
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type == "experiment":
+    elif session_data.session_type == "Experiment":
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
     else:
         message = (
             f"Unable to extract the water restriction data from the session descriptor file for session "
             f"{session_data.session_name}. Expected the session_type field of the SessionData instance to be one of "
-            f"the supported options (lick_training, run_training, experiment) but instead encountered "
+            f"the supported options (Lick training, Run training, Experiment) but instead encountered "
             f"{session_data.session_type}."
         )
         console.error(message, error=ValueError)
@@ -971,6 +988,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         mouse_weight=descriptor.mouse_weight_g,
         water_ml=total_water,
         experimenter_id=descriptor.experimenter,
+        session_name=session_data.session_name,
     )
 
     message = f"Water restriction log entry: written."
@@ -1003,19 +1021,19 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
 
 
 def preprocess_session_data(session_data: SessionData) -> None:
-    """Carries out all data preprocessing tasks to prepare the data for NAS / BioHPC server transfer and future
-    processing.
+    """Aggregates all data on VRPC, compresses it for efficient network transmission, and transfers the data to the
+    BioHPC server and the Synology NAS for long-term storage.
 
     This method should be called at the end of each training and experiment runtime to compress and safely transfer
     the data to its long-term storage destinations.
 
     Notes:
         The method will NOT delete the data from the VRPC or ScanImagePC. To safely remove the data, use the
-        purge-redundant-data CLI command. The data will only be removed if it has been marked for removal by our
+        'purge-redundant-data' CLI command. The data will only be removed if it has been marked for removal by our
         data management algorithms, which ensure we have enough spare copies of the data elsewhere.
 
     Args:
-        session_data: The SessionData instance for the processed session. Typically, this is either provided by the
+        session_data: The SessionData instance for the processed session. This argument is provided by the
             runtime management function or the CLI function that calls this function.
     """
     # Enables console, if it is not enabled

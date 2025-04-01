@@ -1,4 +1,6 @@
-"""This module provides ModuleInterface implementations for the hardware used by the Sun lab Mesoscope-VR system."""
+"""This module provides the interfaces (ModuleInterface implementations) for the hardware used by the Mesoscope-VR
+system. These interfaces are designed to work with the hardware modules assembled and configured according to the
+instructions from our microcontrollers' library: https://github.com/Sun-Lab-NBB/sl-micro-controllers."""
 
 from json import dumps
 import math
