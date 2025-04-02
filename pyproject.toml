@@ -175,6 +175,7 @@ sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
 sl-process = "sl_experiment.cli:preprocess_session"
 sl-purge = "sl_experiment.cli:purge_data"
+sl-replace-root = "sl_experiment.cli:replace_root_path"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

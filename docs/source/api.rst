@@ -41,6 +41,9 @@ Reference Command Line Interfaces
    :prog: sl-experiment
    :nested: full
 
+.. click:: sl_experiment.cli:replace_local_root_directory
+   :prog: sl-experiment
+   :nested: full
 
 Experiment Interfaces
 =====================
@@ -70,8 +73,8 @@ Zaber Interfaces
    :undoc-members:
    :show-inheritance:
 
-AMC Module Interfaces
-=====================
+AXMC Module Interfaces
+======================
 .. automodule:: sl_experiment.module_interfaces
    :members:
    :undoc-members:
@@ -105,9 +108,9 @@ Data Preprocessing Tools
    :undoc-members:
    :show-inheritance:
 
-Data Processing Tools
-========================
-.. automodule:: sl_experiment.data_processing
+Configuration and Data Storage Classes
+======================================
+.. automodule:: sl_experiment.data_classes
    :members:
    :undoc-members:
    :show-inheritance:

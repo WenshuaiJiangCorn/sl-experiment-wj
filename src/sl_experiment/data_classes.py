@@ -129,7 +129,7 @@ class ProjectConfiguration(YamlConfig):
     """
 
     @classmethod
-    def from_path(cls, project_name: str) -> "ProjectConfiguration":
+    def load(cls, project_name: str) -> "ProjectConfiguration":
         """Loads the project configuration parameters from a .yaml file and uses the loaded data to initialize a
         ProjectConfiguration instance.
 
@@ -499,33 +499,28 @@ class RunTrainingDescriptor(YamlConfig):
     """The ID of the experimenter running the session."""
     mouse_weight_g: float
     """The weight of the animal, in grams, at the beginning of the session."""
-    dispensed_water_volume_ml: float = 0.0
+    dispensed_water_volume_ml: float
     """Stores the total water volume, in milliliters, dispensed during runtime."""
-    final_running_speed_cm_s: float = 0.0
-    """Stores the final running speed threshold that was active at the end of training."""
-    final_speed_duration_s: float = 0.0
-    """Stores the final running duration threshold that was active at the end of training."""
-    initial_running_speed_cm_s: float = 0.0
+    final_run_speed_threshold_cm_s: float
+    """Stores the final running speed threshold, in centimeters per second, that was active at the end of training."""
+    final_run_duration_threshold_s: float
+    """Stores the final running duration threshold, in seconds, that was active at the end of training."""
+    initial_run_speed_threshold_cm_s: float
     """Stores the initial running speed threshold, in centimeters per second, used during training."""
-    initial_speed_duration_s: float = 0.0
+    initial_run_duration_threshold_s: float
     """Stores the initial above-threshold running duration, in seconds, used during training."""
-    increase_threshold_ml: float = 0.0
-    """Stores the volume of water delivered to the animal, in milliliters, that triggers the increase in the running 
+    increase_threshold_ml: float
+    """Stores the volume of water delivered to the animal, in milliliters, that triggerred the increase in the running 
     speed and duration thresholds."""
-    increase_running_speed_cm_s: float = 0.0
+    run_speed_increase_step_cm_s: float
     """Stores the value, in centimeters per second, used by the system to increment the running speed threshold each 
     time the animal receives 'increase_threshold' volume of water."""
-    increase_speed_duration_s: float = 0.0
+    run_duration_increase_step_s: float
     """Stores the value, in seconds, used by the system to increment the duration threshold each time the animal 
     receives 'increase_threshold' volume of water."""
-    maximum_running_speed_cm_s: float = 0.0
-    """Stores the maximum running speed threshold, in centimeters per second, the system is allowed to use during 
-    training."""
-    maximum_speed_duration_s: float = 0.0
-    """Stores the maximum above-threshold running duration, in seconds, the system is allowed to use during training."""
-    maximum_water_volume_ml: float = 1.0
+    maximum_water_volume_ml: float
     """Stores the maximum volume of water the system is allowed to dispensed during training."""
-    maximum_training_time_m: int = 40
+    maximum_training_time_m: int
     """Stores the maximum time, in minutes, the system is allowed to run the training for."""
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
@@ -557,7 +552,7 @@ class MesoscopeExperimentDescriptor(YamlConfig):
     """The ID of the experimenter running the session."""
     mouse_weight_g: float
     """The weight of the animal, in grams, at the beginning of the session."""
-    dispensed_water_volume_ml: float = 0.0
+    dispensed_water_volume_ml: float
     """Stores the total water volume, in milliliters, dispensed during runtime."""
     experimenter_notes: str = "Replace this with your notes."
     """This field is not set during runtime. It is expected that each experimenter will replace this field with their 
@@ -929,8 +924,7 @@ class SessionData(YamlConfig):
         """Returns the path to the .yaml file that stores the configuration of the experiment runtime for the managed
         session.
 
-        This information is used during runtime to determine how to run the experiment, and the target file should be
-        stored in the shared project 'configuration' directory.
+        This information is used during experiment runtimes to determine how to run the experiment.
         """
         local_root_directory = Path(self.local_root_directory)
         return local_root_directory.joinpath(self.project_name, "configuration", f"{self.experiment_name}.yaml")

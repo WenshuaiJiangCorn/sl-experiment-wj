@@ -1,6 +1,6 @@
 """This module provides classes that abstract working with Sun lab's Mesoscope-VR system to acquire training or
-experiment data. Primarily, this includes the project and experiment configuration classes and the functions that
-contain the logic for various runtimes supported by this library.
+experiment data. Primarily, this includes the runtime management classes (highest level of internal data acquisition and
+processing API) and specialized runtime logic functions (user-facing external API functions).
 """
 
 import os
@@ -16,7 +16,7 @@ import numpy as np
 from pynput import keyboard
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
-from ataraxis_base_utilities import LogLevel, console
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
@@ -24,15 +24,16 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .visualizers import BehaviorVisualizer
 from .data_classes import (
     SessionData,
+    ZaberPositions,
+    MesoscopePositions,
     ProjectConfiguration,
-    ExperimentConfiguration,
     HardwareConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
+    ExperimentConfiguration,
     MesoscopeExperimentDescriptor,
-    MesoscopePositions,
 )
-from .binding_classes import HeadBar, LickPort, VideoSystems, ZaberPositions, MicroControllerInterfaces
+from .binding_classes import HeadBar, LickPort, VideoSystems, MicroControllerInterfaces
 from .module_interfaces import BreakInterface, ValveInterface
 from .data_preprocessing import preprocess_session_data
 
@@ -308,7 +309,7 @@ class _MesoscopeExperiment:
             actor_port=project_configuration.actor_port,
             sensor_port=project_configuration.sensor_port,
             encoder_port=project_configuration.encoder_port,
-            valve_calibration_data=project_configuration.valve_calibration_data,
+            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
             debug=False,
         )
 
@@ -326,7 +327,7 @@ class _MesoscopeExperiment:
             face_camera_index=project_configuration.face_camera_index,
             left_camera_index=project_configuration.left_camera_index,
             right_camera_index=project_configuration.right_camera_index,
-            harvesters_cti_path=project_configuration.harvesters_cti_path,
+            harvesters_cti_path=Path(project_configuration.harvesters_cti_path),
         )
 
         # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
@@ -444,7 +445,7 @@ class _MesoscopeExperiment:
         # If previous mesoscope positions were saved, loads the coordinates and uses them to augment the message to the
         # user.
         if self._session_data.previous_mesoscope_positions_path.exists():
-            previous_positions = MesoscopePositions.from_yaml(
+            previous_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                 file_path=self._session_data.previous_mesoscope_positions_path
             )
             # Gives user time to mount the animal and requires confirmation before proceeding further.
@@ -508,10 +509,10 @@ class _MesoscopeExperiment:
             maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
             minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
             lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-            valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-            valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+            valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+            valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
             torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-            screens_initially_on=self._microcontrollers.screens.screens_initially_on,
+            screens_initially_on=self._microcontrollers.screens.initially_on,
             recorded_mesoscope_ttl=True,
         )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
@@ -637,7 +638,7 @@ class _MesoscopeExperiment:
         # coordinates as last time, they do not need to update the mesoscope coordinates when manually editing the
         # descriptor.
         if self._session_data.previous_mesoscope_positions_path.exists():
-            previous_coordinates = MesoscopePositions.from_yaml(
+            previous_coordinates: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                 file_path=self._session_data.previous_mesoscope_positions_path
             )
             self.descriptor.mesoscope_x_position = previous_coordinates.mesoscope_x_position
@@ -1023,7 +1024,7 @@ class _BehaviorTraining:
             actor_port=project_configuration.actor_port,
             sensor_port=project_configuration.sensor_port,
             encoder_port=project_configuration.encoder_port,
-            valve_calibration_data=project_configuration.valve_calibration_data,
+            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
             debug=False,
         )
 
@@ -1034,7 +1035,7 @@ class _BehaviorTraining:
             face_camera_index=project_configuration.face_camera_index,
             left_camera_index=project_configuration.left_camera_index,
             right_camera_index=project_configuration.right_camera_index,
-            harvesters_cti_path=project_configuration.harvesters_cti_path,
+            harvesters_cti_path=Path(project_configuration.harvesters_cti_path),
         )
 
         # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
@@ -1185,16 +1186,16 @@ class _BehaviorTraining:
             hardware_configuration = HardwareConfiguration(
                 torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
                 recorded_mesoscope_ttl=False,
             )
         else:
             hardware_configuration = HardwareConfiguration(
                 cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.valve_scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.valve_nonlinearity_exponent),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
                 recorded_mesoscope_ttl=False,
             )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
@@ -1447,7 +1448,7 @@ def lick_training_logic(
     console.echo(message=message, level=LogLevel.INFO)
 
     # Uses project name to load the project configuration data
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_path(project_name=project_name)
+    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
     session_data = SessionData(
@@ -1626,12 +1627,19 @@ def vr_maintenance_logic(project_name: str) -> None:
     This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
     contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
     'referenced' to verify it functions as expected. At the end of each day, the valve is emptied. Similarly, the wheel
-    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly interval.
+    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly basis (depending on the
+    used wrap).
+
+    Notes:
+        This runtime is also co-opted to check animal windows after the recovery period. This is mostly handled via the
+        ScanImage software running on the mesoscope PC, while this runtime generates a snapshot of HeadBar and LickPort
+        positions used during the verification.
 
     Args:
         project_name: The name of the project whose configuration data should be used when interfacing with the solenoid
             valve. Primarily, this is used to extract valve calibration data to perform valve 'referencing' (testing)
-            procedure.
+            procedure. When testing cranial windows, this is also used to determine where to save the Zaber position
+            snapshot.
     """
     # Enables the console
     if not console.enabled:
@@ -1641,7 +1649,7 @@ def vr_maintenance_logic(project_name: str) -> None:
     console.echo(message=message, level=LogLevel.INFO)
 
     # Uses the input project name to load the valve calibration data
-    project_configuration = ProjectConfiguration.from_path(project_name=project_name)
+    project_configuration = ProjectConfiguration.load(project_name=project_name)
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
@@ -1675,13 +1683,14 @@ def vr_maintenance_logic(project_name: str) -> None:
         # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
         # time.
         valve: ValveInterface = ValveInterface(
-            valve_calibration_data=project_configuration.valve_calibration_data, debug=True
+            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
+            debug=True,
         )
         wheel: BreakInterface = BreakInterface(debug=True)
         controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=np.uint8(101),
             microcontroller_serial_buffer_size=8192,
-            microcontroller_usb_port="/dev/ttyACM0",
+            microcontroller_usb_port=project_configuration.actor_port,
             data_logger=logger,
             module_interfaces=(valve, wheel),
         )
@@ -1722,8 +1731,9 @@ def vr_maintenance_logic(project_name: str) -> None:
         # Notifies the user about supported calibration commands
         message = (
             "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
-            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Use 'q' command to terminate "
-            "the runtime."
+            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Supported HeadBar and "
+            "LickPort motor repositioning: image, mount, maintain. Supported HeadBar and LickPort position saving "
+            "command: snapshot. Use 'q' command to terminate the runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -1755,52 +1765,98 @@ def vr_maintenance_logic(project_name: str) -> None:
                 valve.toggle(state=False)  # Closes the valve after a 10-second delay
 
             if command == "reward":
-                message = f"Delivering 5 uL water reward."
+                message = f"Delivering 5 uL water reward..."
                 console.echo(message=message, level=LogLevel.INFO)
                 pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
                 valve.set_parameters(pulse_duration=pulse_duration)
                 valve.send_pulse()
 
             if command == "reference":
-                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure."
+                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure..."
                 console.echo(message=message, level=LogLevel.INFO)
                 pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
                 valve.set_parameters(pulse_duration=pulse_duration)
                 valve.calibrate()
 
             if command == "calibrate_15":
-                message = f"Running 15 ms pulse valve calibration."
+                message = f"Running 15 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.set_parameters(pulse_duration=np.uint32(15000))  # 15 ms in us
                 valve.calibrate()
 
             if command == "calibrate_30":
-                message = f"Running 30 ms pulse valve calibration."
+                message = f"Running 30 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.set_parameters(pulse_duration=np.uint32(30000))  # 30 ms in us
                 valve.calibrate()
 
             if command == "calibrate_45":
-                message = f"Running 45 ms pulse valve calibration."
+                message = f"Running 45 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.set_parameters(pulse_duration=np.uint32(45000))  # 45 ms in us
                 valve.calibrate()
 
             if command == "calibrate_60":
-                message = f"Running 60 ms pulse valve calibration."
+                message = f"Running 60 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
                 valve.calibrate()
 
             if command == "lock":
-                message = f"Locking wheel break."
+                message = f"Locking wheel break..."
                 console.echo(message=message, level=LogLevel.INFO)
                 wheel.toggle(state=True)
 
             if command == "unlock":
-                message = f"Unlocking wheel break."
+                message = f"Unlocking wheel break..."
                 console.echo(message=message, level=LogLevel.INFO)
                 wheel.toggle(state=False)
+
+            if command == "snapshot":
+                message = f"Generating the HeadBar and LickPort position snapshot..."
+                console.echo(message=message, level=LogLevel.INFO)
+                animal_id = input("Enter the animal id: ")
+
+                # Retrieves current motor positions and packages them into a ZaberPositions object.
+                head_bar_positions = headbar.get_positions()
+                lickport_positions = lickport.get_positions()
+                zaber_positions = ZaberPositions(
+                    headbar_z=head_bar_positions[0],
+                    headbar_pitch=head_bar_positions[1],
+                    headbar_roll=head_bar_positions[2],
+                    lickport_z=lickport_positions[0],
+                    lickport_x=lickport_positions[1],
+                    lickport_y=lickport_positions[2],
+                )
+
+                # Dumps the data into the persistent directory of the specified animal, creating any missing folders,
+                # if necessary.
+                persistent_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "persistent_data", "zaber_positions.yaml"
+                )
+                ensure_directory_exists(persistent_path)
+                zaber_positions.to_yaml(file_path=persistent_path)
+
+            if command == "image":
+                message = f"Moving HeadBar and LickPort to the default brain imaging position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.mount_position(wait_until_idle=False)
+                lickport.park_position()
+                headbar.wait_until_idle()
+
+            if command == "mount":
+                message = f"Moving HeadBar and LickPort to the animal mounting position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.mount_position(wait_until_idle=False)
+                lickport.mount_position()
+                headbar.wait_until_idle()
+
+            if command == "maintain":
+                message = f"Moving HeadBar and LickPort to the default Mesoscope-VR maintenance position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.calibrate_position(wait_until_idle=False)
+                lickport.calibrate_position()
+                headbar.wait_until_idle()
 
             if command == "q":
                 message = f"Terminating Mesoscope-VR maintenance runtime."
@@ -1850,61 +1906,40 @@ def run_train_logic(
     speed_increase_step: float = 0.05,
     duration_increase_step: float = 0.01,
     increase_threshold: float = 0.1,
-    maximum_speed_threshold: float = 10.0,
-    maximum_duration_threshold: float = 10.0,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
 ) -> None:
-    """Encapsulates the logic used to train animals how to run on the VR wheel.
+    """Encapsulates the logic used to train animals to run on the wheel treadmill while being head-fixed.
 
     The run training consists of making the animal run on the wheel with a desired speed, in centimeters per second,
-    maintained for the desired duration of seconds. Each time the animal satisfies the speed and duration threshold, it
-    receives 5 uL of water reward, and the speed and durations trackers reset for the next 'epoch'. If the animal
-    performs well and receives many water rewards, the speed and duration thresholds increase to make the task more
-    challenging. This is used to progressively train the animal to run better and to prevent the animal from completing
-    the training too early. Overall, the goal of the training is to both teach the animal to run decently fast and to
-    train its stamina to sustain hour-long experiment sessions.
+    maintained for the desired duration of time, in seconds. Each time the animal satisfies the speed and duration
+    thresholds, it receives 5 uL of water reward, and the speed and durations trackers reset for the next training
+    'epoch'. Each time the animal receives 'increase_threshold' of water, the speed and duration thresholds increase to
+    make the task progressively more challenging. The training continues either until the training time exceeds the
+    'maximum_training_time', or the animal receives the 'maximum_water_volume' of water, whichever happens earlier.
 
     Notes:
-        Primarily, this function is designed to increment the initial speed and duration thresholds by the
-        speed_increase_step and duration_increase_step each time the animal receives increase_threshold milliliters of
-        water. The speed and duration thresholds incremented in this way cannot exceed the maximum_speed_threshold and
-        maximum_duration_threshold. The training ends either when the training time exceeds the maximum_training_time,
-        or when the animal receives the maximum_water_volume of water, whichever happens earlier. During runtime, it is
-        possible to manually increase or decrease both thresholds via 'ESC' and arrow keys.
-
-        This function is highly configurable and can be adapted to a wide range of training scenarios. It acts on top
-        of the BehaviorTraining class and provides the overriding logic for the run training process. During
-        experiments, runtime logic is handled by Unity game engine, so specialized control functions are only required
-        when training the animals without Unity.
-
-        This function contains all necessary logic to set up, execute, and terminate the training. This includes data
-        acquisition, preprocessing, and distribution. All lab projects should implement a CLI that calls this function
-        to run lick training with parameters specific to each project.
+        During runtime, it is possible to manually increase or decrease both thresholds via 'ESC' and arrow keys. The
+        speed and duration thresholds are limited to a minimum of 0.1 cm/s and 0.05 s and a maximum of 20 cm/s and
+        20 s.
 
     Args:
         experimenter: The id of the experimenter conducting the training.
         project_name: The name of the project to which the trained animal belongs.
         animal_id: The numeric ID of the animal being trained.
         animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        initial_speed_threshold: The initial speed threshold, in centimeters per second, that the animal must maintain
-            to receive water rewards.
+        initial_speed_threshold: The initial running speed threshold, in centimeters per second, that the animal must
+            maintain to receive water rewards.
         initial_duration_threshold: The initial duration threshold, in seconds, that the animal must maintain
             above-threshold running speed to receive water rewards.
-        speed_increase_step: The step size, in centimeters per second, to increase the speed threshold by each time the
+        speed_increase_step: The step size, in centimeters per second, by which to increase the speed threshold each
+            time the animal receives 'increase_threshold' milliliters of water.
+        duration_increase_step: The step size, in seconds, by which to increase the duration threshold each time the
             animal receives 'increase_threshold' milliliters of water.
-        duration_increase_step: The step size, in seconds, to increase the duration threshold by each time the animal
-            receives 'increase_threshold' milliliters of water.
-        increase_threshold: The volume of water, in milliliters, the animal should receive for the speed and duration
-            threshold to be increased by one step. Note, the animal will at most get 'maximum_water_volume' of water,
-            so this parameter effectively controls how many increases will be made during runtime, assuming the maximum
-            training time is not reached.
-        maximum_speed_threshold: The maximum speed threshold, in centimeters per second, that the animal must maintain
-            to receive water rewards. Once this threshold is reached, it will not be increased further regardless of how
-            much water is delivered to the animal.
-        maximum_duration_threshold: The maximum duration threshold, in seconds, that the animal must maintain
-            above-threshold running speed to receive water rewards. Once this threshold is reached, it will not be
-            increased further regardless of how much water is delivered to the animal.
+        increase_threshold: The volume of water received by the animal, in milliliters, after which the speed and
+            duration thresholds are increased by one step. Note, the animal will at most get 'maximum_water_volume' of
+            water, so this parameter effectively controls how many increases will be made during runtime, assuming the
+            maximum training time is not reached.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
     """
@@ -1912,22 +1947,40 @@ def run_train_logic(
     if not console.enabled:
         console.enable()
 
+    message = f"Initializing run training runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Uses project name to load the project configuration data
+    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
+
+    # Uses information stored in the project configuration to initialize the SessionData instance for the session
+    session_data = SessionData(
+        project_name=project_name,
+        animal_id=animal_id,
+        surgery_sheet_id=project_configuration.surgery_sheet_id,
+        water_log_sheet_id=project_configuration.water_log_sheet_id,
+        session_type="Run training",
+        credentials_path=project_configuration.credentials_path,
+        local_root_directory=project_configuration.local_root_directory,
+        server_root_directory=project_configuration.server_root_directory,
+        nas_root_directory=project_configuration.nas_root_directory,
+        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+    )
+
     # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
     # being able to run preprocessing on the data if runtime fails.
     session_data.to_path()
 
-    message = f"Initializing run training runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
-        initial_running_speed_cm_s=initial_speed_threshold,
-        initial_speed_duration_s=initial_duration_threshold,
+        dispensed_water_volume_ml=0.0,
+        final_run_speed_threshold_cm_s=initial_speed_threshold,
+        final_run_duration_threshold_s=initial_duration_threshold,
+        initial_run_speed_threshold_cm_s=initial_speed_threshold,
+        initial_run_duration_threshold_s=initial_duration_threshold,
         increase_threshold_ml=increase_threshold,
-        increase_running_speed_cm_s=speed_increase_step,
-        increase_speed_duration_s=duration_increase_step,
-        maximum_running_speed_cm_s=maximum_speed_threshold,
-        maximum_speed_duration_s=maximum_duration_threshold,
+        run_speed_increase_step_cm_s=speed_increase_step,
+        run_duration_increase_step_s=duration_increase_step,
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         experimenter=experimenter,
@@ -1937,6 +1990,7 @@ def run_train_logic(
     # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
     # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = _BehaviorTraining(
+        project_configuration=project_configuration,
         session_data=session_data,
         session_descriptor=descriptor,
     )
@@ -1948,11 +2002,11 @@ def run_train_logic(
     # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
     # optimize main loop runtime speed:
     initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
-    maximum_speed = np.float64(maximum_speed_threshold)  # In centimeters per second
+    maximum_speed = np.float64(20)  # In centimeters per second
     speed_step = np.float64(speed_increase_step)  # In centimeters per second
 
     initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
-    maximum_duration = np.float64(maximum_duration_threshold * 1000)  # In milliseconds
+    maximum_duration = np.float64(20000)  # In milliseconds
     duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
 
     # The way 'increase_threshold' is used requires it to be greater than 0. So if a threshold of 0 is passed, the
@@ -2122,8 +2176,8 @@ def run_train_logic(
     # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
     # the training.
     if not isinstance(runtime.descriptor, LickTrainingDescriptor):  # This is to appease mypy
-        runtime.descriptor.final_running_speed_cm_s = float(speed_threshold)
-        runtime.descriptor.final_speed_duration_s = float(duration_threshold / 1000)  # Converts from s to ms
+        runtime.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
+        runtime.descriptor.final_run_duration_threshold_s = float(duration_threshold / 1000)  # Converts from s to ms
 
     # Terminates the listener
     listener.shutdown()
@@ -2138,11 +2192,10 @@ def run_train_logic(
 
 def run_experiment_logic(
     experimenter: str,
+    project_name: str,
+    experiment_name: str,
+    animal_id: str,
     animal_weight: float,
-    session_data: SessionData,
-    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
-    cue_length_map: dict[int, float],
-    experiment_state_sequence: tuple[_ExperimentState, ...],
 ) -> None:
     """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
@@ -2168,55 +2221,59 @@ def run_experiment_logic(
 
     Args:
         experimenter: The id of the experimenter conducting the experiment.
-        animal_weight: The weight of the animal, in grams, at the beginning of the training session.
-        session_data: The SessionData instance that manages the data acquired during the experiment.
-        valve_calibration_data: A tuple of tuples, with each inner tuple storing a pair of values. The first value is
-            the duration, in microseconds, the valve was open. The second value is the volume of dispensed water, in
-            microliters. This is used to determine how long to keep the valve open to deliver the specific volume of
-            water used during training and experiments to reward the animal.
-        cue_length_map: A dictionary that maps each integer-code associated with a wall cue used in the Virtual Reality
-            experiment environment to its length in real-world centimeters. Ity is used to map each VR cue to the
-            distance the animal needs to travel to fully traverse the wall cue region from start to end.
-        experiment_state_sequence: A tuple of ExperimentState instances, each representing a phase of the experiment.
-            The function executes each experiment state provided via this tuple in the order they appear. Once the last
-            state has been executed, the experiment runtime ends.
+        project_name: The name of the project for which the experiment is conducted.
+        experiment_name: The name or ID of the experiment to be conducted.
+        animal_id: The numeric ID of the animal participating in the experiment.
+        animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
     """
 
     # Enables the console
     if not console.enabled:
         console.enable()
 
+    message = f"Initializing lick training runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Uses project name to load the project configuration data
+    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
+
+    # Uses information stored in the project configuration to initialize the SessionData instance for the session
+    session_data = SessionData(
+        project_name=project_name,
+        animal_id=animal_id,
+        experiment_name=experiment_name,
+        surgery_sheet_id=project_configuration.surgery_sheet_id,
+        water_log_sheet_id=project_configuration.water_log_sheet_id,
+        session_type="Experiment",
+        credentials_path=project_configuration.credentials_path,
+        local_root_directory=project_configuration.local_root_directory,
+        server_root_directory=project_configuration.server_root_directory,
+        nas_root_directory=project_configuration.nas_root_directory,
+        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+    )
+
+    # Uses initialized SessionData instance to load the experiment configuration data
+    experiment_configuration: ExperimentConfiguration = ExperimentConfiguration.from_yaml(  # type: ignore
+        file_path=session_data.experiment_configuration_path
+    )
+
     # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
     # being able to run preprocessing on the data if runtime fails.
     session_data.to_path()
 
-    message = f"Initializing lick training runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Generates the runtime class and other assets
     # Pre-generates the SessionDescriptor class and populates it with experiment data.
     descriptor = MesoscopeExperimentDescriptor(
-        experimenter=experimenter,
-        mouse_weight_g=animal_weight,
+        experimenter=experimenter, mouse_weight_g=animal_weight, dispensed_water_volume_ml=0.0
     )
 
     # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
     # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = _MesoscopeExperiment(
+        project_configuration=project_configuration,
+        experiment_configuration=experiment_configuration,
         session_data=session_data,
         session_descriptor=descriptor,
-        cue_length_map=cue_length_map,
-        actor_port="/dev/ttyACM0",
-        sensor_port="/dev/ttyACM1",
-        encoder_port="/dev/ttyACM2",
-        headbar_port="/dev/ttyUSB0",
-        lickport_port="/dev/ttyUSB1",
-        face_camera_index=0,
-        left_camera_index=0,
-        right_camera_index=2,
-        harvesters_cti_path=Path("/opt/mvIMPACT_Acquire/lib/x86_64/mvGenTLProducer.cti"),
-        screens_on=False,
-        valve_calibration_data=valve_calibration_data,
     )
 
     runtime_timer = PrecisionTimer("s")  # Initializes the timer to enforce experiment state durations
@@ -2239,7 +2296,7 @@ def run_experiment_logic(
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
     try:
-        for state in experiment_state_sequence:
+        for state in experiment_configuration.experiment_states.values():
             runtime_timer.reset()  # Resets the timer
 
             # Sets the Experiment state
