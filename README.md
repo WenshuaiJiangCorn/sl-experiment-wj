@@ -24,16 +24,6 @@ libraries to implement custom projects in scientific and industrial contexts. Na
 documentation of specific 'Ataraxis' libraries if you need help with a particular system component or interface.
 ___
 
-## Features
-
-- Written for and extensively tested on the Linux operating system.
-- Abstracts working with all hardware components used to conduct experiments in the Sun Lab by exposing an easy-to-use
-  state-machine API.
-- Contains built-in pipelines to pre-process and distribute the acquired data over lab servers and NAS storage drives.
-- Maximizes data throughput, integrity, and resilience to interruptions.
-- GPL 3 License.
-___
-
 ## Table of Contents
 
 - [Software Dependencies](#software-dependencies)
@@ -129,68 +119,6 @@ See the [API documentation](https://sl-experiment-api.netlify.app/) for the
 detailed description of the methods and classes exposed by components of this library.
 ___
 
-## Developers
-
-This section provides installation, dependency, and build-system instructions for the developers that want to
-modify the source code of this library.
-
-### Installing the library
-
-The easiest way to ensure you have most recent development dependencies and library source files is to install the 
-python environment for your OS (see below). All environments used during development are exported as .yml files and as 
-spec.txt files to the [envs](envs) folder. The environment snapshots were taken on each of the three explicitly 
-supported OS families: Windows 11, OSx Darwin, and GNU Linux.
-
-**Note!** Since the OSx environment was built for the Darwin platform (Apple Silicon), it may not work on Intel-based 
-Apple devices.
-
-1. If you do not already have it installed, install [tox](https://tox.wiki/en/latest/user_guide.html) into the active
-   python environment. The rest of this installation guide relies on the interaction of local tox installation with the
-   configuration files included in with this library.
-2. Download this repository to your local machine using your preferred method, such as git-cloning. If necessary, unpack
-   and move the project directory to the appropriate location on your system.
-3. ```cd``` to the root directory of the project using your command line interface of choice. Make sure it contains
-   the `tox.ini` and `pyproject.toml` files.
-4. Run ```tox -e import``` to automatically import the os-specific development environment included with the source 
-   distribution. Alternatively, you can use ```tox -e create``` to create the environment from scratch and automatically
-   install the necessary dependencies using pyproject.toml file. 
-5. If either step 4 command fails, use ```tox -e provision``` to fix a partially installed environment.
-
-**Hint:** while only the platforms mentioned above were explicitly evaluated, this project will likely work on any 
-common OS, but may require additional configurations steps.
-
-### Additional Dependencies
-
-In addition to installing the development environment, separately install the following dependencies:
-
-1. [Python](https://www.python.org/downloads/) distributions, one for each version that you intend to support. These 
-   versions will be installed in-addition to the main Python version installed in the development environment.
-   The easiest way to get tox to work as intended is to have separate python distributions, but using 
-   [pyenv](https://github.com/pyenv/pyenv) is a good alternative. This is needed for the 'test' task to work as 
-   intended.
-
-### Development Automation
-
-This project comes with a fully configured set of automation pipelines implemented using 
-[tox](https://tox.wiki/en/latest/user_guide.html). Check [tox.ini file](tox.ini) for details about 
-available pipelines and their implementation. Alternatively, call ```tox list``` from the root directory of the project
-to see the list of available tasks.
-
-**Note!** All commits to this project have to successfully complete the ```tox``` task before being pushed to GitHub. 
-To minimize the runtime duration for this task, use ```tox --parallel```.
-
-For more information, check the 'Usage' section of the 
-[ataraxis-automation project](https://github.com/Sun-Lab-NBB/ataraxis-automation#Usage) documentation.
-
-### Automation Troubleshooting
-
-Many packages used in 'tox' automation pipelines (uv, mypy, ruff) and 'tox' itself are prone to various failures. In 
-most cases, this is related to their caching behavior. Despite a considerable effort to disable caching behavior known 
-to be problematic, in some cases it cannot or should not be eliminated. If you run into an unintelligible error with 
-any of the automation components, deleting the corresponding .cache (.tox, .ruff_cache, .mypy_cache, etc.) manually 
-or via a cli command is very likely to fix the issue.
-___
-
 ## Versioning
 
 We use [semantic versioning](https://semver.org/) for this project. For the versions available, see the 
@@ -201,7 +129,7 @@ We use [semantic versioning](https://semver.org/) for this project. For the vers
 ## Authors
 
 - Ivan Kondratyev ([Inkaros](https://github.com/Inkaros))
-- Kushaan Gupta ([Inkaros](https://github.com/kushaangupta))
+- Kushaan Gupta ([kushaangupta](https://github.com/kushaangupta))
 - Natalie Yeung
 - Katlynn Ryu ([katlynn-ryu](https://github.com/KatlynnRyu))
 - Jasmine Si
