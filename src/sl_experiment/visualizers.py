@@ -166,6 +166,9 @@ class BehaviorVisualizer:
         self._time_step: int = 30
         self._update_timer = PrecisionTimer("ms")
 
+        # Initializes additional assets used to generate the running speed data from the distance tracking data.
+        self._speed_timer: PrecisionTimer = PrecisionTimer("ms")
+
         # Saves the input trackers to class attributes
         self._lick_tracker: SharedMemoryArray = lick_tracker
         self._valve_tracker: SharedMemoryArray = valve_tracker
@@ -182,9 +185,6 @@ class BehaviorVisualizer:
         self._previous_lick_count: np.uint64 = np.uint64(0)
         self._previous_distance: np.float64 = np.float64(0)
         self._running_speed: np.float64 = np.float64(0)
-
-        # Initializes additional assets used to generate the running speed data from the distance tracking data.
-        self._speed_timer: PrecisionTimer = PrecisionTimer("ms")
 
         # Line objects (to be created during initialization)
         self._lick_line: Line2D

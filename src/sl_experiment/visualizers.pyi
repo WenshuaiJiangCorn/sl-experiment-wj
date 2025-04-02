@@ -106,6 +106,7 @@ class BehaviorVisualizer:
     _time_window: int
     _time_step: int
     _update_timer: Incomplete
+    _speed_timer: PrecisionTimer
     _lick_tracker: SharedMemoryArray
     _valve_tracker: SharedMemoryArray
     _distance_tracker: SharedMemoryArray
@@ -117,7 +118,6 @@ class BehaviorVisualizer:
     _previous_lick_count: np.uint64
     _previous_distance: np.float64
     _running_speed: np.float64
-    _speed_timer: PrecisionTimer
     _lick_line: Line2D
     _valve_line: Line2D
     _speed_line: Line2D

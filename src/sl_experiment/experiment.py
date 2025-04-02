@@ -999,7 +999,7 @@ class _BehaviorTraining:
 
         # Determines the type of training carried out by the instance. This is needed for log parsing and
         # SessionDescriptor generation.
-        self._lick_training: bool = False
+        self._lick_training: bool = True if session_data.session_type == "Lick training" else False
         self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = session_descriptor
 
         # Saves the SessionData instance to an attribute so that it can be used from class methods. Since SessionData
@@ -1188,7 +1188,6 @@ class _BehaviorTraining:
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
                 valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
                 valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-                recorded_mesoscope_ttl=False,
             )
         else:
             hardware_configuration = HardwareConfiguration(
@@ -1196,7 +1195,6 @@ class _BehaviorTraining:
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
                 valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
                 valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-                recorded_mesoscope_ttl=False,
             )
         hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
         message = "Hardware configuration snapshot: Generated."
@@ -1672,6 +1670,16 @@ def vr_maintenance_logic(project_name: str) -> None:
             thread_count=10,
         )
         logger.start()
+
+        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+        message = (
+            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
+            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
+            "control the HeadBar and LickPort motor positions until you reset the runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
 
         # Initializes HeadBar and LickPort binding classes
         headbar = HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))

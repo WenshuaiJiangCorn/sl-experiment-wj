@@ -300,7 +300,7 @@ class ProjectConfiguration(YamlConfig):
 
         # Verifies the path to the credentials' file and the path to the Harvesters CTI file:
         if isinstance(self.credentials_path, Path) and (
-            not self.credentials_path.exists() or not self.credentials_path.suffix != ".json"
+            not self.credentials_path.exists() or self.credentials_path.suffix != ".json"
         ):
             message = (
                 f"Unable to verify the credentials_path field loaded from the 'project_configuration.yaml' file. "
@@ -309,7 +309,7 @@ class ProjectConfiguration(YamlConfig):
             )
             console.error(message=message, error=ValueError)
         if isinstance(self.harvesters_cti_path, Path) and (
-            not self.harvesters_cti_path.exists() or not self.harvesters_cti_path.suffix != ".cti"
+            not self.harvesters_cti_path.exists() or self.harvesters_cti_path.suffix != ".cti"
         ):
             message = (
                 f"Unable to verify the harvesters_cti_path field loaded from the 'project_configuration.yaml' file. "

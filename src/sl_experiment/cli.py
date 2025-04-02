@@ -406,12 +406,13 @@ def preprocess_session(session_path: Path) -> None:
     ),
 )
 def purge_data(project: str, remove_ubiquitin: bool, remove_telomere: bool) -> None:
-    """Depending on configuration, removes all redundant data directories for the target project from the ScanImagePC,
+    """Depending on configuration, removes all redundant data directories for ALL projects from the ScanImagePC,
     VRPC, or both.
 
     This command should be used at least weekly to remove no longer necessary data from the PCs used during data
     acquisition. Unless this function is called, our preprocessing pipelines will NOT remove the data, eventually
-    leading to both PCs running out of storage space.
+    leading to both PCs running out of storage space. Note, despite the command taking in a project name, it removes
+    redundant data for all projects stored in the same root folder as the target project.
     """
 
     # Loads the target project's configuration
@@ -421,9 +422,9 @@ def purge_data(project: str, remove_ubiquitin: bool, remove_telomere: bool) -> N
     purge_redundant_data(
         remove_ubiquitin=remove_ubiquitin,
         remove_telomere=remove_telomere,
-        local_root_path=Path(project_configuration.local_root_directory).joinpath(project),
-        server_root_path=Path(project_configuration.server_root_directory).joinpath(project),
-        mesoscope_root_path=Path(project_configuration.mesoscope_root_directory).joinpath(project),
+        local_root_path=Path(project_configuration.local_root_directory),
+        server_root_path=Path(project_configuration.server_root_directory),
+        mesoscope_root_path=Path(project_configuration.mesoscope_root_directory),
     )
 
 
