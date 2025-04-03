@@ -6,6 +6,7 @@ processing API) and specialized runtime logic functions (user-facing external AP
 import os
 import copy
 import json
+import shutil
 from typing import Any
 from pathlib import Path
 import tempfile
@@ -454,7 +455,9 @@ class _MesoscopeExperiment:
                 f"mesoscope objetive. If necessary, adjust the HeadBar position to make sure the animal can "
                 f"comfortably run the task. Previous mesoscope coordinates are: "
                 f"x={previous_positions.mesoscope_x_position}, y={previous_positions.mesoscope_y_position}, "
-                f"z={previous_positions.mesoscope_z_position}, roll={previous_positions.mesoscope_roll_position}."
+                f"z={previous_positions.mesoscope_z_position}, roll={previous_positions.mesoscope_roll_position}, "
+                f"fast_z={previous_positions.mesoscope_fast_z_position}, "
+                f"tip={previous_positions.mesoscope_tip_position}, tilt={previous_positions.mesoscope_tilt_position}."
             )
         else:
             # Gives user time to mount the animal and requires confirmation before proceeding further.
@@ -645,6 +648,9 @@ class _MesoscopeExperiment:
             self.descriptor.mesoscope_y_position = previous_coordinates.mesoscope_y_position
             self.descriptor.mesoscope_z_position = previous_coordinates.mesoscope_z_position
             self.descriptor.mesoscope_roll_position = previous_coordinates.mesoscope_roll_position
+            self.descriptor.mesoscope_fast_z_position = previous_coordinates.mesoscope_fast_z_position
+            self.descriptor.mesoscope_tilt_position = previous_coordinates.mesoscope_tilt_position
+            self.descriptor.mesoscope_tip_position = previous_coordinates.mesoscope_tip_position
 
         # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
         self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
@@ -728,6 +734,9 @@ class _MesoscopeExperiment:
             mesoscope_y_position=descriptor.mesoscope_y_position,
             mesoscope_z_position=descriptor.mesoscope_z_position,
             mesoscope_roll_position=descriptor.mesoscope_roll_position,
+            mesoscope_fast_z_position=descriptor.mesoscope_fast_z_position,
+            mesoscope_tilt_position=descriptor.mesoscope_tilt_position,
+            mesoscope_tip_position=descriptor.mesoscope_tip_position,
         )
         mesoscope_positions.to_yaml(file_path=self._session_data.previous_mesoscope_positions_path)
         message = "Mesoscope objective position snapshot: Created."
@@ -1688,6 +1697,20 @@ def vr_maintenance_logic(project_name: str) -> None:
         message = f"Zaber controllers: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
+        # Initializes the face camera. This is only relevant when the pipeline is used check cranial windows in
+        # implanted animals.
+        cameras = VideoSystems(
+            data_logger=logger,
+            output_directory=output_path,
+            face_camera_index=project_configuration.face_camera_index,
+            left_camera_index=project_configuration.left_camera_index,
+            right_camera_index=project_configuration.right_camera_index,
+            harvesters_cti_path=project_configuration.harvesters_cti_path
+        )
+        cameras.start_face_camera()
+        message = f"Face camera display: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
         # time.
         valve: ValveInterface = ValveInterface(
@@ -1740,8 +1763,9 @@ def vr_maintenance_logic(project_name: str) -> None:
         message = (
             "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
             "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Supported HeadBar and "
-            "LickPort motor repositioning: image, mount, maintain. Supported HeadBar and LickPort position saving "
-            "command: snapshot. Use 'q' command to terminate the runtime."
+            "LickPort motor positioning commands: image, mount, maintain. Supported Mesoscope position, HeadBar and "
+            "LickPort motor position, and window screenshot saving command: snapshot. Use 'q' command to terminate the "
+            "runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -1821,9 +1845,67 @@ def vr_maintenance_logic(project_name: str) -> None:
                 wheel.toggle(state=False)
 
             if command == "snapshot":
-                message = f"Generating the HeadBar and LickPort position snapshot..."
-                console.echo(message=message, level=LogLevel.INFO)
-                animal_id = input("Enter the animal id: ")
+                animal_id = input("Enter the id of the animal: ")
+
+                # Uses the input animal ID to resolve the path to the persistent and metadata directories for the
+                # animal. Then, resolves the paths to save the data generated during runtime:
+
+                # Zaber and Mesoscope positions reused for future runtimes (saved to the persistent data directory)
+                zaber_positions_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "persistent_data", "zaber_positions.yaml"
+                )
+                mesoscope_positions_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "persistent_data", "mesoscope_positions.yaml"
+                )
+
+                # Initial Zaber positions saved to the metadata directory
+                local_initial_zaber_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_zaber_positions.yaml"
+                )
+                server_initial_zaber_path = Path(project_configuration.server_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_zaber_positions.yaml"
+                )
+                nas_initial_zaber_path = Path(project_configuration.nas_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_zaber_positions.yaml"
+                )
+
+                # Initial Mesoscope positions saved to the metadata directory
+                local_initial_mesoscope_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_mesoscope_positions.yaml"
+                )
+                server_initial_mesoscope_path = Path(project_configuration.server_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_mesoscope_positions.yaml"
+                )
+                nas_initial_mesoscope_path = Path(project_configuration.nas_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_mesoscope_positions.yaml"
+                )
+
+                # Initial window screenshot saved to the metadata directory
+                local_initial_screenshot_path = Path(project_configuration.local_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_window_screenshot.png"
+                )
+                server_initial_screenshot_path = Path(project_configuration.server_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_window_screenshot.png"
+                )
+                nas_initial_screenshot_path = Path(project_configuration.nas_root_directory).joinpath(
+                    project_name, animal_id, "metadata", "initial_window_screenshot.png"
+                )
+
+                # Ensures all target directories exist
+                ensure_directory_exists(zaber_positions_path)
+                ensure_directory_exists(mesoscope_positions_path)
+                ensure_directory_exists(local_initial_zaber_path)
+                ensure_directory_exists(server_initial_zaber_path)
+                ensure_directory_exists(nas_initial_zaber_path)
+                ensure_directory_exists(local_initial_mesoscope_path)
+                ensure_directory_exists(server_initial_mesoscope_path)
+                ensure_directory_exists(nas_initial_mesoscope_path)
+                ensure_directory_exists(local_initial_screenshot_path)
+                ensure_directory_exists(server_initial_screenshot_path)
+                ensure_directory_exists(nas_initial_screenshot_path)
+
+                # Also resolves the path to the root mesoscope folder to grab the window screenshot.
+                mesodata_path = Path(project_configuration.mesoscope_root_directory)
 
                 # Retrieves current motor positions and packages them into a ZaberPositions object.
                 head_bar_positions = headbar.get_positions()
@@ -1839,11 +1921,37 @@ def vr_maintenance_logic(project_name: str) -> None:
 
                 # Dumps the data into the persistent directory of the specified animal, creating any missing folders,
                 # if necessary.
-                persistent_path = Path(project_configuration.local_root_directory).joinpath(
-                    project_name, animal_id, "persistent_data", "zaber_positions.yaml"
-                )
-                ensure_directory_exists(persistent_path)
-                zaber_positions.to_yaml(file_path=persistent_path)
+                zaber_positions.to_yaml(file_path=zaber_positions_path)
+
+                message = f"HeadBar and LickPort position snapshot: Saved."
+                console.echo(message=message, level=LogLevel.INFO)
+
+                # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
+                # is generated.
+                screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+                while len(screenshots) != 1:
+                    message = (
+                        f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
+                        f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
+                        f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
+                        f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
+                        f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
+                        f"screenshots stored in the folder before proceeding."
+                    )
+                    console.echo(message=message, level=LogLevel.WARNING)
+                    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+
+                # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
+                screenshot_path: Path = screenshots[0]
+                shutil.copy(screenshot_path, local_initial_screenshot_path)
+                shutil.copy(screenshot_path, nas_initial_screenshot_path)
+                shutil.copy(screenshot_path, server_initial_screenshot_path)
+                screenshot_path.unlink()
+                message = f"Cranial window and dot-alignment screenshot: Saved."
+                console.echo(message=message, level=LogLevel.INFO)
+
+                # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
+                # forces the user to fill it with data.
 
             if command == "image":
                 message = f"Moving HeadBar and LickPort to the default brain imaging position..."
@@ -1851,6 +1959,8 @@ def vr_maintenance_logic(project_name: str) -> None:
                 headbar.mount_position(wait_until_idle=False)
                 lickport.park_position()
                 headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
 
             if command == "mount":
                 message = f"Moving HeadBar and LickPort to the animal mounting position..."
@@ -1858,6 +1968,8 @@ def vr_maintenance_logic(project_name: str) -> None:
                 headbar.mount_position(wait_until_idle=False)
                 lickport.mount_position()
                 headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
 
             if command == "maintain":
                 message = f"Moving HeadBar and LickPort to the default Mesoscope-VR maintenance position..."
@@ -1865,6 +1977,8 @@ def vr_maintenance_logic(project_name: str) -> None:
                 headbar.calibrate_position(wait_until_idle=False)
                 lickport.calibrate_position()
                 headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
 
             if command == "q":
                 message = f"Terminating Mesoscope-VR maintenance runtime."
@@ -1893,6 +2007,11 @@ def vr_maintenance_logic(project_name: str) -> None:
         controller.stop()
 
         message = f"Actor MicroController: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Shuts down the face camera
+        cameras.stop()
+        message = f"Face camera: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Stops the data logger
