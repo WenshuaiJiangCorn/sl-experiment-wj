@@ -14,45 +14,72 @@ ___
 
 ## Detailed Description
 
-All experimental projects in the lab are based on this interface library. Primarily, it contains the bindings for all 
-subsystems used to collect behavior data and control experiment runtimes. This library is purpose-built for the hardware
-used in the lab and will likely require extensive modifications to be used elsewhere.
+This library functions as the central hub for collecting and preprocessing the data in the Sun lab shared by all 
+individual lab projects. To do so, it exposes the API that allows interfacing with the hardware making up the overall 
+Mesoscope-VR (Virtual Reality) system used in the lab and working with the data collected via this hardware. Primarily, 
+this involves specializing the general-purpose libraries, such as 
+[ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system), 
+[ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller) 
+and [ataraxis-data-structures](https://github.com/Sun-Lab-NBB/ataraxis-data-structures) to work within the specific 
+hardware implementations used in the lab.
 
-This library leverages the codebase developed in the lab as part of the 'Ataraxis' project to interface with 
-individual system components. It is publicly accessible primarily to serve as an example of how to leverage 'Ataraxis' 
-libraries to implement custom projects in scientific and industrial contexts. Navigate to the ReadMe / API 
-documentation of specific 'Ataraxis' libraries if you need help with a particular system component or interface.
+This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab,
+and will likely not work in other contexts without extensive modification. It is made public to serve as the real-world 
+example of how to use 'Ataraxis' libraries to acquire and preprocess scientific data.
+
+Currently, the Mesoscope-VR system consists of three major parts: 
+1. The [2P-Random-Access-Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472), assembled by 
+   [Thor Labs](https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=10646) and controlled by 
+   [ScanImage](https://www.mbfbioscience.com/products/scanimage/) software. The Mesoscope control and data acquisition 
+   are performed by a dedicated computer referred to as the 'ScanImagePC' or 'Mesoscope PC.' 
+2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
+   experiments to provide the task environment to the animal and resolve the task logic. The virtual environment runs on
+   the main data acquisition computer referred to as the 'VRPC.'
+3. The [microcontroller-powered](https://github.com/Sun-Lab-NBB/sl-micro-controllers) hardware that allows 
+   bidirectionally interfacing with the Virtual Reality world and collecting the visual and non-visual animal behavior 
+   data. All this hardware is ultimately controlled through this library running on the 'VRPC'.
 ___
 
 ## Table of Contents
 
-- [Software Dependencies](#software-dependencies)
-- [Hardware Dependencies](#software-dependencies)
+- [Dependencies](#dependencies)
 - [Installation](#installation)
-- [Usage](#usage)
+- [System Assembly](#system-assembly)
 - [API Documentation](#api-documentation)
-- [Developers](#developers)
 - [Versioning](#versioning)
 - [Authors](#authors)
 - [License](#license)
 - [Acknowledgements](#Acknowledgments)
 ___
 
-## Software Dependencies
-- [MQTT broker](https://mosquitto.org/). The broker should be running locally on the VRPC with default IP and Port 
-  configuration.
-- [FFMPEG](https://www.ffmpeg.org/download.html). We recommend using the latest available release.
+## Dependencies
+
+### Main Dependency
+- ***Linux*** operating system. While the library may also work on Windows and macOS, it has been explicitly written for
+  and tested on mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution.
+
+### Software Dependencies
+***Note!*** This list only includes external dependencies that are required to run the library, in addition to all 
+dependencies automatically installed from pip / conda as part of library installation. The dependencies below have to
+be installed and configured on the **VRPC** before calling training or experiment runtime terminal commands exposed by
+this library.
+
+- [MQTT broker](https://mosquitto.org/). The broker should be running locally with the **default** IP (27.0.0.1) and 
+  Port (1883) configuration.
+- [FFMPEG](https://www.ffmpeg.org/download.html). As a minimum, the version of FFMPEG should support H265 and H264 
+  codecs with hardware acceleration (Nvidia GPU). It is typically safe to use the latest available version.
 - [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/) GenTL producer. This library works with version 
-  **2.9.2**, but higher versions may be fine too.
-- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). We recommend the latest available release.
-- 
+  **2.9.2**, which is freely distributed. Higher GenTL producer versions will work too, but require purchasing a 
+  license.
+- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). Use the latest available release.
+- [Unity Game Engine](https://unity.com/products/unity-engine). Use the latest available release.
 ---
 
-## Hardware Dependencies
+### Hardware Dependencies
 - [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
   data. Any GPU with hardware encoding chip(s) should be fine, the library was tested with RTX 4090.
-- [Teensy MicroController Boards](https://www.pjrc.com/teensy/). This library is designed to run with 3 Teensy 4.1 
-  MicroControllers.
+- A CPU with at least 12, preferably 16 physical cores. This library has been tested with 
+  [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html).
 ___
 
 ## Installation
@@ -60,8 +87,6 @@ ___
 ### Source
 
 Note, installation from source is ***highly discouraged*** for everyone who is not an active project developer.
-Developers should see the [Developers](#Developers) section for more details on installing from source. The instructions
-below assume you are ***not*** a developer.
 
 1. Download this repository to your local machine using your preferred method, such as Git-cloning. Use one
    of the stable releases from [GitHub](https://github.com/Sun-Lab-NBB/sl-experiment/releases).
@@ -73,7 +98,18 @@ below assume you are ***not*** a developer.
 Use the following command to install the library using pip: ```pip install sl-experiment```.
 ___
 
-## Google Sheets API Integration
+## System Assembly
+
+### Zaber Motors
+All brain activity recordings with the mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
+the Virtual Reality treadmill (running wheel) and promote task performance, we use two groups of motors controlled 
+though Zaber motor controllers. The first group, called the **HeadBar**, is used to position of the animal’s head in 
+Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this allows for a wide range of 
+motions necessary to promote good animal running behavior and brain activity data collection. The second group of 
+motors, called the **LickPort**, controls the position of the water delivery port (and sensor) in X, Y, and Z axes. This
+is used to ensure all animals have comfortable access to the water delivery tube, regardless of their head position.
+
+### Google Sheets API Integration
 
 To connect your Google Sheets, first log into the Google Cloud Console using the Gmail account of 
 the Google Sheet owner. Create a new project and navigate to APIs & Services > Library and enable the Google Sheets API 

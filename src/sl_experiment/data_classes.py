@@ -564,10 +564,10 @@ class MesoscopeExperimentDescriptor(YamlConfig):
     """The X-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_y_position: float = 0.0
     """The Y-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
-    mesoscope_z_position: float = 0.0
-    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_roll_position: float = 0.0
     """The Roll-axis position, in degrees, of the Mesoscope objective used during session runtime."""
+    mesoscope_z_position: float = 0.0
+    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_fast_z_position: float = 0.0
     """The Fast-Z-axis position, in micrometers, of the Mesoscope objective used during session runtime."""
     mesoscope_tip_position: float = 0.0
@@ -625,10 +625,10 @@ class MesoscopePositions(YamlConfig):
     """The X-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_y_position: float = 0.0
     """The Y-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
-    mesoscope_z_position: float = 0.0
-    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_roll_position: float = 0.0
     """The Roll-axis position, in degrees, of the Mesoscope objective used during session runtime."""
+    mesoscope_z_position: float = 0.0
+    """The Z-axis position, in centimeters, of the Mesoscope objective used during session runtime."""
     mesoscope_fast_z_position: float = 0.0
     """The Fast-Z-axis position, in micrometers, of the Mesoscope objective used during session runtime."""
     mesoscope_tip_position: float = 0.0
