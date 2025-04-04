@@ -497,6 +497,7 @@ class _MesoscopeExperiment:
                 f"screenshots stored in the folder before proceeding."
             )
             console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
             screenshots = [screenshot for screenshot in self._session_data.mesoscope_root_path.glob("*.png")]
 
         # Transfers the screenshot to the mesoscope_frames folder of the session's raw_data folder
@@ -1936,6 +1937,7 @@ def vr_maintenance_logic(project_name: str) -> None:
                         f"screenshots stored in the folder before proceeding."
                     )
                     console.echo(message=message, level=LogLevel.WARNING)
+                    input("Enter anything to continue: ")
                     screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
 
                 # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
@@ -1961,7 +1963,6 @@ def vr_maintenance_logic(project_name: str) -> None:
                     and mesoscope_positions.mesoscope_y_position == 0.0
                     and mesoscope_positions.mesoscope_z_position == 0.0
                 ):
-                    pass
                     message = (
                         f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
                         f"local persistent directory before proceeding further."
@@ -1971,6 +1972,7 @@ def vr_maintenance_logic(project_name: str) -> None:
                     mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
                         file_path=mesoscope_positions_path
                     )
+
                 # Copies updated mesoscope position data tot all metadata directories.
                 shutil.copy(mesoscope_positions_path, local_metadata.joinpath("initial_mesoscope_positions.yaml"))
                 shutil.copy(mesoscope_positions_path, nas_metadata.joinpath("initial_mesoscope_positions.yaml"))
