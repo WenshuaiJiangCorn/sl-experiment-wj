@@ -15,10 +15,10 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
 authors = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
-    { name = "Kushaan Gupta", email = "kg574@cornell.edu"},
+    { name = "Kushaan Gupta", email = "kg574@cornell.edu" },
     { name = "Natalie Yeung", email = "nyy4@cornell.edu" },
     { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
-    { name = "Jasmine Si"}
+    { name = "Jasmine Si" }
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
@@ -165,7 +165,8 @@ dev = [
     "sl-experiment[noconda]"
 ]
 
-# Future support for CLI interface(s) can be realizied through this section.
+# Currently, the library is intended to be interfaced with more or less exclusively through the CLI commands exported
+# below.
 [project.scripts]
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"

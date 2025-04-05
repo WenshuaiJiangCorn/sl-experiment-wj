@@ -948,9 +948,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Resolves the animal ID (name)
     animal_id = int(session_data.animal_id)
 
-    message = f"Writing water restriction log entry..."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Loads the session descriptor file to read the data needed to update the wr log
     descriptor_path = session_data.session_descriptor_path
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
@@ -993,9 +990,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
 
     message = f"Water restriction log entry: written."
     console.echo(message=message, level=LogLevel.SUCCESS)
-
-    message = f"Updating animal surgery data file..."
-    console.echo(message=message, level=LogLevel.INFO)
 
     # Resolves the paths to the surgery data files stored inside the metadata folder of the managed animal at each
     # destination.
