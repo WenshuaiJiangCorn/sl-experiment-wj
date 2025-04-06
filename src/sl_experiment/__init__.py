@@ -11,5 +11,5 @@ Authors: Ivan Kondratyev (Inkaros), Kushaan Gupta, Natalie Yeung, Katlynn Ryu, J
 # to further process the acquired data.
 
 from .data_classes import HardwareConfiguration
-from .packaging_tools import calculate_directory_checksum
 from .transfer_tools import transfer_directory
+from .packaging_tools import calculate_directory_checksum
