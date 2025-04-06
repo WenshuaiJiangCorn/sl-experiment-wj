@@ -33,11 +33,11 @@ Currently, the Mesoscope-VR system consists of three major parts:
    [ScanImage](https://www.mbfbioscience.com/products/scanimage/) software. The Mesoscope control and data acquisition 
    are performed by a dedicated computer referred to as the 'ScanImagePC' or 'Mesoscope PC.' 
 2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
-   experiments to provide the task environment to the animal and resolve the task logic. The virtual environment runs on
-   the main data acquisition computer referred to as the 'VRPC.'
+   experiments to control the task environment and resolve the task logic. The virtual environment runs on the main data
+   acquisition computer referred to as the 'VRPC.'
 3. The [microcontroller-powered](https://github.com/Sun-Lab-NBB/sl-micro-controllers) hardware that allows 
-   bidirectionally interfacing with the Virtual Reality world and collecting the visual and non-visual animal behavior 
-   data. All this hardware is ultimately controlled through this library running on the 'VRPC'.
+   bidirectionally interfacing with the Virtual Reality world and collecting non-visual animal behavior data. This 
+   hardware, as well as dedicated camera hardware used to record visual behavior data, is controlled through the 'VRPC'.
 ___
 
 ## Table of Contents
@@ -56,30 +56,41 @@ ___
 
 ### Main Dependency
 - ***Linux*** operating system. While the library may also work on Windows and macOS, it has been explicitly written for
-  and tested on mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution.
+  and tested on mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution of the GNU 
+  Linux operating system.
 
 ### Software Dependencies
 ***Note!*** This list only includes external dependencies that are required to run the library, in addition to all 
 dependencies automatically installed from pip / conda as part of library installation. The dependencies below have to
-be installed and configured on the **VRPC** before calling training or experiment runtime terminal commands exposed by
-this library.
+be installed and configured on the **VRPC** before calling runtime commands via the command-line interface (CLI) exposed
+by this library.
 
 - [MQTT broker](https://mosquitto.org/). The broker should be running locally with the **default** IP (27.0.0.1) and 
   Port (1883) configuration.
 - [FFMPEG](https://www.ffmpeg.org/download.html). As a minimum, the version of FFMPEG should support H265 and H264 
   codecs with hardware acceleration (Nvidia GPU). It is typically safe to use the latest available version.
-- [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/) GenTL producer. This library works with version 
-  **2.9.2**, which is freely distributed. Higher GenTL producer versions will work too, but require purchasing a 
-  license.
+- [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/) GenTL producer. This library is used with version 
+  **2.9.2**, which is freely distributed. Higher GenTL producer versions will likely work too, but they require 
+  purchasing a license.
 - [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). Use the latest available release.
 - [Unity Game Engine](https://unity.com/products/unity-engine). Use the latest available release.
 ---
 
 ### Hardware Dependencies
+
+**Note!** These dependencies only apply to the 'VRPC,' the main PC that will be running the data acquisition and 
+preprocessing pipelines.
+
 - [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
-  data. Any GPU with hardware encoding chip(s) should be fine, the library was tested with RTX 4090.
+  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with RTX 4090.
 - A CPU with at least 12, preferably 16 physical cores. This library has been tested with 
-  [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html).
+  [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
+  It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
+  for predictable performance of all library components.
+- A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
+  required for the high-quality machine vision camera used to record videos of the animal’s face. We also used 10-G 
+  lines for transferring the data between the PCs used in the data acquisition process and destinations used for 
+  long-term data storage.
 ___
 
 ## Installation
@@ -100,6 +111,14 @@ ___
 
 ## System Assembly
 
+The Mesoscope-VR system consists of multiple interdependent components. We are constantly making minor changes to the 
+system to optimize its performance and facilitate novel experiments and projects carried out in the lab. Treat this 
+section as a general system assembly guide, but consult our publications over this section for instructions on building 
+specific system implementations used for various projects.
+
+Physical assembly and mounting of ***all*** hardware components mentioned in specific subsections below is discussed in 
+the [main VR environment assembly section](#virtual-reality-environment).
+
 ### Zaber Motors
 All brain activity recordings with the mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
 the Virtual Reality treadmill (running wheel) and promote task performance, we use two groups of motors controlled 
@@ -108,6 +127,32 @@ Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this 
 motions necessary to promote good animal running behavior and brain activity data collection. The second group of 
 motors, called the **LickPort**, controls the position of the water delivery port (and sensor) in X, Y, and Z axes. This
 is used to ensure all animals have comfortable access to the water delivery tube, regardless of their head position.
+
+The current snapshot of Zaber motor configurations used in the lab, alongside motor parts list and electrical wiring 
+instructions, is available 
+[here](https://drive.google.com/drive/folders/1SL75KE3S2vuR9TTkxe6N4wvrYdK-Zmxn?usp=drive_link).
+
+### Behavior Cameras
+To record the animal’s behavior, we use a group of three cameras. The 'face_camera' is a high-end machine-vision camera
+used to record the animal’s face with ~3-MP resolution. The 'left-camera' and 'right_camera' are 1080P security cameras 
+used to record the body of the animal. Only the data recorded by the face_camera is currently used during data 
+processing and analysis. We use custom [ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system) 
+bindings to interface with and record the frames acquired by all cameras.
+
+Specific information about the components used by the camera systems, as well as assembly instructions and face_camera
+parameters are available [here]https://drive.google.com/drive/folders/1l9dLT2s1ysdA3lLpYfLT1gQlTXotq79l?usp=sharing).
+
+### MicroControllers
+To interface with all components of the Mesoscope-VR system **other** than cameras and Zaber motors, we use Teensy 4.1 
+microcontrollers with specialized [ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller) 
+code. Currently, we use three isolated microcontroller systems: "Actor," "Sensor," and "Encoder."
+
+For instructions on assembling and wiring the electronic components used in each microcontroller system, as well as the 
+code running on each microcontroller, see the 
+[microcontroller repository](https://github.com/Sun-Lab-NBB/sl-micro-controllers).
+
+### Unity Game World
+
 
 ### Google Sheets API Integration
 
@@ -128,7 +173,7 @@ Sheets API.
 
 2. Sheet Configuration
 
-    To connect to your Google Sheet, the sheet ID, range, service account file and scope must be specified. The sheet ID 
+    To connect to your Google Sheet, the sheet ID, range, service account file, and scope must be specified. The sheet ID 
     is the unique identifier found in the URL between /d/ and /edit. To parse data from the entire sheet, set the range
     to A1:Z for up to 26 columns or A1:ZZ if exceeded. The tab name is optional and is only required if the sheet contains 
     multiple tabs. If no tab name is provided, the default is set as the first tab. The scope defines the application's 
@@ -147,6 +192,9 @@ Sheets API.
     service = build("sheets", "v4", credentials=creds)
     range_name = f"{self.tab_name}!{self.range}"
     result = service.spreadsheets().values().get(spreadsheetId=self.sheet_id, range=range_name).execute()
+
+### Virtual Reality Environment:
+
 ___
 
 ## API Documentation

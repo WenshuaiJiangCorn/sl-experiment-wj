@@ -1087,10 +1087,10 @@ class VideoSystems:
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.MEDIUM,
+            preset=GPUEncoderPresets.SLOW,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV444,
-            quantization_parameter=15,
+            quantization_parameter=12,
         )
 
         # LEFT CAMERA. A 1080P security camera that is mounted on the left side from the mouse's perspective
@@ -1114,10 +1114,10 @@ class VideoSystems:
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTER,
+            preset=GPUEncoderPresets.FAST,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=25,
+            quantization_parameter=15,
         )
 
         # RIGHT CAMERA. Same as the left camera, but mounted on the right side from the mouse's perspective.
@@ -1138,10 +1138,10 @@ class VideoSystems:
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.FASTER,
+            preset=GPUEncoderPresets.FAST,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=25,
+            quantization_parameter=15,
         )
 
     def start_face_camera(self) -> None:
