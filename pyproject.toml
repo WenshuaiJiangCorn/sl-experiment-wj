@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sl-experiment"
 version = "1.0.0"
-description = "A Python library that provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
+description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+

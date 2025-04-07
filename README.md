@@ -14,14 +14,14 @@ ___
 
 ## Detailed Description
 
-This library functions as the central hub for collecting and preprocessing the data in the Sun lab shared by all 
-individual lab projects. To do so, it exposes the API that allows interfacing with the hardware making up the overall 
-Mesoscope-VR (Virtual Reality) system used in the lab and working with the data collected via this hardware. Primarily, 
-this involves specializing the general-purpose libraries, such as 
+This library functions as the central hub for collecting and preprocessing the data shared by all individual Sun lab 
+projects. To do so, it exposes the API that allows interfacing with the hardware making up the overall Mesoscope-VR 
+(Virtual Reality) system used in the lab and working with the data collected via this hardware. Primarily, this involves
+specializing the general-purpose libraries, such as 
 [ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system), 
-[ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller) 
-and [ataraxis-data-structures](https://github.com/Sun-Lab-NBB/ataraxis-data-structures) to work within the specific 
-hardware implementations used in the lab.
+[ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller),  
+and [ataraxis-data-structures](https://github.com/Sun-Lab-NBB/ataraxis-data-structures) 
+to work within the specific hardware implementations used in the lab.
 
 This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab,
 and will likely not work in other contexts without extensive modification. It is made public to serve as the real-world 
@@ -133,15 +133,16 @@ The current snapshot of Zaber motor configurations used in the lab, alongside mo
 instructions, is available 
 [here](https://drive.google.com/drive/folders/1SL75KE3S2vuR9TTkxe6N4wvrYdK-Zmxn?usp=drive_link).
 
-**Warning!** Zaber motors have to be configured correctly to work with this library. Unless you restore Zaber settings 
-from the snapshots available from the link above, it is likely that the motors will behave unexpectedly. This can damage
-the surrounding equipment, animals, or motors themselves and should be avoided at all costs.
+**Warning!** Zaber motors have to be configured correctly to work with this library. To (re)configure the motors to work
+with the library, apply the setting snapshots from the link above via the 
+[Zaber Launcher](https://software.zaber.com/zaber-launcher/download) software. Make sure you read the instructions in 
+the 'Applying Zaber Configuration' document.
 
-To manually configure the motors to work with this library, you need to overwrite the non-volatile 'user settings' of 
-each motor device (controller) with the data expected by this library. See the 
-[API documentation](https://sl-experiment-api.netlify.app/) for the **ZaberSettings** class to learn more about the 
-settings used by this library. See the source code from the [zaber_bindings.py](/src/sl_experiment/zaber_bindings.py)
-module to learn how these settings are used during runtime.
+**Although this is highly discouraged, you can also edit the motor settings manually.** To manually configure the motors
+to work with this library, you need to overwrite the non-volatile 'user settings' of each motor device (controller) with
+the data expected by this library. See the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+**ZaberSettings** class to learn more about the settings used by this library. See the source code from the 
+[zaber_bindings.py](/src/sl_experiment/zaber_bindings.py) module to learn how these settings are used during runtime.
 
 ### Behavior Cameras
 To record the animal’s behavior, we use a group of three cameras. The **face_camera** is a high-end machine-vision 
@@ -170,23 +171,23 @@ with this library, each project-specific Unity task must use the bindings and as
 [GIMBL-tasks repository](https://github.com/Sun-Lab-NBB/GIMBL-tasks). Follow the instructions from that repository to 
 set up Unity Game engine to run Sun lab experiment tasks.
 
-**Note** This library does not contain tools capable of initializing Unity Game engine. The desired Virtual Reality task
-has to be started manually before initializing the main experiment runtime through this library.
+**Note** This library does not contain tools to initialize Unity Game engine. The desired Virtual Reality task
+has to be started ***manually*** before initializing the main experiment runtime through this library. The main Unity 
+repository contains more details about starting the virtual reality tasks when running experiments.
 
 ### Google Sheets API Integration
 
 This library is statically configured to interact with various Google Sheet files used in the Sun lab. Currently, this 
-includes two logs: the **surgery log** and the **water restriction log**. Primarily, this part of the library is 
+includes two files: the **surgery log** and the **water restriction log**. Primarily, this part of the library is 
 designed as a convenience feature for lab members and to back up and store all project-related data in the same place.
-Generally, we expect that each project uses a unique set of log files, but shares the Goggle API credentials used to 
-access and parse the sheet data.
 
 #### Setting up Google Sheets API Access
 
-**If you already have a service Google Sheets API account, skip to the next section.**
+**If you already have a service Google Sheets API account, skip to the next section.** Typically, we use the same 
+service account for all projects and log files.
 
 1. Log into the [Google Cloud Console](https://shorturl.at/qiDYc). 
-2. Create a new project
+2. Create a new project.
 3. Navigate to APIs & Services > Library and enable the Google Sheets API for the project. 
 4. Under IAM & Admin > Service Accounts, create a service account. This will generate a service account ID in the format
    of `your-service-account@gserviceaccount.com`.
@@ -208,7 +209,82 @@ ___
 
 ## Data Structure and Management
 
-This 
+The library defines a fixed structure for storing all acquired data which uses a 4-level directory tree hierarchy: 
+**root**, **project**, **animal** and **session**.
+
+***Critical!*** Although this library primarily operates the VRPC, it expects all other data directories to be mounted 
+to the VRPC filesystem using the SMB3 protocol. In turn, this allows the library to maintain the necessary data 
+directories on all computers used in the data acquisition, preprocessing, and storage in the lab. Generally, this 
+library tries to maintain the same data hierarchy on all destinations, as discussed below.
+
+Currently, our pipeline uses a total of 4 computers when working with data. **VRPC** and **ScanImagePC** are used to 
+acquire and preprocess the data. After preprocessing, the data is moved to the **BioHPC server** and the 
+**Synology NAS** for long-term storage and preprocessing. All data movement is performed over 10-Gigabit local networks 
+within the lab and broader Cornell infrastructure.
+
+### Root Directory
+When a training, experiment, or maintenance runtime command from this library is called for the first time, the library 
+will ask the user to provide the path to the root project directory on the VRPC. In the future, the data for all 
+projects will be stored in that directory. This directory is referred to as the **local root directory**.
+
+### Project directory
+When a new --project (-p) argument value is provided to any runtime command, the library will generate a new **project**
+directory under the static **root** directory. The project directory will use the project name provided via the command
+argument as its name. As part of this process, a **configuration** subdirectory will also be created under the 
+**project** directory.
+
+***Critical!*** Inside the **configuration** subdirectory, the library will automatically create a 
+**project_configuration.yaml** file. Open that file with a text editor and edit the fields in the file to specify the 
+project configuration. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+**ProjectConfiguration** class to learn more about the purpose of each configuration file field.
+
+Together with the **project_configuration.yaml**, the library will also create an example **default_experiment.yaml**
+file. Each experiment that needs to be carried out as part of this project needs to have a dedicated .yaml file, named
+after the experiment. For example, to run the 'default_experiment,' the library will use the configurations stored in 
+the 'default_experiment.yaml' file. You can use the default_experiment.yaml as an example for writing additional 
+experiment configurations. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+**ExperimentConfiguration** and **ExperimentState** classes to learn more about the purpose of each field inside the 
+experiment configuration .yaml file.
+
+### Animal directory
+When a new --animal (-a) argument value is provided to any runtime command, the library will generate a new **animal**
+directory under the **root** and **project** directory combination. The directory will use the ID of the animal, 
+provided via the command argument as its name.
+
+Under each animal directory, two additional directories will be created. First, the **persistent_data** directory, which
+is used to store the information that has to stay on the VRPC when the acquired data is transferred from the VRPC to 
+other destinations. Seconds, the **metadata** directory, which is used to store information that does not change between
+sessions, such as the information about the surgical procedures performed on the animal.
+
+### Session directory
+When any training or experiment runtime command is called, a new session directory is created under the **root**, 
+**project** and **animal** directory combination. The session name is derived from the current UTC timestamp, accurate 
+to microseconds. Together with other runtime controls, this makes it impossible to have sessions with duplicate names 
+and ensures all sessions can always be sorted chronologically.
+
+Since the same directory tree is reused for data processing, all data acquired by this library is stored under the 
+**raw_data** subdirectory, generated for each session. overall, an example path to the acquired data can therefore 
+look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`
+
+### Raw Data contents
+After acquisition and preprocessing, the **raw_data** folder will contain the following files and subdirectories:
+1. 
+
+### BioHPC server and NAS
+
+The same directory hierarchy as described above is created on the BioHPC server and the Synology NAS used for long-term
+data storage.
+
+### ScanImagePC
+
+The ScanImagePC uses a modified directory structure. First, under its **root** directory, there has to be a 
+**mesoscope_frames** directory, where ***ALL*** ScanImage data has to be saved for every session. During preprocessing, 
+this library will automatically empty this directory, so it has to be used for all projects, animals, and sessions.
+
+Under the same **root** directory, the library also creates a **persistent_data** directory. In that directory, the 
+library follows the same hierarchy (**project** and **animal**) as other computers used in the data acquisition process.
+Like the VRPC **persistent_data** directory, it is used to keep the data that should not be removed from the 
+ScanImagePC even after all data acquired for a particular sessions is moved over for long-term storage.
 
 --- 
 
@@ -264,7 +340,7 @@ initialization.
 1.  `open`. Opens the water delivery valve.
 2.  `close`. Closes the water delivery valve.
 3.  `close_10`. Closes the water delivery valve after a 10-second delay.
-4.  `reference`. Triggers 200 valve pulses with each pulse calibrated to deliver 5 uL of water. This commands is used to
+4.  `reference`. Triggers 200 valve pulses with each pulse calibrated to deliver 5 uL of water. This command is used to
     check whether the valve calibration data matches the actual state of the valve at the beginning of each training or 
     experiment day. The reference runtime should overall dispense ~ 1 ml of water.
 5.  `calibrate_15`. Runs 200 valve pulses, keeping the valve open for 15-milliseconds for each pulse. This is used to 
@@ -272,7 +348,7 @@ initialization.
 6.  `calibarte_30`. Same as above, but uses 30-millisecond pulses.
 7.  `calibrate_45`. Same as above, but uses 45-millisecond pulses.
 8.  `calibrate_60`. Same as above, but uses 60-millisecond pulses.
-9.  `lock`. Locks the running wheel (engages running wheel break).
+9.  `lock`. Locks the running wheel (engages running-wheel break).
 10. `unlock`. Unlocks the running wheel (disengages running wheel break).
 11. `maintain`. Moves the HeadBar and LickPort to the predefined VR maintenance position stored inside non-volatile
     Zaber device memory.
