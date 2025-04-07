@@ -1087,7 +1087,7 @@ class VideoSystems:
             hardware_encoding=True,
             video_format=VideoFormats.MP4,
             video_codec=VideoCodecs.H265,
-            preset=GPUEncoderPresets.SLOW,
+            preset=GPUEncoderPresets.MEDIUM,
             input_pixel_format=InputPixelFormats.MONOCHROME,
             output_pixel_format=OutputPixelFormats.YUV444,
             quantization_parameter=12,
