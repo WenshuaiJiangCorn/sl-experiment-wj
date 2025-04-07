@@ -217,7 +217,7 @@ to the VRPC filesystem using the SMB3 protocol. In turn, this allows the library
 directories on all computers used in the data acquisition, preprocessing, and storage in the lab. Generally, this 
 library tries to maintain the same data hierarchy on all destinations, as discussed below.
 
-Currently, our pipeline uses a total of 4 computers when working with data. **VRPC** and **ScanImagePC** are used to 
+Currently, our pipeline uses a total of four computers when working with data. **VRPC** and **ScanImagePC** are used to 
 acquire and preprocess the data. After preprocessing, the data is moved to the **BioHPC server** and the 
 **Synology NAS** for long-term storage and preprocessing. All data movement is performed over 10-Gigabit local networks 
 within the lab and broader Cornell infrastructure.
@@ -263,17 +263,32 @@ to microseconds. Together with other runtime controls, this makes it impossible 
 and ensures all sessions can always be sorted chronologically.
 
 Since the same directory tree is reused for data processing, all data acquired by this library is stored under the 
-**raw_data** subdirectory, generated for each session. overall, an example path to the acquired data can therefore 
-look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`
+**raw_data** subdirectory, generated for each session. Overall, an example path to the acquired data can therefore 
+look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`.
 
 ### Raw Data contents
 After acquisition and preprocessing, the **raw_data** folder will contain the following files and subdirectories:
-1. 
+1. zaber_positions.yaml: Stores the snapshot of the HeadBar and LickPort motor positions taken at the beginning or the 
+   end of the runtime session.
+2. hardware_configuration.yaml: Stores the snapshot of some configuration parameters used by the hardware module 
+   interfaces during runtime.
+3. session_data.yaml: Stores the paths and other data-management-related information used during runtime to save and 
+   preprocess the acquired data.
+4. session_descriptor.yaml: Stores session-type-specific information, such as the training task parameters or 
+   experimenter notes.
+5. ax_checksum.txt: Stores an xxHash-128 checksum used to verify data integrity when it is transferred to the long-term 
+   storage destination.
+6. behavior_data_log: Stores compressed .npz log files. All non-video data acquired by the VRPC during runtime is stored
+   in these log files. This includes all messages sent or received by each microcontroller and the timestamps for the 
+   frames acquired by each camera.
+7. camera_frames: Stores the behavior videos recorded by each of the cameras.
+8. mesoscope_frames: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory will be
+   empty for training sessions, as they do not acquire Mesoscope data.
 
 ### BioHPC server and NAS
 
 The same directory hierarchy as described above is created on the BioHPC server and the Synology NAS used for long-term
-data storage.
+data storage. Following data transfer, these destinations will store the same files as described above.
 
 ### ScanImagePC
 
@@ -282,9 +297,9 @@ The ScanImagePC uses a modified directory structure. First, under its **root** d
 this library will automatically empty this directory, so it has to be used for all projects, animals, and sessions.
 
 Under the same **root** directory, the library also creates a **persistent_data** directory. In that directory, the 
-library follows the same hierarchy (**project** and **animal**) as other computers used in the data acquisition process.
-Like the VRPC **persistent_data** directory, it is used to keep the data that should not be removed from the 
-ScanImagePC even after all data acquired for a particular sessions is moved over for long-term storage.
+library follows the same hierarchy (**project** and **animal**) as the VRPC. Like the VRPC's **persistent_data** 
+directory, it is used to keep the data that should not be removed from the ScanImagePC even after all data acquired for 
+a particular session is moved over for long-term storage.
 
 --- 
 
@@ -306,17 +321,17 @@ Failure to do so may damage the equipment or harm the animal.
 This command takes in a string-value and returns a CRC-32 XFER checksum of the input string. This is used to generate a 
 numeric checksum for each Zaber Device by check-summing its label (name). This checksum should be stored under User 
 Setting 0. During runtime, it is used to ensure that each controller has been properly configured to work with this 
-library, by comparing the checksum loaded from User Setting 0 to the checksum generated using the device’s label.
+library by comparing the checksum loaded from User Setting 0 to the checksum generated using the device’s label.
 
 ### sl-devices
 This command is used during initial system configuration to discover the USB ports assigned to all Zaber devices. This 
-is used for generating te project_configuration.yaml files that, amongst other information, communicate the USB ports 
+is used for generating the project_configuration.yaml files that, amongst other information, communicate the USB ports 
 used by various Mesoscope-VR system components during runtime.
 
 ### sl-replace-root
-This command is used to replace the path to the VRPC folder where all projects are saved, which is stored in the 
-non-volatile user-specific memory used by this library. When one of the main runtime commands from this library is 
-used for the **first ever time**, the library asks the user to define a directory where to save all projects. All future
+This command is used to replace the path to the **root** directory on the VRPC (where all projects are saved), which is 
+stored in a user-specific default directory. When one of the main runtime commands from this library is used for the 
+**first ever time**, the library asks the user to define a directory where to save all projects. All future
 calls to this library will use the same path and assume the projects are stored in that directory. Since the path is 
 stored in a typically hidden service directory, this command simplifies finding and replacing the path if this need 
 ever arises.
@@ -363,39 +378,32 @@ initialization.
 ### sl-lick-train
 Runs a single lick-training session. All animals in the Sun lab undergo a two-stage training protocol before they start 
 participating in project-specific experiments. The first phase of the training protocol is lick training, where the 
-animals are trained to operate the lick-tube while being head-fixed. This training is carried out for 2 days and uses 
-the same runtime protocol, resolved by this command.
+animals are trained to operate the lick-tube while being head-fixed. This training is carried out for 2 days.
 
 ### sl-run-train
 Runs a single run-training session. The second phase of the Sun lab training protocol is run training, where the 
 animals run on the wheel treadmill while being head-fixed to get water rewards. This training is carried out for the 
-5 days following the lick-training and uses the same runtime protocol, resolved by this command.
+5 days following the lick-training.
 
 ### sl-experiment
 Runs a single experiment session. Each project has to define one or more experiment configurations that can be executed 
 via this command. Every experiment configuration may be associated with a unique Unity VR task, which has to be
-activated independently of running this command.
-
-***Critical!*** Study the [API documentation](https://sl-experiment-api.netlify.app/) of the ExperimentConfiguration and
-ExperimentState classes available from the [data_classes.py](/src/sl_experiment/data_classes.py) module. Each experiment
-called via this command requires a well-configured EXPERIMENT_NAME.yaml file inside the 'configuration' directory of the
-project. During project initialization, an example experiment configuration file is dumped in the 'configuration' 
-directory alongside the main **project_configuration.yaml** file to assist users in writing their own experiment 
-configurations.
+activated independently of running this command. See the [project directory notes](#project-directory) to learn about 
+experiment configuration files which are used by this command.
 
 ### sl-process
 This command can be called to preprocess the target training or experiment session data folder. Typically, this library
-calls the preprocessing pipeline as part of the runtime command, so there is no need to use this command. However, if 
-the runtime or preprocessing is unexpectedly interrupted, call this command to ensure the target session is preprocessed
-and transferred to the long-term storage destinations.
+calls the preprocessing pipeline as part of the runtime command, so there is no need to use this command separately. 
+However, if the runtime or preprocessing is unexpectedly interrupted, call this command to ensure the target session is 
+preprocessed and transferred to the long-term storage destinations.
 
 ### sl-purge
 To maximize data integrity, this library does not automatically delete redundant data from the ScanImagePC or the VRPC, 
 even if the data has been safely backed up to long-term storage destinations. This command discovers all redundant data
 marked for deletion by various Sun lab pipelines and deletes it from the ScanImagePC or the VRPC. 
 
-***Critical*** This command has to be called at least weekly to prevent running out of disk space on the ScanImagePC and
-VRPC.
+***Critical!*** This command has to be called at least weekly to prevent running out of disk space on the ScanImagePC 
+and VRPC.
 
 ---
 
@@ -406,6 +414,35 @@ detailed description of the methods and classes exposed by components of this li
 ___
 
 ## Recovering from Interruptions
+While it is not typical for the data acquisition pipeline to fail during runtime, it is not impossible. The library is
+designed to maximize data integrity at all runtime stages, so there is typically comparatively minor data loss if any 
+runtime is interrupted.
+
+### Data acquisition interruption
+
+***Critical!*** If you encounter an interruption during data acquisition (training or experiment runtime), it is 
+impossible to resume the interrupted session. Moreover, since this library acts independently of the ScanImage software
+managing the Mesoscope, you will need to manually shut down the other acquisition process. If VRPC is interrupted, 
+terminate Mesoscope data acquisition. If the Mesoscope is interrupted, use 'ESC+Q' to terminate the VRPC data 
+acquisition.
+
+If VRPC is interrupted during data acquisition, follow this instruction:
+1. Remove the animal from the Mesoscope-VR system.
+2. Use Zaber Launcher to manually move the HeadBarRoll axis to have a **positive** angle (> 0 degrees). This is 
+   critical! If this is not done, the motor will not be able to home during the next session and will instead collide 
+   with the movement guard, at best damaging the motor and, at worst, the mesoscope or the animal.
+3. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device (NOT motor!) and navigate to its User 
+   Data section. Then flip Setting 1 from 0 to 1. Without this, the library will refuse to operate the Zaber Motors.
+4. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
+   will preprocess and transfer all collected data to the long-term storage destinations. This way, you can preserve 
+   any data acquired before the interruption and prepare the system for running the next session.
+
+***Note!*** If the interruption occurs on the ScanImagePC (Mesoscope) and you use the 'ESC+Q' combination, there is 
+no need to do any of the steps above. Using ESC+Q executes a 'grateful' VRPC interruption process which automatically
+executes the correct shutdown sequence and data preprocessing.
+
+### Data preprocessing interruption
+To recover from 
 
 --
 
