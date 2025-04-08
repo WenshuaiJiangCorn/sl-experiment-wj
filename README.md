@@ -17,10 +17,7 @@ ___
 This library functions as the central hub for collecting and preprocessing the data shared by all individual Sun lab 
 projects. To do so, it exposes the API that allows interfacing with the hardware making up the overall Mesoscope-VR 
 (Virtual Reality) system used in the lab and working with the data collected via this hardware. Primarily, this involves
-specializing the general-purpose libraries, such as 
-[ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system), 
-[ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller),  
-and [ataraxis-data-structures](https://github.com/Sun-Lab-NBB/ataraxis-data-structures) 
+specializing varius general-purpose libraries, released as part of the 'Ataraxis' science-automation project
 to work within the specific hardware implementations used in the lab.
 
 This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab,
@@ -80,19 +77,19 @@ by this library.
 
 ### Hardware Dependencies
 
-**Note!** These dependencies only apply to the 'VRPC,' the main PC that will be running the data acquisition and 
-preprocessing pipelines.
+**Note!** These dependencies only apply to the 'VRPC,' the main PC that runs the data acquisition and 
+preprocessing pipelines. Hardware dependencies for the ScanImagePC are determined by ThorLabs.
 
 - [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
   data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with RTX 4090.
-- A CPU with at least 12, preferably 16 physical cores. This library has been tested with 
+- A CPU with at least 12, preferably 16, physical cores. This library has been tested with 
   [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
   It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
   for predictable performance of all library components.
 - A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
-  required for the high-quality machine vision camera used to record videos of the animal’s face. We also used 10-G 
+  required for the high-quality machine vision camera used to record videos of the animal’s face. We also use 10-Gigabit
   lines for transferring the data between the PCs used in the data acquisition process and destinations used for 
-  long-term data storage.
+  long-term data storage (see [data management section](#data-structure-and-management)).
 ___
 
 ## Installation
@@ -124,7 +121,7 @@ in the [main Mesoscope-VR assembly section](#mesoscope-vr-assembly).
 ### Zaber Motors
 All brain activity recordings with the mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
 the Virtual Reality treadmill (running wheel) and promote task performance, we use two groups of motors controlled 
-though Zaber motor controllers. The first group, the **HeadBar**, is used to position of the animal’s head in 
+though Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
 Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this allows for a wide range of 
 motions necessary to promote good animal running behavior and brain activity data collection. The second group of 
 motors, the **LickPort**, controls the position of the water delivery port (and sensor) in X, Y, and Z axes. This
@@ -137,10 +134,10 @@ instructions, is available
 **Warning!** Zaber motors have to be configured correctly to work with this library. To (re)configure the motors to work
 with the library, apply the setting snapshots from the link above via the 
 [Zaber Launcher](https://software.zaber.com/zaber-launcher/download) software. Make sure you read the instructions in 
-the 'Applying Zaber Configuration' document.
+the 'Applying Zaber Configuration' document for the correct application procedure.
 
-**Although this is highly discouraged, you can also edit the motor settings manually.** To manually configure the motors
-to work with this library, you need to overwrite the non-volatile 'user settings' of each motor device (controller) with
+**Although this is highly discouraged, you can also edit the motor settings manually**. To configure the motors
+to work with this library, you need to overwrite the non-volatile User Data of each motor device (controller) with
 the data expected by this library. See the [API documentation](https://sl-experiment-api.netlify.app/) for the 
 **ZaberSettings** class to learn more about the settings used by this library. See the source code from the 
 [zaber_bindings.py](/src/sl_experiment/zaber_bindings.py) module to learn how these settings are used during runtime.
@@ -204,57 +201,66 @@ access to the **surgery log** file and **Editor** access to the **water restrict
 Otherwise, the parsing algorithm will not behave as expected, leading to runtime failure.
 
 ### Mesoscope-VR Assembly:
-This section is currently a placeholder. Since we are actively working on the final Mesoscope-VR design, it will be 
-populated once we have a final design implementation.
+***This section is currently a placeholder. Since we are actively working on the final Mesoscope-VR design, it will be 
+populated once we have a final design implementation.***
+
 ___
 
 ## Data Structure and Management
 
 The library defines a fixed structure for storing all acquired data which uses a 4-level directory tree hierarchy: 
-**root**, **project**, **animal** and **session**.
-
-***Critical!*** Although this library primarily operates the VRPC, it expects all other data directories to be mounted 
-to the VRPC filesystem using the SMB3 protocol. In turn, this allows the library to maintain the necessary data 
-directories on all computers used in the data acquisition, preprocessing, and storage in the lab. Generally, this 
-library tries to maintain the same data hierarchy on all destinations, as discussed below.
+**root**, **project**, **animal**, and **session**.
 
 Currently, our pipeline uses a total of four computers when working with data. **VRPC** and **ScanImagePC** are used to 
 acquire and preprocess the data. After preprocessing, the data is moved to the **BioHPC server** and the 
 **Synology NAS** for long-term storage and preprocessing. All data movement is performed over 10-Gigabit local networks 
 within the lab and broader Cornell infrastructure.
 
+***Critical!*** Although this library primarily operates the VRPC, it expects the root data directories for all other 
+PCs used for data acquisition or storage in the lab to be **mounted to the VRPC filesystem using the SMB3 protocol**. 
+In turn, this allows the library to maintain the same data hierarchies across all storage machines.
+
+Generally, the library tries to maintain at least two copies of data for long-term storage: one on the NAS and the other
+on the BioHPC server. Moreover, until `sl-purge` (see below) command is used to clear the VRPC storage, an additional 
+copy of the acquired data is also stored on the VRPC for each recorded session. While this design achieves high data 
+integrity (and redundancy), we **highly encourage** all lab members to manually back up critical data to external 
+SSD / HDD drives.
+
 ### Root Directory
 When a training, experiment, or maintenance runtime command from this library is called for the first time, the library 
-will ask the user to provide the path to the root project directory on the VRPC. In the future, the data for all 
-projects will be stored in that directory. This directory is referred to as the **local root directory**.
+asks the user to provide the path to the root project directory on the VRPC. The data for all projects after this point 
+is stored in that directory. This directory is referred to as the local **root** directory. Moreover, each
+project can be configured with paths to the root directories on all other computers used for data acquisition or 
+storage (see below). However, it is expected that all projects in the lab use the same root directories for all 
+computers.
 
 ### Project directory
-When a new --project (-p) argument value is provided to any runtime command, the library will generate a new **project**
-directory under the static **root** directory. The project directory will use the project name provided via the command
-argument as its name. As part of this process, a **configuration** subdirectory will also be created under the 
+When a new --project (-p) argument value is provided to any runtime command, the library generates a new **project**
+directory under the static **root** directory. The project directory uses the project name provided via the command
+argument as its name. As part of this process, a **configuration** subdirectory is also created under the 
 **project** directory.
 
-***Critical!*** Inside the **configuration** subdirectory, the library will automatically create a 
+***Critical!*** Inside the **configuration** subdirectory, the library automatically creates a 
 **project_configuration.yaml** file. Open that file with a text editor and edit the fields in the file to specify the 
 project configuration. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
 **ProjectConfiguration** class to learn more about the purpose of each configuration file field.
 
-Together with the **project_configuration.yaml**, the library will also create an example **default_experiment.yaml**
+Together with the **project_configuration.yaml**, the library also creates an example **default_experiment.yaml**
 file. Each experiment that needs to be carried out as part of this project needs to have a dedicated .yaml file, named
-after the experiment. For example, to run the 'default_experiment,' the library will use the configurations stored in 
+after the experiment. For example, to run the 'default_experiment,' the library uses the configurations stored in 
 the 'default_experiment.yaml' file. You can use the default_experiment.yaml as an example for writing additional 
 experiment configurations. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
 **ExperimentConfiguration** and **ExperimentState** classes to learn more about the purpose of each field inside the 
 experiment configuration .yaml file.
 
 ### Animal directory
-When a new --animal (-a) argument value is provided to any runtime command, the library will generate a new **animal**
-directory under the **root** and **project** directory combination. The directory will use the ID of the animal, 
+When a new --animal (-a) argument value is provided to any runtime command, the library generates a new **animal**
+directory under the **root** and **project** directory combination. The directory uses the ID of the animal, 
 provided via the command argument as its name.
 
-Under each animal directory, two additional directories will be created. First, the **persistent_data** directory, which
+Under each animal directory, two additional directories are created. First, the **persistent_data** directory, which
 is used to store the information that has to stay on the VRPC when the acquired data is transferred from the VRPC to 
-other destinations. Seconds, the **metadata** directory, which is used to store information that does not change between
+other destinations. Second, the **metadata** directory, which is used to store information that does not change between
 sessions, such as the information about the surgical procedures performed on the animal.
 
 ### Session directory
@@ -265,42 +271,46 @@ and ensures all sessions can always be sorted chronologically.
 
 Since the same directory tree is reused for data processing, all data acquired by this library is stored under the 
 **raw_data** subdirectory, generated for each session. Overall, an example path to the acquired data can therefore 
-look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`.
+look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`. Our data processing pipelines 
+generate new files and subdirectories under the **processed_data** directory using the same **root**, **project**, 
+**animal**, and **session** combination, e.g.`server/sun_data/TestMice/666/2025-11-11-05-03-234123/processed_data`.
 
 ### Raw Data contents
 After acquisition and preprocessing, the **raw_data** folder will contain the following files and subdirectories:
-1. zaber_positions.yaml: Stores the snapshot of the HeadBar and LickPort motor positions taken at the beginning or the 
-   end of the runtime session.
-2. hardware_configuration.yaml: Stores the snapshot of some configuration parameters used by the hardware module 
+1. **zaber_positions.yaml**: Stores the snapshot of the HeadBar and LickPort motor positions taken at the end of the 
+   runtime session.
+2. **hardware_configuration.yaml**: Stores the snapshot of some configuration parameters used by the hardware module 
    interfaces during runtime.
-3. session_data.yaml: Stores the paths and other data-management-related information used during runtime to save and 
+3. **session_data.yaml**: Stores the paths and other data-management-related information used during runtime to save and
    preprocess the acquired data.
-4. session_descriptor.yaml: Stores session-type-specific information, such as the training task parameters or 
-   experimenter notes.
-5. ax_checksum.txt: Stores an xxHash-128 checksum used to verify data integrity when it is transferred to the long-term 
-   storage destination.
-6. behavior_data_log: Stores compressed .npz log files. All non-video data acquired by the VRPC during runtime is stored
-   in these log files. This includes all messages sent or received by each microcontroller and the timestamps for the 
-   frames acquired by each camera.
-7. camera_frames: Stores the behavior videos recorded by each of the cameras.
-8. mesoscope_frames: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory will be
-   empty for training sessions, as they do not acquire Mesoscope data.
-
-### BioHPC server and NAS
-
-The same directory hierarchy as described above is created on the BioHPC server and the Synology NAS used for long-term
-data storage. Following data transfer, these destinations will store the same files as described above.
+4. **session_descriptor.yaml**: Stores session-type-specific information, such as the training task parameters or 
+   experimenter notes. For experiment runtimes, this file is co-opted to store the Mesoscope objective positions.
+5. **ax_checksum.txt**: Stores an xxHash-128 checksum used to verify data integrity when it is transferred to the 
+   long-term storage destination.
+6. **behavior_data_log**: Stores compressed .npz log files. All non-video data acquired by the VRPC during runtime is 
+   stored in these log files. This includes all messages sent or received by each microcontroller and the timestamps 
+   for the frames acquired by each camera.
+7. **camera_frames** Stores the behavior videos recorded by each of the cameras.
+8. **mesoscope_frames**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory 
+   will be empty for training sessions, as they do not acquire Mesoscope data.
 
 ### ScanImagePC
 
 The ScanImagePC uses a modified directory structure. First, under its **root** directory, there has to be a 
-**mesoscope_frames** directory, where ***ALL*** ScanImage data has to be saved for every session. During preprocessing, 
-this library will automatically empty this directory, so it has to be used for all projects, animals, and sessions.
+**mesoscope_frames** directory, where ***All*** ScanImage data is saved during each session runtime. During 
+preprocessing, the library automatically empties this directory, allowing the same directory to be (re)used by all 
+experiment sessions.
 
 Under the same **root** directory, the library also creates a **persistent_data** directory. That directory follows the 
 same hierarchy (**project** and **animal**) as the VRPC. Like the VRPC’s **persistent_data** directory, it is used to 
 keep the data that should not be removed from the ScanImagePC even after all data acquired for a particular session is 
 moved over for long-term storage.
+
+**Note!** For each runtime that uses the mesoscope, the library requires the user to generate a screenshot of the 
+cranial window and the dot-alignment window. The easiest way to make this work is to reconfigure the default Windows 
+screenshot directory (ScanImagePC uses Windows OS) to be the root ScanImagePC data directory. This way, hitting 
+'Windows+PrtSc' will automatically generate the .png screenshot under the ScanImagePc root directory, which is the 
+expected location used by this library.
 
 --- 
 
@@ -320,27 +330,27 @@ Failure to do so may damage the equipment or harm the animal.
 
 ### sl-crc
 This command takes in a string-value and returns a CRC-32 XFER checksum of the input string. This is used to generate a 
-numeric checksum for each Zaber Device by check-summing its label (name). This checksum should be stored under User 
+numeric checksum for each Zaber Device by check-summing its label (name). This checksum should be stored under user 
 Setting 0. During runtime, it is used to ensure that each controller has been properly configured to work with this 
 library by comparing the checksum loaded from User Setting 0 to the checksum generated using the device’s label.
 
 ### sl-devices
 This command is used during initial system configuration to discover the USB ports assigned to all Zaber devices. This 
-is used for generating the project_configuration.yaml files that, amongst other information, communicate the USB ports 
+is used when updating the project_configuration.yaml files that, amongst other information, communicate the USB ports 
 used by various Mesoscope-VR system components during runtime.
 
 ### sl-replace-root
 This command is used to replace the path to the **root** directory on the VRPC (where all projects are saved), which is 
 stored in a user-specific default directory. When one of the main runtime commands from this library is used for the 
 **first ever time**, the library asks the user to define a directory where to save all projects. All future
-calls to this library will use the same path and assume the projects are stored in that directory. Since the path is 
+calls to this library use the same path and assume the projects are stored in that directory. Since the path is 
 stored in a typically hidden service directory, this command simplifies finding and replacing the path if this need 
 ever arises.
 
 ### sl-maintain-vr
 This command is typically used twice during each experiment or training day. First, it is used at the beginning of the 
-day to prepare the Mesoscope-VR system for runtime by filling the water delivery system with water and, if necessary, 
-replacing the running-wheel surface wrap. Second, it is used at the end of each day to empty the water delivery system.
+day to prepare the Mesoscope-VR system for runtime by filling the water delivery system and, if necessary, replacing 
+the running-wheel surface wrap. Second, it is used at the end of each day to empty the water delivery system.
 
 This runtime is also co-opted to check the cranial windows of newly implanted animals to determine whether they should
 be included in a project. To do so, the command allows changing the position of the HeadBar and LickPort manipulators 
@@ -357,8 +367,9 @@ initialization.
 2.  `close`. Closes the water delivery valve.
 3.  `close_10`. Closes the water delivery valve after a 10-second delay.
 4.  `reference`. Triggers 200 valve pulses with each pulse calibrated to deliver 5 uL of water. This command is used to
-    check whether the valve calibration data matches the actual state of the valve at the beginning of each training or 
-    experiment day. The reference runtime should overall dispense ~ 1 ml of water.
+    check whether the valve calibration data stored in the project_configuration.yaml of the project specified when 
+    calling the runtime command is accurate. This is done at the beginning of each training or experiment day. The 
+    reference runtime should overall dispense ~ 1 ml of water.
 5.  `calibrate_15`. Runs 200 valve pulses, keeping the valve open for 15-milliseconds for each pulse. This is used to 
     generate valve calibration data.
 6.  `calibarte_30`. Same as above, but uses 30-millisecond pulses.
@@ -391,6 +402,14 @@ Runs a single experiment session. Each project has to define one or more experim
 via this command. Every experiment configuration may be associated with a unique Unity VR task, which has to be
 activated independently of running this command. See the [project directory notes](#project-directory) to learn about 
 experiment configuration files which are used by this command.
+
+**Critical!** Since this library does not have a way of starting Unity game engine or ScanImage software, both have to 
+be initialized **manually** before running the sl-experiment command. See the main 
+[Unity repository](https://github.com/Sun-Lab-NBB/GIMBL-tasks) for details on starting experiment task runtimes. To 
+prepare the ScanImage software for runtime, enable 'External Triggers' and configure the system to take **start** and 
+**stop** triggers from the ports wired to the Actor microcontroller as described in our 
+[microcontroller repository](https://github.com/Sun-Lab-NBB/sl-micro-controllers). Then, hit 'Loop' to 'arm' the system
+to start frame acquisition when it receives the 'start' TTL trigger from this library.
 
 ### sl-process
 This command can be called to preprocess the target training or experiment session data folder. Typically, this library
