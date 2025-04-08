@@ -47,6 +47,7 @@ ___
 - [System Assembly](#system-assembly)
 - [Usage](#usage)
 - [API Documentation](#api-documentation)
+- [Recovering from Interruptions](#recovering-from-interruptions)
 - [Versioning](#versioning)
 - [Authors](#authors)
 - [License](#license)
@@ -296,10 +297,10 @@ The ScanImagePC uses a modified directory structure. First, under its **root** d
 **mesoscope_frames** directory, where ***ALL*** ScanImage data has to be saved for every session. During preprocessing, 
 this library will automatically empty this directory, so it has to be used for all projects, animals, and sessions.
 
-Under the same **root** directory, the library also creates a **persistent_data** directory. In that directory, the 
-library follows the same hierarchy (**project** and **animal**) as the VRPC. Like the VRPC's **persistent_data** 
-directory, it is used to keep the data that should not be removed from the ScanImagePC even after all data acquired for 
-a particular session is moved over for long-term storage.
+Under the same **root** directory, the library also creates a **persistent_data** directory. That directory follows the 
+same hierarchy (**project** and **animal**) as the VRPC. Like the VRPC’s **persistent_data** directory, it is used to 
+keep the data that should not be removed from the ScanImagePC even after all data acquired for a particular session is 
+moved over for long-term storage.
 
 --- 
 
@@ -414,37 +415,50 @@ detailed description of the methods and classes exposed by components of this li
 ___
 
 ## Recovering from Interruptions
-While it is not typical for the data acquisition pipeline to fail during runtime, it is not impossible. The library is
-designed to maximize data integrity at all runtime stages, so there is typically comparatively minor data loss if any 
-runtime is interrupted.
+While it is not typical for the data acquisition or preprocessing pipelines to fail during runtime, it is not 
+impossible. The library can recover or gracefully terminate the runtime for most code-generated errors, so this is 
+usually not a concern. However, if a major interruption (i.e., power outage) occurs or the ScanImagePC encounters an 
+interruption, manual intervention is typically required before the VRPC can run new data acquisition or preprocessing 
+runtimes.
 
 ### Data acquisition interruption
 
 ***Critical!*** If you encounter an interruption during data acquisition (training or experiment runtime), it is 
 impossible to resume the interrupted session. Moreover, since this library acts independently of the ScanImage software
 managing the Mesoscope, you will need to manually shut down the other acquisition process. If VRPC is interrupted, 
-terminate Mesoscope data acquisition. If the Mesoscope is interrupted, use 'ESC+Q' to terminate the VRPC data 
-acquisition.
+terminate Mesoscope data acquisition via the ScanImage software. If the Mesoscope is interrupted, use 'ESC+Q' to 
+terminate the VRPC data acquisition.
 
 If VRPC is interrupted during data acquisition, follow this instruction:
-1. Remove the animal from the Mesoscope-VR system.
-2. Use Zaber Launcher to manually move the HeadBarRoll axis to have a **positive** angle (> 0 degrees). This is 
+1. If the session involved mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
+   files (frame stacks, motion estimator data, cranial window screenshot) have been generated adn saved to the 
+   **mesoscope_frames** folder.
+2. Remove the animal from the Mesoscope-VR system.
+3. Use Zaber Launcher to **manually move the HeadBarRoll axis to have a positive angle** (> 0 degrees). This is 
    critical! If this is not done, the motor will not be able to home during the next session and will instead collide 
    with the movement guard, at best damaging the motor and, at worst, the mesoscope or the animal.
-3. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device (NOT motor!) and navigate to its User 
-   Data section. Then flip Setting 1 from 0 to 1. Without this, the library will refuse to operate the Zaber Motors.
-4. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
+4. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device tab (NOT motor!) and navigate to its 
+   User Data section. Then **flip Setting 1 from 0 to 1**. Without this, the library will refuse to operate the Zaber 
+   Motors.
+5. If the session involved mesoscope imaging, **rename the mesoscope_frames folder to prepend the session name, using an
+   underscore to separate the folder name from the session name**. For example, from mesoscope_frames → 
+   2025-11-11-05-03-234123_mesoscope_frames. Critical! if this is not done, the library may **delete** any leftover 
+   mesoscope files during the next runtime and will not be able to properly preprocess the frames for the interrupted
+   session during the next step.
+6. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
    will preprocess and transfer all collected data to the long-term storage destinations. This way, you can preserve 
    any data acquired before the interruption and prepare the system for running the next session.
 
 ***Note!*** If the interruption occurs on the ScanImagePC (Mesoscope) and you use the 'ESC+Q' combination, there is 
-no need to do any of the steps above. Using ESC+Q executes a 'grateful' VRPC interruption process which automatically
+no need to do any of the steps above. Using ESC+Q executes a 'graceful' VRPC interruption process which automatically
 executes the correct shutdown sequence and data preprocessing.
 
 ### Data preprocessing interruption
-To recover from 
+To recover from an error encountered during preprocessing, call the `sl-process` command and provide it with the path 
+to the session directory of the interrupted session. The preprocessing pipeline should automatically resume an 
+interrupted runtime.
 
---
+---
 
 ## Versioning
 
