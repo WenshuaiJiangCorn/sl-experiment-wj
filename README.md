@@ -138,7 +138,7 @@ the 'Applying Zaber Configuration' document for the correct application procedur
 
 **Although this is highly discouraged, you can also edit the motor settings manually**. To configure the motors
 to work with this library, you need to overwrite the non-volatile User Data of each motor device (controller) with
-the data expected by this library. See the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+the data expected by this library. See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
 **ZaberSettings** class to learn more about the settings used by this library. See the source code from the 
 [zaber_bindings.py](/src/sl_experiment/zaber_bindings.py) module to learn how these settings are used during runtime.
 
@@ -242,14 +242,14 @@ argument as its name. As part of this process, a **configuration** subdirectory 
 
 ***Critical!*** Inside the **configuration** subdirectory, the library automatically creates a 
 **project_configuration.yaml** file. Open that file with a text editor and edit the fields in the file to specify the 
-project configuration. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+project configuration. Review the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
 **ProjectConfiguration** class to learn more about the purpose of each configuration file field.
 
 Together with the **project_configuration.yaml**, the library also creates an example **default_experiment.yaml**
 file. Each experiment that needs to be carried out as part of this project needs to have a dedicated .yaml file, named
 after the experiment. For example, to run the 'default_experiment,' the library uses the configurations stored in 
 the 'default_experiment.yaml' file. You can use the default_experiment.yaml as an example for writing additional 
-experiment configurations. Review the [API documentation](https://sl-experiment-api.netlify.app/) for the 
+experiment configurations. Review the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
 **ExperimentConfiguration** and **ExperimentState** classes to learn more about the purpose of each field inside the 
 experiment configuration .yaml file.
 
@@ -429,7 +429,7 @@ and VRPC.
 
 ## API Documentation
 
-See the [API documentation](https://sl-experiment-api.netlify.app/) for the
+See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the
 detailed description of the methods and classes exposed by components of this library.
 ___
 
