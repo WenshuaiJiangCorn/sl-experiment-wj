@@ -11,14 +11,12 @@ from datetime import (
     datetime,
     timezone,
 )
-from dataclasses import dataclass
 
 from ataraxis_base_utilities import console
-from ataraxis_data_structures import YamlConfig
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
-from .data_classes import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
+from sl_shared_assets import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
 
 # Stores schemas for supported date formats.
 _supported_date_formats: set[str] = {"%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"}

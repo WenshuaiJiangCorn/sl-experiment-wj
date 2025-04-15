@@ -8,23 +8,23 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "1.0.0"
+version = "2.0.0"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
 authors = [
-    { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
-    { name = "Kushaan Gupta", email = "kg574@cornell.edu" },
-    { name = "Natalie Yeung", email = "nyy4@cornell.edu" },
-    { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
+    { name = "Ivan Kondratyev" },
+    { name = "Kushaan Gupta" },
+    { name = "Natalie Yeung" },
+    { name = "Katlynn Ryu" },
     { name = "Jasmine Si" }
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["ataraxis", "MQTT", "Serial", "communication", "interface", "unity", "microcontroller"]
+keywords = ["sunlab", "data", "acquisition", "ataraxis", "interface"]
 
 classifiers = [
     # Development status
@@ -67,6 +67,7 @@ dependencies = [
     "pyarrow>=19,<20",
     "pynput>=1,<2",
     "appdirs>=1,<2",
+    "sl-shared-assets==1.0.0rc3",
 ]
 
 [project.urls]
@@ -174,7 +175,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/sl_experiment", "examples"]
+packages = ["src/sl_experiment"]
 
 # Ruff Configuration.
 [tool.ruff]
