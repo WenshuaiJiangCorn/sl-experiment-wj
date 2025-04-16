@@ -92,6 +92,9 @@ class SurgerySheet:
         This class is purpose-built to work with the specific surgery log format used in the Sun lab. If the target
         sheet or project tab layout does not conform to expectations, this class will likely not behave as intended.
 
+        Since version 2.0.0 this class is also used to write the Surgery Quality column value as the result of
+        running the "Window checking" session.
+
     Args:
         project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
             target sheet stores all Sun Lab projects as individual tabs.
@@ -129,6 +132,21 @@ class SurgerySheet:
         Returns:
             A fully configured SurgeryData instance that stores the extracted data. Use the 'to_yaml' method of the
             returned instance to save the data to disk as a .yaml file.
+        """
+    def update_surgery_quality(self, animal_id: int, quality: int) -> None:
+        """Updates the surgery quality value for the specified animal.
+
+        This method is used to write an integer value to the \'Surgery Quality\' column for the specified animal.
+        The value represents the quality assessment of the surgical intervention performed on the animal, typically
+        made after the first pre-training imaging session ("Window checking" session).
+
+        Args:
+            animal_id: The numeric ID of the animal whose surgery quality is being updated.
+            quality: The integer value representing the surgery quality to be written.
+
+        Raises:
+            ValueError: If the animal ID is not found in the sheet, or if the \'Surgery Quality\'
+                column doesn\'t exist.
         """
     @property
     def animals(self) -> tuple[str, ...]:

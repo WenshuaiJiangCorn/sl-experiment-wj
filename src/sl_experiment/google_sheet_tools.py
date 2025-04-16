@@ -197,6 +197,9 @@ class SurgerySheet:
         This class is purpose-built to work with the specific surgery log format used in the Sun lab. If the target
         sheet or project tab layout does not conform to expectations, this class will likely not behave as intended.
 
+        Since version 2.0.0 this class is also used to write the Surgery Quality column value as the result of
+        running the "Window checking" session.
+
     Args:
         project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
             target sheet stores all Sun Lab projects as individual tabs.
@@ -359,6 +362,7 @@ class SurgerySheet:
             protocol=animal_data["protocol"],
             surgery_notes=animal_data["surgery notes"],
             post_op_notes=animal_data["post-op notes"],
+            surgery_quality=animal_data["surgery quality"],
         )
 
         # Drug Data. Since early surgery log versions did not use drug / injection / implant codes, code parsing has
@@ -461,6 +465,93 @@ class SurgerySheet:
             subject=subject_data, procedure=procedure_data, drugs=drug_data, implants=implants, injections=injections
         )
         return surgery_data
+
+    def update_surgery_quality(self, animal_id: int, quality: int) -> None:
+        """Updates the surgery quality value for the specified animal.
+
+        This method is used to write an integer value to the 'Surgery Quality' column for the specified animal.
+        The value represents the quality assessment of the surgical intervention performed on the animal, typically
+        made after the first pre-training imaging session ("Window checking" session).
+
+        Args:
+            animal_id: The numeric ID of the animal whose surgery quality is being updated.
+            quality: The integer value representing the surgery quality to be written.
+
+        Raises:
+            ValueError: If the animal ID is not found in the sheet, or if the 'Surgery Quality'
+                column doesn't exist.
+        """
+        # Converts input ID to the same format as stored IDs for comparison
+        formatted_id = str(animal_id).zfill(5)
+
+        # Checks if the animal ID exists in the tuple of animal IDs
+        if formatted_id not in self._animals:
+            message = (
+                f"Unable to update surgery quality for animal {animal_id} in project {self._project_name}. "
+                f"The specified animal ID is not contained in the 'ID' column of the parsed Google Sheet."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Find the column for "surgery quality"
+        quality_column = self._get_column_id("surgery quality")
+        if quality_column is None:
+            message = (
+                f"Unable to update surgery quality for animal {animal_id} in project {self._project_name}. "
+                f"The 'Surgery Quality' column does not exist in the Google Sheet."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Finds the index of the target animal in the ID value tuple
+        animal_index = self._animals.index(formatted_id)
+        row_number = animal_index + 2  # +2 to account for header row and 0-indexing
+
+        # Writes the quality value to the appropriate cell
+        cell_range = f"{quality_column}{row_number}"
+        body = {"values": [[quality]]}
+        self._service.spreadsheets().values().update(
+            spreadsheetId=self._sheet_id,
+            range=f"'{self._project_name}'!{cell_range}",
+            valueInputOption="USER_ENTERED",
+            body=body,  # type: ignore
+        ).execute()
+
+        # Transforms the column letter and the row index to the format necessary to apply formatting to the newly
+        # written value.
+        col_index = 0
+        for char in quality_column.upper():  # type: ignore
+            col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+        col_index -= 1  # Convert to 0-based index
+        row_index_zero_based = row_number - 1
+
+        # Gets the sheet ID for the project tab
+        sheet_metadata = self._service.spreadsheets().get(spreadsheetId=self._sheet_id).execute()
+        sheet_id = None
+        for sheet in sheet_metadata.get("sheets", []):
+            if sheet["properties"]["title"] == self._project_name:
+                sheet_id = sheet["properties"]["sheetId"]
+                break
+
+        if sheet_id is not None:
+            # Applies center alignment formatting to the cell
+            requests = [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_index_zero_based,
+                            "endRowIndex": row_index_zero_based + 1,
+                            "startColumnIndex": col_index,
+                            "endColumnIndex": col_index + 1,
+                        },
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+                        "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                    }
+                }
+            ]
+            self._service.spreadsheets().batchUpdate(
+                spreadsheetId=self._sheet_id,
+                body={"requests": requests},  # type: ignore
+            ).execute()
 
     @property
     def animals(self) -> tuple[str, ...]:

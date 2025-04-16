@@ -763,6 +763,7 @@ def _preprocess_mesoscope_directory(
         # Submits all tasks
         future_to_file = set()
         for file, frame in zip(tiff_files, frame_numbers):
+            # noinspection PyTypeChecker
             future_to_file.add(executor.submit(process_func, file, frame))
 
         if not batch:
@@ -827,7 +828,7 @@ def _preprocess_log_directory(
     # Resolves the path to the temporary log directory generated during runtime
     log_directory = Path(session_data.raw_data.raw_data_path).joinpath("behavior_data_log")
 
-    # Aborts early if the log directory does not exist at all, for example if working with Window checking sessions
+    # Aborts early if the log directory does not exist at all, for example, if working with Window checking sessions
     if not log_directory.exists():
         return
 
@@ -960,7 +961,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the data needed to update the wr log
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    skip: bool = False
+    quality: str | int = ""
     if session_data.session_type == "Lick training":
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
     elif session_data.session_type == "Run training":
@@ -971,9 +972,8 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
         # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
         # surgery, based on the window checking outcome
-        skip = True
-        quality = ""
-        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:
+        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:  # type: ignore
+            # Forces the user to provide a quality rating between 0 and 2 inclusive.
             quality = input("Enter the surgery quality level between 0 and 2 inclusive: ")
     else:
         message = (
@@ -987,34 +987,43 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         # This should not be reachable, it is here to appease mypy.
         raise ValueError(message)  # pragma: no cover
 
-    # Calculates the total volume of water, in ml, the animal received during and after the session
-    training_water = round(descriptor.dispensed_water_volume_ml, ndigits=3)
-    experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
-    total_water = training_water + experimenter_water
+    # Only carries out water restriction log processing if the code above did not resolve the quality level
+    if quality == "":
+        # Calculates the total volume of water, in ml, the animal received during and after the session
+        # noinspection PyUnboundLocalVariable
+        training_water = round(descriptor.dispensed_water_volume_ml, ndigits=3)
+        experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
+        total_water = training_water + experimenter_water
 
-    # Connects to the WR sheet and generates the new water restriction log entry
-    wr_sheet = WaterSheetData(
-        animal_id=animal_id,
-        credentials_path=Path(project_configuration.google_credentials_path),
-        sheet_id=project_configuration.water_log_sheet_id,
-    )
+        # Connects to the WR sheet and generates the new water restriction log entry
+        wr_sheet = WaterSheetData(
+            animal_id=animal_id,
+            credentials_path=Path(project_configuration.google_credentials_path),
+            sheet_id=project_configuration.water_log_sheet_id,
+        )
 
-    wr_sheet.update_water_log(
-        mouse_weight=descriptor.mouse_weight_g,
-        water_ml=total_water,
-        experimenter_id=descriptor.experimenter,
-        session_name=session_data.session_type,
-    )
+        wr_sheet.update_water_log(
+            mouse_weight=descriptor.mouse_weight_g,
+            water_ml=total_water,
+            experimenter_id=descriptor.experimenter,
+            session_name=session_data.session_type,
+        )
 
-    message = f"Water restriction log entry: written."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+        message = f"Water restriction log entry: written."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Loads and parses the data from the surgery log Google Sheet file
+    # Loads the surgery log Google Sheet file
     sl_sheet = SurgerySheet(
         project_name=session_data.project_name,
         credentials_path=Path(project_configuration.google_credentials_path),
         sheet_id=project_configuration.surgery_sheet_id,
     )
+
+    # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
+    if quality != "":
+        sl_sheet.update_surgery_quality(animal_id=animal_id, quality=int(quality))
+
+    # Extracts the surgery data from the Google sheet file
     data: SurgeryData = sl_sheet.extract_animal_data(animal_id=animal_id)
 
     # Saves the data as a .yaml file to the session directory

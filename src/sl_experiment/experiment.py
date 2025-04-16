@@ -1763,6 +1763,10 @@ def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickp
     # Dumps the updated data into the persistent_data folder of the animal
     mesoscope_positions.to_yaml(file_path=Path(session_data.persistent_data.mesoscope_positions_path))
 
+    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline pulls the
+    # surgery data into the raw_data folder and copies the session folder to the NAS and BioHPC server.
+    preprocess_session_data(session_data=session_data)
+
 
 def vr_maintenance_logic(project_name: str) -> None:
     """Encapsulates the logic used to maintain the solenoid valve and the running wheel.
