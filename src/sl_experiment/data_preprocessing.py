@@ -696,7 +696,7 @@ def _preprocess_mesoscope_directory(
             number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
-    image_directory = Path(session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames"))  # type: ignore
+    image_directory = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")  # type: ignore
 
     # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
     # acquired at all. Aborts processing early.
@@ -863,7 +863,12 @@ def _preprocess_log_directory(
         )
         console.error(message, error=RuntimeError)
 
-    log_directory.rename(target=session_data.raw_data.behavior_data_path)
+    # Renames the processed folder to behavior_data. Since behavior_data might already exist dues to SessionData
+    # directory generation, removes any existing behavior_data directories before renaming the log folder.
+    behavior_data_path = Path(session_data.raw_data.behavior_data_path)
+    if behavior_data_path.exists():
+        sh.rmtree(behavior_data_path)
+    log_directory.rename(target=Path(session_data.raw_data.behavior_data_path))
 
 
 def _push_data(
@@ -952,7 +957,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
     # retrieve the Google sheet ID data.
     project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
-        session_data.raw_data.project_configuration_path,  # type: ignore
+        Path(session_data.raw_data.project_configuration_path),  # type: ignore
     )
 
     # Resolves the animal ID (name)
@@ -962,13 +967,13 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
     quality: str | int = ""
-    if session_data.session_type == "Lick training":
+    if session_data.session_type.lower() == "lick training":
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type == "Run training":
+    elif session_data.session_type.lower() == "run training":
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type == "Experiment":
+    elif session_data.session_type.lower() == "experiment":
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type == "Window checking":
+    elif session_data.session_type.lower() == "window checking":
         # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
         # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
         # surgery, based on the window checking outcome
@@ -1106,9 +1111,6 @@ def preprocess_session_data(session_data: SessionData) -> None:
         parallel=True,
         num_threads=15,
     )
-
-    # Extracts adn saves animal surgery data and updates the water restriction log with animal runtime data.
-    _preprocess_google_sheet_data(session_data=session_data)
 
     message = "Data preprocessing: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)

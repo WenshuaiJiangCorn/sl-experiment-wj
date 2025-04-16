@@ -1688,7 +1688,7 @@ def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickp
     session_data = SessionData.create_session(
         animal_id=animal_id,
         project_configuration=configuration,
-        session_type="Window Checking",
+        session_type="Window checking",
     )
 
     # Retrieves current motor positions and packages them into a ZaberPositions object.
