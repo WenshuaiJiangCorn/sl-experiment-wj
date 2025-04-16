@@ -824,8 +824,8 @@ def _preprocess_log_directory(
     Raises:
         RuntimeError: If the target log directory contains both compressed and uncompressed log entries.
     """
-    # Resolves the path to the log directory, using either the input or initialized logger class.
-    log_directory = Path(session_data.raw_data.behavior_data_path)
+    # Resolves the path to the temporary log directory generated during runtime
+    log_directory = Path(session_data.raw_data.raw_data_path).joinpath("behavior_data_log")
 
     # Searches for compressed and uncompressed files inside the log directory
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
@@ -851,12 +851,14 @@ def _preprocess_log_directory(
     # If both compressed and uncompressed log files existing in the same directory, aborts with an error
     elif len(compressed_files) > 0 and len(uncompressed_files) > 0:
         message = (
-            f"The log directory for session {session_data.session_name} contains both compressed and uncompressed log "
-            f"files. Since compression overwrites the .npz archive with the processed data, it is unsafe to proceed "
-            f"with log compression in automated mode. Manually back up the existing .npz files, remove them from the "
-            f"log directory and call the processing method again."
+            f"The temporary log directory for session {session_data.session_name} contains both compressed and "
+            f"uncompressed log files. Since compression overwrites the .npz archive with the processed data, it is "
+            f"unsafe to proceed with log compression in automated mode. Manually back up the existing .npz files, "
+            f"remove them from the log directory and call the processing method again."
         )
         console.error(message, error=RuntimeError)
+
+    log_directory.rename(target=session_data.raw_data.behavior_data_path)
 
 
 def _push_data(
