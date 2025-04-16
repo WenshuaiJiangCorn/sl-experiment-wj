@@ -542,7 +542,7 @@ def _pull_mesoscope_data(
     """
     # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
     session_name = session_data.session_name
-    source = Path(session_data.mesoscope_data.mesoscope_data_path)
+    source = Path(session_data.mesoscope_data.session_specific_mesoscope_data_path)
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -827,6 +827,10 @@ def _preprocess_log_directory(
     # Resolves the path to the temporary log directory generated during runtime
     log_directory = Path(session_data.raw_data.raw_data_path).joinpath("behavior_data_log")
 
+    # Aborts early if the log directory does not exist at all, for example if working with Window checking sessions
+    if not log_directory.exists():
+        return
+
     # Searches for compressed and uncompressed files inside the log directory
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
     uncompressed_files: list[Path] = [file for file in log_directory.glob("*.npy")]
@@ -956,12 +960,21 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the data needed to update the wr log
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
+    skip: bool = False
     if session_data.session_type == "Lick training":
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
     elif session_data.session_type == "Run training":
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
     elif session_data.session_type == "Experiment":
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type == "Window checking":
+        # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
+        # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
+        # surgery, based on the window checking outcome
+        skip = True
+        quality = ""
+        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:
+            quality = input("Enter the surgery quality level between 0 and 2 inclusive: ")
     else:
         message = (
             f"Unable to extract the water restriction data from the session descriptor file for session "

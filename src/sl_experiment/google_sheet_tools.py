@@ -223,10 +223,9 @@ class SurgerySheet:
         self._project_name = project_name
         self._sheet_id = sheet_id
 
-        # Generates the credentials' object to access the target Google Sheet. Since we are only reading the data from
-        # the surgery log, we can use the 'readonly' access mode for added file safety.
+        # Generates the credentials' object to access the target Google Sheet.
         credentials = Credentials.from_service_account_file(  # type: ignore
-            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets.readonly",)
+            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets",)
         )
 
         # Uses the credentials' object to build the access service for the target Google Sheet. This service is then
