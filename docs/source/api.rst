@@ -34,15 +34,11 @@ Command Line Interfaces
    :nested: full
 
 .. click:: sl_experiment.cli:preprocess_session
-   :prog: sl-experiment
+   :prog: sl-preprocess
    :nested: full
 
 .. click:: sl_experiment.cli:purge_data
-   :prog: sl-experiment
-   :nested: full
-
-.. click:: sl_experiment.cli:replace_local_root_directory
-   :prog: sl-experiment
+   :prog: sl-purge
    :nested: full
 
 Experiment Interfaces
@@ -87,30 +83,9 @@ Google Sheet Tools
    :undoc-members:
    :show-inheritance:
 
-Packaging Tools
-===============
-.. automodule:: sl_experiment.packaging_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Transfer Tools
-==============
-.. automodule:: sl_experiment.transfer_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Data Preprocessing Tools
 ========================
 .. automodule:: sl_experiment.data_preprocessing
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Configuration and Data Storage Classes
-======================================
-.. automodule:: sl_experiment.data_classes
    :members:
    :undoc-members:
    :show-inheritance:

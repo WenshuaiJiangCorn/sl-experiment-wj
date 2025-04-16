@@ -67,7 +67,7 @@ dependencies = [
     "pyarrow>=19,<20",
     "pynput>=1,<2",
     "appdirs>=1,<2",
-    "sl-shared-assets==1.0.0rc5",
+    "sl-shared-assets==1.0.0rc6",
 ]
 
 [project.urls]
@@ -165,7 +165,7 @@ sl-maintain-vr = "sl_experiment.cli:maintain_vr"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
-sl-process = "sl_experiment.cli:preprocess_session"
+sl-preprocess = "sl_experiment.cli:preprocess_session"
 sl-purge = "sl_experiment.cli:purge_data"
 sl-replace-root = "sl_experiment.cli:replace_root_path"
 

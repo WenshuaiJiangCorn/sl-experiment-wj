@@ -1577,7 +1577,7 @@ def lick_training_logic(
     # cumulative time array size, indicating no slicing was performed due to session time constraints.
     if len(reward_delays) == len(cumulative_time):
         # Actual session time is the accumulated delay converted from seconds to minutes at the last index.
-        runtime.descriptor.maximum_training_time_m = np.ceil(cumulative_time[-1] / 60)
+        runtime.descriptor.maximum_training_time_m = int(np.ceil(cumulative_time[-1] / 60))
 
     # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
     # putting the animal on the VR rig.
@@ -1667,6 +1667,101 @@ def lick_training_logic(
     # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
     # destinations.
     runtime.stop()
+
+
+def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickport: LickPort) -> None:
+    """Generates a snapshot of Zaber motor positions, Mesoscope objective positions, and the cranial window state of an
+    animal.
+
+    This worker function is accessible through the maintain_vr() runtime. It is used when checking the state of the
+    cranial window for new animals before they are added to a project. This function works similar to how major
+    runtime management classes save the data of each processed animal during regular training or experiment sessions.
+
+    Args:
+        configuration: The ProjectConfiguration instance for the project to which the animal is intended to be added.
+        headbar: The HeadBar instance used to interface with HeadBar group motors.
+        lickport: The LickPort instance used to interface with LickPort group motors.
+    """
+    animal_id = input("Enter the id of the animal: ")
+
+    # Initializes a new session using the ProjectConfiguration class and the input animal id
+    session_data = SessionData.create_session(
+        animal_id=animal_id,
+        project_configuration=configuration,
+        session_type="Window Checking",
+    )
+
+    # Retrieves current motor positions and packages them into a ZaberPositions object.
+    head_bar_positions = headbar.get_positions()
+    lickport_positions = lickport.get_positions()
+    zaber_positions = ZaberPositions(
+        headbar_z=head_bar_positions[0],
+        headbar_pitch=head_bar_positions[1],
+        headbar_roll=head_bar_positions[2],
+        lickport_z=lickport_positions[0],
+        lickport_x=lickport_positions[1],
+        lickport_y=lickport_positions[2],
+    )
+
+    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
+    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
+    zaber_positions.to_yaml(file_path=Path(session_data.persistent_data.zaber_positions_path))
+
+    message = f"HeadBar and LickPort position snapshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
+    # is generated.
+    mesodata_path = Path(session_data.mesoscope_data.root_data_path)
+    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+    while len(screenshots) != 1:
+        message = (
+            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
+            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
+            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
+            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
+            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
+            f"screenshots stored in the folder before proceeding."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+
+    # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
+    screenshot_path: Path = screenshots[0]
+    sh.copy(screenshot_path, Path(session_data.raw_data.window_screenshot_path))
+    screenshot_path.unlink()
+    message = f"Cranial window and dot-alignment screenshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
+    # forces the user to fill it with data.
+    mesoscope_positions = MesoscopePositions()
+    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+    message = f"Mesoscope positions precursor file: Generated."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Forces the user to update the mesoscope positions file with current mesoscope data.
+    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+        file_path=Path(session_data.raw_data.mesoscope_positions_path)
+    )
+    while (
+        mesoscope_positions.mesoscope_x_position == 0.0
+        and mesoscope_positions.mesoscope_y_position == 0.0
+        and mesoscope_positions.mesoscope_z_position == 0.0
+    ):
+        message = (
+            f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
+            f"local persistent directory before proceeding further."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(session_data.raw_data.mesoscope_positions_path)
+        )
+
+    # Dumps the updated data into the persistent_data folder of the animal
+    mesoscope_positions.to_yaml(file_path=Path(session_data.persistent_data.mesoscope_positions_path))
 
 
 def vr_maintenance_logic(project_name: str) -> None:
@@ -1886,116 +1981,7 @@ def vr_maintenance_logic(project_name: str) -> None:
                 wheel.toggle(state=False)
 
             if command == "snapshot":
-                animal_id = input("Enter the id of the animal: ")
-
-                # Uses the input animal ID to resolve the path to the persistent and metadata directories for the
-                # animal. Then, resolves the paths to save the data generated during runtime:
-                local_metadata = Path(project_configuration.local_root_directory).joinpath(
-                    project_name, animal_id, "metadata"
-                )
-                nas_metadata = Path(project_configuration.nas_root_directory).joinpath(
-                    project_name, animal_id, "metadata"
-                )
-                server_metadata = Path(project_configuration.server_root_directory).joinpath(
-                    project_name, animal_id, "metadata"
-                )
-
-                # Zaber and Mesoscope positions reused for future runtimes (saved to the persistent data directory)
-                zaber_positions_path = Path(project_configuration.local_root_directory).joinpath(
-                    project_name, animal_id, "persistent_data", "zaber_positions.yaml"
-                )
-                mesoscope_positions_path = Path(project_configuration.local_root_directory).joinpath(
-                    project_name, animal_id, "persistent_data", "mesoscope_positions.yaml"
-                )
-
-                # Ensures all target directories exist. For this, uses one root path from each metadata destination and
-                # local persistent directory.
-                ensure_directory_exists(zaber_positions_path)
-                ensure_directory_exists(local_metadata)
-                ensure_directory_exists(nas_metadata)
-                ensure_directory_exists(server_metadata)
-
-                # Also resolves the path to the root mesoscope folder to grab the window screenshot.
-                mesodata_path = Path(project_configuration.mesoscope_root_directory)
-
-                # Retrieves current motor positions and packages them into a ZaberPositions object.
-                head_bar_positions = headbar.get_positions()
-                lickport_positions = lickport.get_positions()
-                zaber_positions = ZaberPositions(
-                    headbar_z=head_bar_positions[0],
-                    headbar_pitch=head_bar_positions[1],
-                    headbar_roll=head_bar_positions[2],
-                    lickport_z=lickport_positions[0],
-                    lickport_x=lickport_positions[1],
-                    lickport_y=lickport_positions[2],
-                )
-
-                # Dumps the data into the persistent directory of the specified animal, creating any missing folders,
-                # if necessary.
-                zaber_positions.to_yaml(file_path=zaber_positions_path)
-
-                # Copies Zaber position data to all metadata directories to noted the initial zaber position
-                sh.copy(zaber_positions_path, local_metadata.joinpath("initial_zaber_positions.yaml"))
-                sh.copy(zaber_positions_path, nas_metadata.joinpath("initial_zaber_positions.yaml"))
-                sh.copy(zaber_positions_path, server_metadata.joinpath("initial_zaber_positions.yaml"))
-
-                message = f"HeadBar and LickPort position snapshot: Saved."
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-                # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
-                # is generated.
-                screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-                while len(screenshots) != 1:
-                    message = (
-                        f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
-                        f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
-                        f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
-                        f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
-                        f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
-                        f"screenshots stored in the folder before proceeding."
-                    )
-                    console.echo(message=message, level=LogLevel.WARNING)
-                    input("Enter anything to continue: ")
-                    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-
-                # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
-                screenshot_path: Path = screenshots[0]
-                sh.copy(screenshot_path, local_metadata.joinpath("initial_window.png"))
-                sh.copy(screenshot_path, nas_metadata.joinpath("initial_window.png"))
-                sh.copy(screenshot_path, server_metadata.joinpath("initial_window.png"))
-                screenshot_path.unlink()
-                message = f"Cranial window and dot-alignment screenshot: Saved."
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-                # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
-                # forces the user to fill it with data.
-                mesoscope_positions = MesoscopePositions()
-                mesoscope_positions.to_yaml(file_path=mesoscope_positions_path)
-                message = f"Mesoscope positions precursor file: Generated."
-                console.echo(message=message, level=LogLevel.INFO)
-
-                # Forces the user to update the mesoscope positions file with current mesoscope data.
-                mesoscope_positions = MesoscopePositions.from_yaml(file_path=mesoscope_positions_path)  # type: ignore
-                while (
-                    mesoscope_positions.mesoscope_x_position == 0.0
-                    and mesoscope_positions.mesoscope_y_position == 0.0
-                    and mesoscope_positions.mesoscope_z_position == 0.0
-                ):
-                    message = (
-                        f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
-                        f"local persistent directory before proceeding further."
-                    )
-                    console.echo(message=message, level=LogLevel.WARNING)
-                    input("Enter anything to continue: ")
-                    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-                        file_path=mesoscope_positions_path
-                    )
-
-                # Copies updated mesoscope position data tot all metadata directories.
-                sh.copy(mesoscope_positions_path, local_metadata.joinpath("initial_mesoscope_positions.yaml"))
-                sh.copy(mesoscope_positions_path, nas_metadata.joinpath("initial_mesoscope_positions.yaml"))
-                sh.copy(mesoscope_positions_path, server_metadata.joinpath("initial_mesoscope_positions.yaml"))
-
+                _snapshot_logic(configuration=project_configuration, headbar=headbar, lickport=lickport)
                 message = f"Initial animal data snapshot: Generated."
                 console.echo(message=message, level=LogLevel.SUCCESS)
 
