@@ -221,7 +221,7 @@ class EncoderInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(200)) -> None:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
@@ -257,7 +257,7 @@ class EncoderInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=np.uint32(repetition_delay),
             )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def reset_pulse_count(self) -> None:
         """Resets the EncoderModule pulse tracker to 0.
@@ -273,7 +273,7 @@ class EncoderInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def get_ppr(self) -> None:
         """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
@@ -302,7 +302,7 @@ class EncoderInterface(ModuleInterface):
             command=np.uint8(3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     @property
     def mqtt_topic(self) -> str:
@@ -469,7 +469,7 @@ class TTLInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, averaging_pool_size),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True) -> None:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
@@ -505,7 +505,7 @@ class TTLInterface(ModuleInterface):
                 cycle_delay=repetition_delay,
             )
 
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def toggle(self, state: bool) -> None:
         """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
@@ -523,7 +523,7 @@ class TTLInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Checks the state of the TTL signal received by the TTLModule.
@@ -554,7 +554,7 @@ class TTLInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     @property
     def pulse_count(self) -> int:
@@ -702,7 +702,7 @@ class BreakInterface(ModuleInterface):
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(breaking_strength,),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def toggle(self, state: bool) -> None:
         """Triggers the BreakModule to be permanently engaged at maximum strength or permanently disengaged.
@@ -724,7 +724,7 @@ class BreakInterface(ModuleInterface):
             command=np.uint8(1 if state else 2),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def set_breaking_power(self) -> None:
         """Triggers the BreakModule to engage with the strength (torque) defined by the breaking_strength runtime
@@ -747,7 +747,7 @@ class BreakInterface(ModuleInterface):
             command=np.uint8(3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def get_pwm_from_torque(self, target_torque_n_cm: float) -> np.uint8:
         """Converts the desired breaking torque in Newtons centimeter to the required PWM value (0-255) to be delivered
@@ -1029,7 +1029,7 @@ class ValveInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration, calibration_delay, calibration_count, tone_duration),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def send_pulse(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False) -> None:
         """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
@@ -1069,7 +1069,7 @@ class ValveInterface(ModuleInterface):
                 noblock=np.bool(noblock),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def toggle(self, state: bool) -> None:
         """Triggers the ValveModule to be permanently open or closed.
@@ -1086,7 +1086,7 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(2 if state else 3),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def calibrate(self) -> None:
         """Triggers ValveModule to repeatedly pulse the valve using the duration defined by the pulse_duration runtime
@@ -1113,7 +1113,7 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(4),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
@@ -1367,7 +1367,7 @@ class LickInterface(ModuleInterface):
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
             parameter_data=(signal_threshold, delta_threshold, averaging_pool_size),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the voltage signal detected by the analog pin monitored by the LickModule.
@@ -1404,7 +1404,7 @@ class LickInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def get_adc_units_from_volts(self, voltage: float) -> np.uint16:
         """Converts the input voltage to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -1623,7 +1623,7 @@ class TorqueInterface(ModuleInterface):
                 averaging_pool_size,
             ),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> None:
         """Returns the torque signal detected by the analog pin monitored by the TorqueModule.
@@ -1663,7 +1663,7 @@ class TorqueInterface(ModuleInterface):
                 noblock=np.bool(False),
                 cycle_delay=repetition_delay,
             )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     def get_adc_units_from_torque(self, target_torque: float) -> np.uint16:
         """Converts the input torque to raw analog units of 12-bit Analog-to-Digital-Converter (ADC).
@@ -1791,7 +1791,7 @@ class ScreenInterface(ModuleInterface):
             return_code=np.uint8(0),
             parameter_data=(pulse_duration,),
         )
-        self._input_queue.put(message)
+        self._input_queue.put(message)  # type: ignore
 
     def toggle(self) -> None:
         """Triggers the ScreenModule to briefly simulate pressing the POWER button of the scree control board.
@@ -1812,7 +1812,7 @@ class ScreenInterface(ModuleInterface):
             command=np.uint8(1),
             noblock=np.bool(False),
         )
-        self._input_queue.put(command)
+        self._input_queue.put(command)  # type: ignore
 
     @property
     def initially_on(self) -> bool:

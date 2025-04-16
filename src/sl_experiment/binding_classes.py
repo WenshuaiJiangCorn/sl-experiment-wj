@@ -6,6 +6,7 @@ refactoring and a new library release are required each time these settings need
 from pathlib import Path
 
 import numpy as np
+from sl_shared_assets import ZaberPositions
 from ataraxis_video_system import (
     VideoCodecs,
     VideoSystem,
@@ -19,7 +20,6 @@ from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, SharedMemoryArray
 from ataraxis_communication_interface import MicroControllerInterface
 
-from .data_classes import ZaberPositions
 from .zaber_bindings import ZaberAxis, ZaberConnection
 from .module_interfaces import (
     TTLInterface,

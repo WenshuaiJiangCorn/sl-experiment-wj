@@ -20,18 +20,19 @@ from tqdm import tqdm
 import numpy as np
 import tifffile
 from numpy.typing import NDArray
-from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
-from ataraxis_data_structures import compress_npy_logs
-
-from .data_classes import (
+from sl_shared_assets import (
     SessionData,
     SurgeryData,
+    ProjectConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
     MesoscopeExperimentDescriptor,
+    transfer_directory,
+    calculate_directory_checksum,
 )
-from .transfer_tools import transfer_directory
-from .packaging_tools import calculate_directory_checksum
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+from ataraxis_data_structures import compress_npy_logs
+
 from .google_sheet_tools import SurgerySheet, WaterSheetData
 
 
@@ -338,10 +339,19 @@ def _generate_ops(
     except KeyError:
         framerate = float(4)
 
-    # The original extractor code looked for 'SI.hFastZ.userZs' tag, but the test images do not have this tag at all.
-    # It is likely that ScanImage changed the tags at some point, and that 'numFastZActuators' tag is the new
-    # equivalent.
-    nplanes = int(metadata["FrameData"]["SI.hStackManager.numFastZActuators"])
+    # The number of slices (planes) for each ROI
+    nplanes = int(metadata["FrameData"]["SI.hStackManager.actualNumSlices"])
+
+    # The number of channels (color channels) for each ROI
+    nchannels = int(metadata["FrameData"]["SI.hChannels.channelsActive"])
+
+    # Note. Suite2p expects the data to be stacked following the order of: channels, planes, time, e.g.:
+    # frame0 = time0_plane0_channel1
+    # frame1 = time0_plane0_channel2
+    # frame2 = time0_plane1_channel1
+    # frame3 = time0_plane1_channel2
+    # frame4 = time1_plane0_channel1
+    # frame5 = time1_plane0_channel2
 
     # Extracts the data about all ROIs
     si_rois: list[dict[str, Any]] = metadata["RoiGroups"]["imagingRoiGroup"]["rois"]
@@ -387,26 +397,14 @@ def _generate_ops(
 
     # Generates the data to be stored as the JSON config based on the result of the computations above.
     # Note, most of these values were filled based on the 'prototype' ops.json from Tyche F3. For our pipeline they are
-    # not really relevant, as we have a separate class that deals with suite2p configuration.
-    data = {
+    # mostly not relevant, except for the "'fs", ""nplanes", and ""nrois".
+    data: dict[str, int | float | list[Any]] = {
         "fs": framerate,
         "nplanes": nplanes,
+        "nchannels": nchannels,
         "nrois": roi_rows.shape[1],
-        "mesoscan": 0 if roi_rows.shape[1] == 1 else 1,
-        "diameter": [6, 9],
-        "max_iterations": 50,
-        "num_workers_roi": -1,
-        "keep_movie_raw": 0,
-        "delete_bin": 1,
-        "batch_size": 1000,
-        "nimg_init": 400,
-        "tau": 1.25,
-        "combined": 0,
-        "nonrigid": 1,
-        "preclassify": 0.5,
-        "do_registration": 1,
-        "roidetect": 1,
-        "multiplane_parallel": 1,
+        "mesoscan": 1,
+        "num_workers_roi": -1,  # Could not find where this is used, if at all, so it is kep just in case it is relevant
     }
 
     # When the config is generated for a mesoscope scan, stores ROI offsets (dx, dy) and line indices (lines) for
@@ -470,6 +468,9 @@ def _preprocess_video_names(session_data: SessionData) -> None:
     ID-codes.
 
     This is a minor preprocessing function primarily designed to make further data processing steps more human-friendly.
+    Since version 2.0.0, this method is also essential for further data processing, as it ensures that video names are
+    unique by including session names (timestamps). This is necessary to support DeepLabCut tracking, as DLC is not
+    able to resolve unique videos based on their storage paths.
 
     Notes:
         This function assumes that the runtime uses 3 cameras with IDs 51 (face camera), 62 (left camera), and 73
@@ -480,24 +481,25 @@ def _preprocess_video_names(session_data: SessionData) -> None:
     """
 
     # Resolves the path to the camera frame directory
-    camera_frame_directory = session_data.camera_frames_path
+    camera_frame_directory = Path(session_data.raw_data.camera_data_path)
+    session_name = session_data.session_name
 
     # Renames the video files to use human-friendly names. Assumes the standard data acquisition configuration with 3
     # cameras and predefined camera IDs.
     if camera_frame_directory.joinpath("051.mp4").exists():
         os.renames(
             old=camera_frame_directory.joinpath("051.mp4"),
-            new=camera_frame_directory.joinpath("face_camera.mp4"),
+            new=camera_frame_directory.joinpath(f"{session_name}_face_camera.mp4"),
         )
     if camera_frame_directory.joinpath("062.mp4").exists():
         os.renames(
             old=camera_frame_directory.joinpath("062.mp4"),
-            new=camera_frame_directory.joinpath("left_camera.mp4"),
+            new=camera_frame_directory.joinpath(f"{session_name}_left_camera.mp4"),
         )
     if camera_frame_directory.joinpath("073.mp4").exists():
         os.renames(
             old=camera_frame_directory.joinpath("073.mp4"),
-            new=camera_frame_directory.joinpath("right_camera.mp4"),
+            new=camera_frame_directory.joinpath(f"{session_name}_right_camera.mp4"),
         )
 
 
@@ -540,7 +542,7 @@ def _pull_mesoscope_data(
     """
     # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
     session_name = session_data.session_name
-    source = session_data.mesoscope_root_path.joinpath(f"{session_name}_mesoscope_frames")
+    source = Path(session_data.mesoscope_data.mesoscope_data_path)
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -550,7 +552,7 @@ def _pull_mesoscope_data(
     # Otherwise, if the source exists and is not marked for deletion, pulls the frame to the target directory:
 
     # Precreates the temporary storage directory for the pulled data.
-    destination = session_data.raw_data_path.joinpath("raw_mesoscope_frames")
+    destination = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
     ensure_directory_exists(destination)
 
     # Defines the set of extensions to look for when verifying source folder contents
@@ -620,8 +622,7 @@ def _pull_mesoscope_data(
     # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
     # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
     # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = session_data.mesoscope_persistent_path.joinpath("MotionEstimator.me")
-    ensure_directory_exists(persistent_motion_estimator_path.parent)
+    persistent_motion_estimator_path = Path(session_data.persistent_data.motion_estimator_path)
     if not persistent_motion_estimator_path.exists():
         sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
@@ -694,8 +695,8 @@ def _preprocess_mesoscope_directory(
         batch_size: Determines how many frames are loaded into memory at the same time during processing. Note, the same
             number of frames will be loaded from each stack processed in parallel.
     """
-    # Resolves the paths to the specific directories used during processing
-    image_directory = session_data.raw_data_path.joinpath("raw_mesoscope_frames")
+    # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
+    image_directory = Path(session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames"))  # type: ignore
 
     # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
     # acquired at all. Aborts processing early.
@@ -703,7 +704,7 @@ def _preprocess_mesoscope_directory(
         return
 
     # Otherwise, resolves the paths to the output directories and files
-    output_directory = session_data.raw_data_path.joinpath("mesoscope_frames")
+    output_directory = Path(session_data.raw_data.mesoscope_data_path)
     ensure_directory_exists(output_directory)  # Generates the directory
     frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
     frame_variant_metadata_path = output_directory.joinpath("frame_variant_metadata.npz")
@@ -824,7 +825,7 @@ def _preprocess_log_directory(
         RuntimeError: If the target log directory contains both compressed and uncompressed log entries.
     """
     # Resolves the path to the log directory, using either the input or initialized logger class.
-    log_directory = session_data.raw_data_path.joinpath("behavior_data_log")
+    log_directory = Path(session_data.raw_data.behavior_data_path)
 
     # Searches for compressed and uncompressed files inside the log directory
     compressed_files: list[Path] = [file for file in log_directory.glob("*.npz")]
@@ -886,19 +887,15 @@ def _push_data(
             number of CPU cores - 4.
     """
 
-    # Resolves source and destination paths
-    session_name = session_data.session_name
-    animal_name = session_data.animal_id
-    project_name = session_data.project_name
-
     # Resolves a tuple of destination paths
     destinations = (
-        session_data.nas_root_path.joinpath(project_name, animal_name, session_name, "raw_data"),
-        session_data.server_root_path.joinpath(project_name, animal_name, session_name, "raw_data"),
+        Path(session_data.destinations.nas_raw_data_path),
+        Path(session_data.destinations.server_raw_data_path),
     )
 
     # Computes the xxHash3-128 checksum for the source folder
-    calculate_directory_checksum(directory=session_data.raw_data_path, num_processes=None, save_checksum=True)
+    target = Path(session_data.raw_data.raw_data_path)
+    calculate_directory_checksum(directory=target, num_processes=None, save_checksum=True)
 
     # If the method is configured to transfer files in parallel, submits tasks to a ProcessPoolExecutor
     if parallel:
@@ -906,7 +903,7 @@ def _push_data(
             futures = {
                 executor.submit(
                     transfer_directory,
-                    source=session_data.raw_data_path,
+                    source=target,
                     destination=destination,
                     num_threads=num_threads,
                     verify_integrity=False,  # This is now done on the server directly
@@ -922,7 +919,7 @@ def _push_data(
     else:
         for destination in destinations:
             transfer_directory(
-                source=session_data.raw_data_path,
+                source=target,
                 destination=destination,
                 num_threads=num_threads,
                 verify_integrity=False,  # This is now done on the server directly
@@ -932,11 +929,11 @@ def _push_data(
 def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     """Updates the water restriction log and the surgery_data.yaml file.
 
-    This internal method is called as part of preprocessing. Primarily, it is used to ensure that the surgery data
-    extracted and stored in the 'metadata' folder of each processed animal is actual. It also updates the water
-    restriction log for the managed animal to reflect the water received before and after runtime. This step improves
-    user experience by ensuring all relevant data is always kept together on the NAS and BioHPC server while preventing
-    the experimenter from manually updating the log after data preprocessing.
+    This internal method is called as part of preprocessing. Primarily, it is used to ensure that each session folder
+    contains the up-to-date information about the surgical intervention(s) performed on the animal before running the
+    session. It also updates the water restriction log for the managed animal to reflect the water received before and
+    after runtime. This step improves user experience by ensuring all relevant data is always kept together on the NAS
+    and BioHPC server while preventing the experimenter from manually updating the log after data preprocessing.
 
     Raises:
         ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
@@ -945,11 +942,17 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         session_data: The SessionData instance for the processed session.
     """
 
+    # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
+    # retrieve the Google sheet ID data.
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
+        session_data.raw_data.project_configuration_path,  # type: ignore
+    )
+
     # Resolves the animal ID (name)
     animal_id = int(session_data.animal_id)
 
     # Loads the session descriptor file to read the data needed to update the wr log
-    descriptor_path = session_data.session_descriptor_path
+    descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
     if session_data.session_type == "Lick training":
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
@@ -977,8 +980,8 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Connects to the WR sheet and generates the new water restriction log entry
     wr_sheet = WaterSheetData(
         animal_id=animal_id,
-        credentials_path=Path(session_data.credentials_path),
-        sheet_id=session_data.water_log_sheet_id,
+        credentials_path=Path(project_configuration.google_credentials_path),
+        sheet_id=project_configuration.water_log_sheet_id,
     )
 
     wr_sheet.update_water_log(
@@ -991,24 +994,16 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     message = f"Water restriction log entry: written."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Resolves the paths to the surgery data files stored inside the metadata folder of the managed animal at each
-    # destination.
-    local_surgery_path = session_data.local_metadata_path.joinpath("surgery_metadata.yaml")
-    server_surgery_path = session_data.server_metadata_path.joinpath("surgery_metadata.yaml")
-    nas_surgery_path = session_data.nas_metadata_path.joinpath("surgery_metadata.yaml")
-
     # Loads and parses the data from the surgery log Google Sheet file
     sl_sheet = SurgerySheet(
         project_name=session_data.project_name,
-        credentials_path=Path(session_data.credentials_path),
-        sheet_id=session_data.surgery_sheet_id,
+        credentials_path=Path(project_configuration.google_credentials_path),
+        sheet_id=project_configuration.surgery_sheet_id,
     )
     data: SurgeryData = sl_sheet.extract_animal_data(animal_id=animal_id)
 
-    # Saves the data as a .yaml file locally, to the server, and the NAS.
-    data.to_yaml(local_surgery_path)
-    data.to_yaml(server_surgery_path)
-    data.to_yaml(nas_surgery_path)
+    # Saves the data as a .yaml file to the session directory
+    data.to_yaml(Path(session_data.raw_data.surgery_metadata_path))
 
     message = f"Surgery data: saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1041,8 +1036,8 @@ def preprocess_session_data(session_data: SessionData) -> None:
     # directory to include the session name. It is essential that this is done before preprocessing, as
     # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
     # session.
-    general_path = session_data.mesoscope_root_path.joinpath("mesoscope_frames")
-    session_specific_path = session_data.mesoscope_root_path.joinpath(f"{session_data.session_name}_mesoscope_frames")
+    general_path = Path(session_data.mesoscope_data.mesoscope_data_path)
+    session_specific_path = Path(session_data.mesoscope_data.session_specific_mesoscope_data_path)
 
     # Note, the renaming only happens if the session-specific cache does not exist, the general
     # mesoscope_frames cache exists, and it is not empty (has files inside).

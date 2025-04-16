@@ -368,8 +368,8 @@ class BehaviorVisualizer:
         duration_threshold /= 1000
 
         # Updates line position(s)
-        self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])  # type: ignore
-        self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])  # type: ignore
+        self._speed_threshold_line.set_ydata([speed_threshold, speed_threshold])
+        self._duration_threshold_line.set_xdata([-duration_threshold, -duration_threshold])
 
         # Updates text annotations with current threshold values
         self._speed_threshold_text.set_text(f"Target speed: {speed_threshold:.2f} cm/s")

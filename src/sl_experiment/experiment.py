@@ -6,7 +6,7 @@ processing API) and specialized runtime logic functions (user-facing external AP
 import os
 import copy
 import json
-import shutil
+import shutil as sh
 from typing import Any
 from pathlib import Path
 import tempfile
@@ -17,13 +17,7 @@ import numpy as np
 from pynput import keyboard
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
-from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
-from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
-from ataraxis_time.time_helpers import get_timestamp
-from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
-
-from .visualizers import BehaviorVisualizer
-from .data_classes import (
+from sl_shared_assets import (
     SessionData,
     ZaberPositions,
     MesoscopePositions,
@@ -34,6 +28,12 @@ from .data_classes import (
     ExperimentConfiguration,
     MesoscopeExperimentDescriptor,
 )
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
+from ataraxis_time.time_helpers import get_timestamp
+from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
+
+from .visualizers import BehaviorVisualizer
 from .binding_classes import HeadBar, LickPort, VideoSystems, MicroControllerInterfaces
 from .module_interfaces import BreakInterface, ValveInterface
 from .data_preprocessing import preprocess_session_data
@@ -296,7 +296,7 @@ class _MesoscopeExperiment:
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
         self._logger: DataLogger = DataLogger(
-            output_directory=session_data.raw_data_path,
+            output_directory=Path(session_data.raw_data.raw_data_path),
             instance_name="behavior",  # Creates behavior_log subfolder under raw_data
             sleep_timer=0,
             exist_ok=True,
@@ -324,7 +324,7 @@ class _MesoscopeExperiment:
         # Initializes the binding class for all VideoSystems.
         self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
-            output_directory=self._session_data.camera_frames_path,
+            output_directory=Path(self._session_data.raw_data.camera_data_path),
             face_camera_index=project_configuration.face_camera_index,
             left_camera_index=project_configuration.left_camera_index,
             right_camera_index=project_configuration.right_camera_index,
@@ -344,11 +344,11 @@ class _MesoscopeExperiment:
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
             headbar_port=project_configuration.headbar_port,
-            zaber_positions_path=self._session_data.previous_zaber_positions_path,
+            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
         )
         self.LickPort: LickPort = LickPort(
             lickport_port=project_configuration.lickport_port,
-            zaber_positions_path=self._session_data.previous_zaber_positions_path,
+            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
         )
 
     def start(self) -> None:
@@ -445,9 +445,9 @@ class _MesoscopeExperiment:
 
         # If previous mesoscope positions were saved, loads the coordinates and uses them to augment the message to the
         # user.
-        if self._session_data.previous_mesoscope_positions_path.exists():
+        if Path(self._session_data.persistent_data.mesoscope_positions_path).exists():
             previous_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=self._session_data.previous_mesoscope_positions_path
+                file_path=Path(self._session_data.persistent_data.mesoscope_positions_path)
             )
             # Gives user time to mount the animal and requires confirmation before proceeding further.
             message = (
@@ -455,7 +455,7 @@ class _MesoscopeExperiment:
                 f"mesoscope objetive. If necessary, adjust the HeadBar position to make sure the animal can "
                 f"comfortably run the task. Previous mesoscope coordinates are: "
                 f"x={previous_positions.mesoscope_x_position}, y={previous_positions.mesoscope_y_position}, "
-                f"z={previous_positions.mesoscope_z_position}, roll={previous_positions.mesoscope_roll_position}, "
+                f"roll={previous_positions.mesoscope_roll_position}, z={previous_positions.mesoscope_z_position}, "
                 f"fast_z={previous_positions.mesoscope_fast_z_position}, "
                 f"tip={previous_positions.mesoscope_tip_position}, tilt={previous_positions.mesoscope_tilt_position}."
             )
@@ -486,7 +486,9 @@ class _MesoscopeExperiment:
 
         # Forces the user to create the dot-alignment and cranial window screenshot on the ScanImage PC before
         # continuing.
-        screenshots = [screenshot for screenshot in self._session_data.mesoscope_root_path.glob("*.png")]
+        screenshots = [
+            screenshot for screenshot in Path(self._session_data.mesoscope_data.root_data_path).glob("*.png")
+        ]
         while len(screenshots) != 1:
             message = (
                 f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
@@ -498,13 +500,15 @@ class _MesoscopeExperiment:
             )
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
-            screenshots = [screenshot for screenshot in self._session_data.mesoscope_root_path.glob("*.png")]
+            screenshots = [
+                screenshot for screenshot in Path(self._session_data.mesoscope_data.root_data_path).glob("*.png")
+            ]
 
         # Transfers the screenshot to the mesoscope_frames folder of the session's raw_data folder
-        screenshot_path = self._session_data.raw_data_path.joinpath("mesoscope_frames", "window.png")
+        screenshot_path = Path(self._session_data.raw_data.window_screenshot_path)
         source_path: Path = screenshots[0]
         ensure_directory_exists(screenshot_path)
-        shutil.copy(source_path, screenshot_path)
+        sh.copy(source_path, screenshot_path)
         source_path.unlink()  # Removes the screenshot from the temporary folder
 
         # Generates a snapshot of all zaber positions. This serves as an early checkpoint in case the runtime has to be
@@ -520,10 +524,11 @@ class _MesoscopeExperiment:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
-        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Removes the previous persisted file
+        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
-        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
@@ -541,12 +546,12 @@ class _MesoscopeExperiment:
             screens_initially_on=self._microcontrollers.screens.initially_on,
             recorded_mesoscope_ttl=True,
         )
-        hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
+        hardware_configuration.to_yaml(Path(self._session_data.raw_data.hardware_configuration_path))
         message = "Hardware configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Also saves the ExperimentConfiguration instance to the session folder.
-        self._experiment_configuration.to_yaml(self._session_data.local_experiment_configuration_path)
+        self._experiment_configuration.to_yaml(Path(self._session_data.raw_data.experiment_configuration_path))
         message = "Experiment configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
@@ -656,27 +661,31 @@ class _MesoscopeExperiment:
         # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
         # that the reported dispensed_water_volume_ul is accurate.
         delivered_water = self._microcontrollers.total_delivered_volume
+
         # Overwrites the delivered water volume with the volume recorded over the runtime.
         self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
 
+        # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
+        self.descriptor.to_yaml(file_path=Path(self._session_data.raw_data.session_descriptor_path))
+
+        # Generates a precursor MesoscopePositions file and dumps it into the session folder.
         # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
         # coordinates with the positions loaded from the persistent storage file. This way, if the user used the same
         # coordinates as last time, they do not need to update the mesoscope coordinates when manually editing the
         # descriptor.
-        if self._session_data.previous_mesoscope_positions_path.exists():
-            previous_coordinates: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=self._session_data.previous_mesoscope_positions_path
+        if Path(self._session_data.persistent_data.mesoscope_positions_path).exists():
+            sh.copy(
+                self._session_data.persistent_data.mesoscope_positions_path,
+                self._session_data.raw_data.mesoscope_positions_path,
             )
-            self.descriptor.mesoscope_x_position = previous_coordinates.mesoscope_x_position
-            self.descriptor.mesoscope_y_position = previous_coordinates.mesoscope_y_position
-            self.descriptor.mesoscope_z_position = previous_coordinates.mesoscope_z_position
-            self.descriptor.mesoscope_roll_position = previous_coordinates.mesoscope_roll_position
-            self.descriptor.mesoscope_fast_z_position = previous_coordinates.mesoscope_fast_z_position
-            self.descriptor.mesoscope_tilt_position = previous_coordinates.mesoscope_tilt_position
-            self.descriptor.mesoscope_tip_position = previous_coordinates.mesoscope_tip_position
+        else:
+            # 'Default' precursor de-novo creation. We have a checker (see below) to ensure the user modifies the
+            # precursor.
+            mesoscope_positions = MesoscopePositions()
+            mesoscope_positions.to_yaml(file_path=Path(self._session_data.raw_data.mesoscope_positions_path))
 
-        # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
-        self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+        message = "Mesoscope objective position snapshot: Created."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
@@ -690,10 +699,11 @@ class _MesoscopeExperiment:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
-        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Removes the previous persisted file
+        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
-        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
         self.LickPort.mount_position()
@@ -707,36 +717,68 @@ class _MesoscopeExperiment:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
+        # Notifies the user that the acquisition is complete.
+        console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
+
         # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
         # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
         # obvious to the user when it is safe to start preparing for the next session and leave the current one
         # processing the data.
         message = (
-            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
-            f"update the notes session with the notes taken during runtime. Then, uninstall the mesoscope objective "
-            f"and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and HARM the "
-            f"animal. This is the last manual checkpoint, once you hit 'y,' it is safe to start preparing for the next "
-            f"session."
+            f"Open the session descriptor file stored in session's raw_data folder and "
+            f"update the notes session with the notes taken during runtime. Also, update the mesoscope_positions.yaml "
+            f"file with the actual mesoscope objective position data used during runtime. Then, uninstall the "
+            f"mesoscope objective and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope "
+            f"objective and HARM the animal. This is the last manual checkpoint, once you progress past this point, "
+            f"it is safe to start preparing for the next session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
+        # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
         descriptor: MesoscopeExperimentDescriptor = self.descriptor.from_yaml(  # type: ignore
-            file_path=self._session_data.session_descriptor_path
+            Path(file_path=self._session_data.raw_data.session_descriptor_path)
         )
         while "Replace this with your notes." in descriptor.experimenter_notes:
             message = (
                 "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
                 "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
-                "replaced the default text under the 'experimenter_notes' field with the notes taken during the "
+                "replace the default text under the 'experimenter_notes' field with the notes taken during the "
                 "experiment. Make sure to save the changes to the file by using 'CTRL+S' combination."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             input("Enter anything to continue: ")
 
             # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            descriptor = self.descriptor.from_yaml(file_path=self._session_data.session_descriptor_path)  # type: ignore
+            descriptor = self.descriptor.from_yaml(
+                file_path=self._session_data.raw_data.session_descriptor_path,  # type: ignore
+            )
+
+        # Forces the user to update the mesoscope positions file with current mesoscope data. This is only triggered if
+        # the mesoscope positions file is a precursor. Otherwise, this check will not be triggered. This is intentional,
+        # as reusing the same mesoscope positions over days is desirable and, likely, the positions will not change
+        # day to day. In that case, the code above will automatically re-save the same positions as used for the
+        # previous session, making user intervention unnecessary.
+        mesoscope_positions = MesoscopePositions.from_yaml(
+            file_path=self._session_data.raw_data.mesoscope_positions_path,  # type: ignore
+        )
+        while (
+            mesoscope_positions.mesoscope_x_position == 0.0
+            and mesoscope_positions.mesoscope_y_position == 0.0
+            and mesoscope_positions.mesoscope_z_position == 0.0
+        ):
+            message = (
+                "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data directory "
+                "has been updated to include the mesoscope objective positions used during runtime. Manually edit the "
+                "mesoscope_positions.yaml file and replace the default text under the all available position fields "
+                "with coordinates displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to "
+                "the file by using 'CTRL+S' combination."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
+            mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+                file_path=self._session_data.raw_data.mesoscope_positions_path,  # type: ignore
+            )
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
@@ -747,22 +789,6 @@ class _MesoscopeExperiment:
         self.LickPort.disconnect()
 
         message = "HeadBar and LickPort motors: Reset."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Extracts the mesoscope coordinates from the user-updated descriptor file and saves them as a
-        # MesoscopePositions object to the persistent folder of the managed animal. This is used to assist the
-        # experimenter in restoring the Mesoscope to the same position during the following runtimes.
-        mesoscope_positions = MesoscopePositions(
-            mesoscope_x_position=descriptor.mesoscope_x_position,
-            mesoscope_y_position=descriptor.mesoscope_y_position,
-            mesoscope_z_position=descriptor.mesoscope_z_position,
-            mesoscope_roll_position=descriptor.mesoscope_roll_position,
-            mesoscope_fast_z_position=descriptor.mesoscope_fast_z_position,
-            mesoscope_tilt_position=descriptor.mesoscope_tilt_position,
-            mesoscope_tip_position=descriptor.mesoscope_tip_position,
-        )
-        mesoscope_positions.to_yaml(file_path=self._session_data.previous_mesoscope_positions_path)
-        message = "Mesoscope objective position snapshot: Created."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Preprocesses the session data
@@ -1042,7 +1068,7 @@ class _BehaviorTraining:
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
         self._logger: DataLogger = DataLogger(
-            output_directory=session_data.raw_data_path,
+            output_directory=Path(session_data.raw_data.raw_data_path),
             instance_name="behavior",  # Creates behavior_log subfolder under raw_data
             sleep_timer=0,
             exist_ok=True,
@@ -1063,7 +1089,7 @@ class _BehaviorTraining:
         # Initializes the binding class for all VideoSystems.
         self._cameras: VideoSystems = VideoSystems(
             data_logger=self._logger,
-            output_directory=self._session_data.camera_frames_path,
+            output_directory=Path(self._session_data.raw_data.camera_data_path),
             face_camera_index=project_configuration.face_camera_index,
             left_camera_index=project_configuration.left_camera_index,
             right_camera_index=project_configuration.right_camera_index,
@@ -1083,11 +1109,11 @@ class _BehaviorTraining:
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
             headbar_port=project_configuration.headbar_port,
-            zaber_positions_path=self._session_data.previous_zaber_positions_path,
+            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
         )
         self.LickPort: LickPort = LickPort(
             lickport_port=project_configuration.lickport_port,
-            zaber_positions_path=self._session_data.previous_zaber_positions_path,
+            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
         )
 
     def start(self) -> None:
@@ -1204,10 +1230,11 @@ class _BehaviorTraining:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
-        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Removes the previous persisted file
+        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
-        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
@@ -1228,7 +1255,7 @@ class _BehaviorTraining:
                 valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
                 valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
             )
-        hardware_configuration.to_yaml(self._session_data.hardware_configuration_path)
+        hardware_configuration.to_yaml(Path(self._session_data.raw_data.hardware_configuration_path))
         message = "Hardware configuration snapshot: Generated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
@@ -1288,7 +1315,7 @@ class _BehaviorTraining:
         delivered_water = self._microcontrollers.total_delivered_volume
         # Overwrites the delivered water volume with the volume recorded over the runtime.
         self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
-        self.descriptor.to_yaml(file_path=self._session_data.session_descriptor_path)
+        self.descriptor.to_yaml(file_path=Path(self._session_data.raw_data.session_descriptor_path))
 
         # Generates the snapshot of the current HeadBar and LickPort positions and saves them as a .yaml file. This has
         # to be done before Zaber motors are reset back to parking position.
@@ -1302,10 +1329,11 @@ class _BehaviorTraining:
             lickport_x=lickport_positions[1],
             lickport_y=lickport_positions[2],
         )
-        self._session_data.previous_zaber_positions_path.unlink(missing_ok=True)  # Removes the previous persisted file
+        # Removes the previous persisted file
+        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=self._session_data.previous_zaber_positions_path)
-        zaber_positions.to_yaml(file_path=self._session_data.zaber_positions_path)
+        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
         self.LickPort.mount_position()
@@ -1319,12 +1347,15 @@ class _BehaviorTraining:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
+        # Notifies the user that the data acquisition is complete.
+        console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
+
         # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
         # before processing so that the notes are properly transferred to the NAS and server. Also, this makes it more
         # obvious to the user when it is safe to start preparing for the next session and leave the current one
         # processing the data.
         message = (
-            f"Data acquisition: Complete. Open the session descriptor file stored in session's raw_data folder and "
+            f"Open the session descriptor file stored in session's raw_data folder and "
             f"update the notes session with the notes taken during runtime. Then, uninstall the mesoscope objective "
             f"and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and HARM the "
             f"animal. This is the last manual checkpoint, once you hit 'y,' it is safe to start preparing for the next "
@@ -1335,7 +1366,7 @@ class _BehaviorTraining:
 
         # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
         descriptor: LickTrainingDescriptor | RunTrainingDescriptor = self.descriptor.from_yaml(  # type: ignore
-            file_path=self._session_data.session_descriptor_path
+            file_path=Path(self._session_data.raw_data.session_descriptor_path)
         )
         while "Replace this with your notes." in descriptor.experimenter_notes:
             message = (
@@ -1481,22 +1512,9 @@ def lick_training_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData(
-        project_name=project_name,
-        animal_id=animal_id,
-        surgery_sheet_id=project_configuration.surgery_sheet_id,
-        water_log_sheet_id=project_configuration.water_log_sheet_id,
-        session_type="Lick training",
-        credentials_path=project_configuration.credentials_path,
-        local_root_directory=project_configuration.local_root_directory,
-        server_root_directory=project_configuration.server_root_directory,
-        nas_root_directory=project_configuration.nas_root_directory,
-        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+    session_data = SessionData.create_session(
+        animal_id=animal_id, session_type="Lick training", project_configuration=project_configuration
     )
-
-    # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
-    # being able to run preprocessing on the data if runtime fails.
-    session_data.to_path()
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
@@ -1917,9 +1935,9 @@ def vr_maintenance_logic(project_name: str) -> None:
                 zaber_positions.to_yaml(file_path=zaber_positions_path)
 
                 # Copies Zaber position data to all metadata directories to noted the initial zaber position
-                shutil.copy(zaber_positions_path, local_metadata.joinpath("initial_zaber_positions.yaml"))
-                shutil.copy(zaber_positions_path, nas_metadata.joinpath("initial_zaber_positions.yaml"))
-                shutil.copy(zaber_positions_path, server_metadata.joinpath("initial_zaber_positions.yaml"))
+                sh.copy(zaber_positions_path, local_metadata.joinpath("initial_zaber_positions.yaml"))
+                sh.copy(zaber_positions_path, nas_metadata.joinpath("initial_zaber_positions.yaml"))
+                sh.copy(zaber_positions_path, server_metadata.joinpath("initial_zaber_positions.yaml"))
 
                 message = f"HeadBar and LickPort position snapshot: Saved."
                 console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1942,9 +1960,9 @@ def vr_maintenance_logic(project_name: str) -> None:
 
                 # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
                 screenshot_path: Path = screenshots[0]
-                shutil.copy(screenshot_path, local_metadata.joinpath("initial_window.png"))
-                shutil.copy(screenshot_path, nas_metadata.joinpath("initial_window.png"))
-                shutil.copy(screenshot_path, server_metadata.joinpath("initial_window.png"))
+                sh.copy(screenshot_path, local_metadata.joinpath("initial_window.png"))
+                sh.copy(screenshot_path, nas_metadata.joinpath("initial_window.png"))
+                sh.copy(screenshot_path, server_metadata.joinpath("initial_window.png"))
                 screenshot_path.unlink()
                 message = f"Cranial window and dot-alignment screenshot: Saved."
                 console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1974,9 +1992,9 @@ def vr_maintenance_logic(project_name: str) -> None:
                     )
 
                 # Copies updated mesoscope position data tot all metadata directories.
-                shutil.copy(mesoscope_positions_path, local_metadata.joinpath("initial_mesoscope_positions.yaml"))
-                shutil.copy(mesoscope_positions_path, nas_metadata.joinpath("initial_mesoscope_positions.yaml"))
-                shutil.copy(mesoscope_positions_path, server_metadata.joinpath("initial_mesoscope_positions.yaml"))
+                sh.copy(mesoscope_positions_path, local_metadata.joinpath("initial_mesoscope_positions.yaml"))
+                sh.copy(mesoscope_positions_path, nas_metadata.joinpath("initial_mesoscope_positions.yaml"))
+                sh.copy(mesoscope_positions_path, server_metadata.joinpath("initial_mesoscope_positions.yaml"))
 
                 message = f"Initial animal data snapshot: Generated."
                 console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2109,22 +2127,9 @@ def run_train_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData(
-        project_name=project_name,
-        animal_id=animal_id,
-        surgery_sheet_id=project_configuration.surgery_sheet_id,
-        water_log_sheet_id=project_configuration.water_log_sheet_id,
-        session_type="Run training",
-        credentials_path=project_configuration.credentials_path,
-        local_root_directory=project_configuration.local_root_directory,
-        server_root_directory=project_configuration.server_root_directory,
-        nas_root_directory=project_configuration.nas_root_directory,
-        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+    session_data = SessionData.create_session(
+        animal_id=animal_id, session_type="Run training", project_configuration=project_configuration
     )
-
-    # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
-    # being able to run preprocessing on the data if runtime fails.
-    session_data.to_path()
 
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
@@ -2393,28 +2398,17 @@ def run_experiment_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData(
-        project_name=project_name,
+    session_data = SessionData.create_session(
         animal_id=animal_id,
-        experiment_name=experiment_name,
-        surgery_sheet_id=project_configuration.surgery_sheet_id,
-        water_log_sheet_id=project_configuration.water_log_sheet_id,
         session_type="Experiment",
-        credentials_path=project_configuration.credentials_path,
-        local_root_directory=project_configuration.local_root_directory,
-        server_root_directory=project_configuration.server_root_directory,
-        nas_root_directory=project_configuration.nas_root_directory,
-        mesoscope_root_directory=project_configuration.mesoscope_root_directory,
+        project_configuration=project_configuration,
+        experiment_name=experiment_name,
     )
 
     # Uses initialized SessionData instance to load the experiment configuration data
     experiment_configuration: ExperimentConfiguration = ExperimentConfiguration.from_yaml(  # type: ignore
-        file_path=session_data.experiment_configuration_path
+        file_path=Path(session_data.raw_data.experiment_configuration_path)
     )
-
-    # Dumps the SessionData information to the raw_data folder as a session_data.yaml file. This is a prerequisite for
-    # being able to run preprocessing on the data if runtime fails.
-    session_data.to_path()
 
     # Generates the runtime class and other assets
     # Pre-generates the SessionDescriptor class and populates it with experiment data.

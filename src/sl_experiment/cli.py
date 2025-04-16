@@ -4,6 +4,7 @@ from this library through the terminal."""
 from pathlib import Path
 
 import click
+from sl_shared_assets import SessionData, ProjectConfiguration
 
 from .experiment import (
     run_train_logic,
@@ -11,7 +12,6 @@ from .experiment import (
     run_experiment_logic,
     vr_maintenance_logic,
 )
-from .data_classes import SessionData, ProjectConfiguration, replace_root_path
 from .zaber_bindings import CRCCalculator, discover_zaber_devices
 from .data_preprocessing import purge_redundant_data, preprocess_session_data
 
@@ -374,7 +374,8 @@ def preprocess_session(session_path: Path) -> None:
     storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
     """
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
-    session_data = SessionData.from_path(path=session_path)  # Restores SessionData from the cache .yaml file.
+    # Restores SessionData from the cache .yaml file.
+    session_data = SessionData.load_session(session_path=session_path, on_server=False)
     preprocess_session_data(session_data)  # Runs the preprocessing logic.
 
 
@@ -423,25 +424,6 @@ def purge_data(project: str, remove_ubiquitin: bool, remove_telomere: bool) -> N
         remove_ubiquitin=remove_ubiquitin,
         remove_telomere=remove_telomere,
         local_root_path=Path(project_configuration.local_root_directory),
-        server_root_path=Path(project_configuration.server_root_directory),
-        mesoscope_root_path=Path(project_configuration.mesoscope_root_directory),
+        server_root_path=Path(project_configuration.local_server_directory),
+        mesoscope_root_path=Path(project_configuration.local_mesoscope_directory),
     )
-
-
-@click.command()
-@click.option(
-    "-p",
-    "--path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    required=True,
-    prompt="Enter the path to the new local directory where to store all project subdirectories: ",
-    help="The path to the new local directory where to store all project subdirectories.",
-)
-def replace_local_root_directory(path: str) -> None:
-    """Replaces the current local project root directory with the specified directory.
-
-    To ensure all projects are saved in the same location, this library statically resolves and saves the path to the
-    root directory in default user directory. Since this directory is typically hidden, this CLI can be used to
-    conveniently replace the local directory path, if necessary.
-    """
-    replace_root_path(path=Path(path))
