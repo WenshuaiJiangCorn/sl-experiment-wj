@@ -344,11 +344,11 @@ class _MesoscopeExperiment:
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
             headbar_port=project_configuration.headbar_port,
-            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
+            zaber_positions_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path),
         )
         self.LickPort: LickPort = LickPort(
             lickport_port=project_configuration.lickport_port,
-            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
+            zaber_positions_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path),
         )
 
     def start(self) -> None:
@@ -445,9 +445,9 @@ class _MesoscopeExperiment:
 
         # If previous mesoscope positions were saved, loads the coordinates and uses them to augment the message to the
         # user.
-        if Path(self._session_data.persistent_data.mesoscope_positions_path).exists():
+        if Path(self._session_data.vrpc_persistent_data.mesoscope_positions_path).exists():
             previous_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=Path(self._session_data.persistent_data.mesoscope_positions_path)
+                file_path=Path(self._session_data.vrpc_persistent_data.mesoscope_positions_path)
             )
             # Gives user time to mount the animal and requires confirmation before proceeding further.
             message = (
@@ -487,7 +487,7 @@ class _MesoscopeExperiment:
         # Forces the user to create the dot-alignment and cranial window screenshot on the ScanImage PC before
         # continuing.
         screenshots = [
-            screenshot for screenshot in Path(self._session_data.mesoscope_data.root_data_path).glob("*.png")
+            screenshot for screenshot in Path(self._session_data.mesoscope_data.meso_data_path).glob("*.png")
         ]
         while len(screenshots) != 1:
             message = (
@@ -501,7 +501,7 @@ class _MesoscopeExperiment:
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
             screenshots = [
-                screenshot for screenshot in Path(self._session_data.mesoscope_data.root_data_path).glob("*.png")
+                screenshot for screenshot in Path(self._session_data.mesoscope_data.meso_data_path).glob("*.png")
             ]
 
         # Transfers the screenshot to the mesoscope_frames folder of the session's raw_data folder
@@ -525,9 +525,9 @@ class _MesoscopeExperiment:
             lickport_y=lickport_positions[2],
         )
         # Removes the previous persisted file
-        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
+        Path(self._session_data.vrpc_persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path))
         zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -673,9 +673,9 @@ class _MesoscopeExperiment:
         # coordinates with the positions loaded from the persistent storage file. This way, if the user used the same
         # coordinates as last time, they do not need to update the mesoscope coordinates when manually editing the
         # descriptor.
-        if Path(self._session_data.persistent_data.mesoscope_positions_path).exists():
+        if Path(self._session_data.vrpc_persistent_data.mesoscope_positions_path).exists():
             sh.copy(
-                self._session_data.persistent_data.mesoscope_positions_path,
+                self._session_data.vrpc_persistent_data.mesoscope_positions_path,
                 self._session_data.raw_data.mesoscope_positions_path,
             )
         else:
@@ -700,9 +700,9 @@ class _MesoscopeExperiment:
             lickport_y=lickport_positions[2],
         )
         # Removes the previous persisted file
-        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
+        Path(self._session_data.vrpc_persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path))
         zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
@@ -777,7 +777,7 @@ class _MesoscopeExperiment:
             console.echo(message=message, level=LogLevel.ERROR)
             input("Enter anything to continue: ")
             mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=self._session_data.raw_data.mesoscope_positions_path,  # type: ignore
+                file_path=self._session_data.raw_data.mesoscope_positions_path,
             )
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
@@ -1109,11 +1109,11 @@ class _BehaviorTraining:
         # Initializes the binding classes for the HeadBar and LickPort manipulator motors.
         self.HeadBar: HeadBar = HeadBar(
             headbar_port=project_configuration.headbar_port,
-            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
+            zaber_positions_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path),
         )
         self.LickPort: LickPort = LickPort(
             lickport_port=project_configuration.lickport_port,
-            zaber_positions_path=Path(self._session_data.persistent_data.zaber_positions_path),
+            zaber_positions_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path),
         )
 
     def start(self) -> None:
@@ -1231,9 +1231,9 @@ class _BehaviorTraining:
             lickport_y=lickport_positions[2],
         )
         # Removes the previous persisted file
-        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
+        Path(self._session_data.vrpc_persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path))
         zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
         message = "HeadBar and LickPort positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1330,9 +1330,9 @@ class _BehaviorTraining:
             lickport_y=lickport_positions[2],
         )
         # Removes the previous persisted file
-        Path(self._session_data.persistent_data.zaber_positions_path).unlink(missing_ok=True)
+        Path(self._session_data.vrpc_persistent_data.zaber_positions_path).unlink(missing_ok=True)
         # Saves the newly generated file both to the persistent folder adn to the session folder
-        zaber_positions.to_yaml(file_path=Path(self._session_data.persistent_data.zaber_positions_path))
+        zaber_positions.to_yaml(file_path=Path(self._session_data.vrpc_persistent_data.zaber_positions_path))
         zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
 
         # Moves the LickPort to the mounting position to assist removing the animal from the rig.
@@ -1512,7 +1512,7 @@ def lick_training_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData.create_session(
+    session_data = SessionData.create(
         animal_id=animal_id, session_type="Lick training", project_configuration=project_configuration
     )
 
@@ -1609,7 +1609,7 @@ def lick_training_logic(
         delay_timer.reset()
         for delay in tqdm(
             reward_delays,
-            desc="Running lick training",
+            desc="Delivered water rewards",
             unit="reward",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
         ):
@@ -1685,7 +1685,7 @@ def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickp
     animal_id = input("Enter the id of the animal: ")
 
     # Initializes a new session using the ProjectConfiguration class and the input animal id
-    session_data = SessionData.create_session(
+    session_data = SessionData.create(
         animal_id=animal_id,
         project_configuration=configuration,
         session_type="Window checking",
@@ -1705,14 +1705,14 @@ def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickp
 
     # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
     zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
-    zaber_positions.to_yaml(file_path=Path(session_data.persistent_data.zaber_positions_path))
+    zaber_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.zaber_positions_path))
 
     message = f"HeadBar and LickPort position snapshot: Saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
     # is generated.
-    mesodata_path = Path(session_data.mesoscope_data.root_data_path)
+    mesodata_path = Path(session_data.mesoscope_data.meso_data_path)
     screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
     while len(screenshots) != 1:
         message = (
@@ -1761,7 +1761,7 @@ def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickp
         )
 
     # Dumps the updated data into the persistent_data folder of the animal
-    mesoscope_positions.to_yaml(file_path=Path(session_data.persistent_data.mesoscope_positions_path))
+    mesoscope_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.mesoscope_positions_path))
 
     # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline pulls the
     # surgery data into the raw_data folder and copies the session folder to the NAS and BioHPC server.
@@ -2117,7 +2117,7 @@ def run_train_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData.create_session(
+    session_data = SessionData.create(
         animal_id=animal_id, session_type="Run training", project_configuration=project_configuration
     )
 
@@ -2199,16 +2199,15 @@ def run_train_logic(
     )
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Creates a tqdm progress bar that tracks the overall training progress and communicates the current speed and
-    # duration threshold
+    # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
+    # delivered to the animal
     progress_bar = tqdm(
-        total=training_time,
-        desc="Run training progress",
-        unit="second",
+        total=maximum_water_volume,  # Volumes are tracked in milliliters
+        desc="Delivered water volume",
+        unit="ml",
     )
 
-    # Tracks the number of training seconds elapsed at each progress bar update. This is used to update the progress bar
-    # with each passing second of training.
+    # Tracks the data necessary to update the training progress bar
     previous_time = 0
 
     # Tracks when speed and / or duration thresholds are updated. This is necessary to redraw the threshold lines in
@@ -2267,6 +2266,11 @@ def run_train_logic(
             if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
                 runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
+                # 5 uL == 0.005 ml
+                # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
+                # purposefully does not track 'manual' water rewards.
+                progress_bar.update(0.005)
+
                 # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
                 # timer, this guards against animals that carry on running without consuming water rewards.
                 speed_timer.reset()
@@ -2275,12 +2279,20 @@ def run_train_logic(
             elif current_speed < speed_threshold:
                 speed_timer.reset()
 
-            # Updates the progress bar with each elapsed second. Note, this is technically not safe in case multiple
-            # seconds pass between reaching this conditional, but we know empirically that the loop will run at
-            # millisecond intervals, so it is not a concern.
+            # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
+            # track of elapsed training time.
             if runtime_timer.elapsed > previous_time:
-                previous_time = runtime_timer.elapsed  # Updates the previous time for the next progress bar update
-                progress_bar.update(1)
+                previous_time = runtime_timer.elapsed  # Updates previous time
+
+                # Updates the time display without advancing the progress bar
+                elapsed_minutes = int(runtime_timer.elapsed // 60)
+                elapsed_seconds = int(runtime_timer.elapsed % 60)
+                progress_bar.set_postfix_str(
+                    f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
+                )
+
+                # Refreshes the display to show updated time without changing progress
+                progress_bar.refresh()
 
             # Updates the visualizer plot
             visualizer.update()
@@ -2388,7 +2400,7 @@ def run_experiment_logic(
     project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
 
     # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData.create_session(
+    session_data = SessionData.create(
         animal_id=animal_id,
         session_type="Experiment",
         project_configuration=project_configuration,

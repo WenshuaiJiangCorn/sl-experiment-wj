@@ -1050,6 +1050,7 @@ class VideoSystems:
             the right side of the animal and the left VR screen.
     """
 
+    # noinspection PyTypeChecker
     def __init__(
         self,
         data_logger: DataLogger,

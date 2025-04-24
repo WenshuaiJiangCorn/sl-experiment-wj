@@ -961,6 +961,7 @@ class ValveInterface(ModuleInterface):
                 )
                 previous_volume = np.float64(self._valve_tracker.read_data(index=1, convert_output=False))
                 new_volume = previous_volume + delivered_volume
+                # noinspection PyTypeChecker
                 self._valve_tracker.write_data(index=1, data=new_volume)
         elif message.event == 54:
             console.echo(f"Valve Calibration: Complete")

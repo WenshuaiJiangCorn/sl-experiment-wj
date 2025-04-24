@@ -375,7 +375,7 @@ def preprocess_session(session_path: Path) -> None:
     """
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
     # Restores SessionData from the cache .yaml file.
-    session_data = SessionData.load_session(session_path=session_path, on_server=False)
+    session_data = SessionData.load(session_path=session_path, on_server=False)
     preprocess_session_data(session_data)  # Runs the preprocessing logic.
 
 

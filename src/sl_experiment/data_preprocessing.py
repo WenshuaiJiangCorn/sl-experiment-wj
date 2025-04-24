@@ -542,7 +542,7 @@ def _pull_mesoscope_data(
     """
     # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
     session_name = session_data.session_name
-    source = Path(session_data.mesoscope_data.session_specific_mesoscope_data_path)
+    source = Path(session_data.mesoscope_data.session_specific_path)
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -622,7 +622,7 @@ def _pull_mesoscope_data(
     # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
     # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
     # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = Path(session_data.persistent_data.motion_estimator_path)
+    persistent_motion_estimator_path = Path(session_data.scanimagepc_persistent_data.motion_estimator_path)
     if not persistent_motion_estimator_path.exists():
         sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
@@ -696,7 +696,7 @@ def _preprocess_mesoscope_directory(
             number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
-    image_directory = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")  # type: ignore
+    image_directory = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
 
     # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
     # acquired at all. Aborts processing early.
@@ -1066,7 +1066,7 @@ def preprocess_session_data(session_data: SessionData) -> None:
     # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
     # session.
     general_path = Path(session_data.mesoscope_data.mesoscope_data_path)
-    session_specific_path = Path(session_data.mesoscope_data.session_specific_mesoscope_data_path)
+    session_specific_path = Path(session_data.mesoscope_data.session_specific_path)
 
     # Note, the renaming only happens if the session-specific cache does not exist, the general
     # mesoscope_frames cache exists, and it is not empty (has files inside).
