@@ -404,7 +404,6 @@ def _generate_ops(
         "nchannels": nchannels,
         "nrois": roi_rows.shape[1],
         "mesoscan": 1,
-        "num_workers_roi": -1,  # Could not find where this is used, if at all, so it is kep just in case it is relevant
     }
 
     # When the config is generated for a mesoscope scan, stores ROI offsets (dx, dy) and line indices (lines) for
