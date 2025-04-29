@@ -2418,7 +2418,7 @@ def run_experiment_logic(
     if not console.enabled:
         console.enable()
 
-    message = f"Initializing lick training runtime..."
+    message = f"Initializing {experiment_name} experiment runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
     # Uses project name to load the project configuration data
