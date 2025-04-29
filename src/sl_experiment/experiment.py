@@ -736,10 +736,10 @@ class _MesoscopeExperiment:
         input("Enter anything to continue: ")
 
         # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
-        descriptor: MesoscopeExperimentDescriptor = self.descriptor.from_yaml(  # type: ignore
-            Path(file_path=self._session_data.raw_data.session_descriptor_path)
+        self.descriptor = MesoscopeExperimentDescriptor.from_yaml(  # type: ignore
+            file_path=Path(self._session_data.raw_data.session_descriptor_path)
         )
-        while "Replace this with your notes." in descriptor.experimenter_notes:
+        while "Replace this with your notes." in self.descriptor.experimenter_notes:
             message = (
                 "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
                 "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
@@ -750,8 +750,8 @@ class _MesoscopeExperiment:
             input("Enter anything to continue: ")
 
             # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            descriptor = self.descriptor.from_yaml(
-                file_path=self._session_data.raw_data.session_descriptor_path,  # type: ignore
+            self.descriptor = MesoscopeExperimentDescriptor.from_yaml(  # type: ignore
+                file_path=Path(self._session_data.raw_data.session_descriptor_path),
             )
 
         # Forces the user to update the mesoscope positions file with current mesoscope data. This is only triggered if
@@ -759,8 +759,8 @@ class _MesoscopeExperiment:
         # as reusing the same mesoscope positions over days is desirable and, likely, the positions will not change
         # day to day. In that case, the code above will automatically re-save the same positions as used for the
         # previous session, making user intervention unnecessary.
-        mesoscope_positions = MesoscopePositions.from_yaml(
-            file_path=self._session_data.raw_data.mesoscope_positions_path,  # type: ignore
+        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
         )
         while (
             mesoscope_positions.mesoscope_x_position == 0.0
@@ -777,7 +777,7 @@ class _MesoscopeExperiment:
             console.echo(message=message, level=LogLevel.ERROR)
             input("Enter anything to continue: ")
             mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=self._session_data.raw_data.mesoscope_positions_path,
+                file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
             )
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
