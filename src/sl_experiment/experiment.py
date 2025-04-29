@@ -968,9 +968,9 @@ class _MesoscopeExperiment:
             console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
 
-            message = f"Runtime aborted due to user request."
-            console.error(message=message, error=RuntimeError)
-            raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+        message = f"Runtime aborted due to user request."
+        console.error(message=message, error=RuntimeError)
+        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
     def _change_vr_state(self, new_state: int) -> None:
         """Updates and logs the new VR state.
