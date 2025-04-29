@@ -864,51 +864,64 @@ class _MesoscopeExperiment:
         Returns:
             The NumPy array that stores the sequence of virtual reality segments as byte (uint8) values.
 
+        Notes:
+            This method contains an infinite loop that allows retrying the failed connection. This prevents the runtime
+            from aborting unless the user purposefully chooses the hard abort option.
+
         Raises:
-            RuntimeError: If no response from Unity is received within 2 seconds or if Unity sends a message to an
-                unexpected (different) topic other than "CueSequence/" while this method is running.
+            RuntimeError: If Unity sends a message to an unexpected (different) topic other than "CueSequence/" while
+                this method is running. Also, if the user chooses to abort the runtime if the method does not receive a
+                response from Unity in 2 seconds.
         """
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
         timeout_timer = PrecisionTimer("s")
 
-        # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
-        self._unity.send_data(topic="CueSequenceTrigger/")
+        status = False
+        outcome = ""
+        # The procedure will be repeated until it succeeds or the user manually aborts the loop
+        while not status and outcome != "abort":
 
-        # Waits at most 2 seconds to receive the response
-        timeout_timer.reset()
-        while timeout_timer.elapsed < 2:
-            # If Unity responds with the cue sequence message, attempts to parse the message
-            if self._unity.has_data:
-                topic: str
-                payload: bytes
-                topic, payload = self._unity.get_data()  # type: ignore
-                if topic == "CueSequence/":
-                    # Extracts the sequence of cues that will be used during task runtime.
-                    sequence: NDArray[np.uint8] = np.array(
-                        json.loads(payload.decode("utf-8"))["cue_sequence"], dtype=np.uint8
-                    )
-                    return sequence
+            # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
+            self._unity.send_data(topic="CueSequenceTrigger/")
 
-                else:
-                    # If the topic is not "CueSequence/", aborts with an error
-                    message = (
-                        f"Received an unexpected topic {topic} while waiting for Unity to respond to the cue sequence "
-                        f"request. Make sure the Unity is not configured to send data to other topics monitored by the "
-                        f"MesoscopeExperiment instance until the cue sequence is resolved as part of the start() "
-                        f"method runtime."
-                    )
-                    console.error(message=message, error=RuntimeError)
+            # Waits at most 2 seconds to receive the response
+            timeout_timer.reset()
+            while timeout_timer.elapsed < 2:
+                # If Unity responds with the cue sequence message, attempts to parse the message
+                if self._unity.has_data:
+                    topic: str
+                    payload: bytes
+                    topic, payload = self._unity.get_data()  # type: ignore
+                    if topic == "CueSequence/":
+                        # Extracts the sequence of cues that will be used during task runtime.
+                        sequence: NDArray[np.uint8] = np.array(
+                            json.loads(payload.decode("utf-8"))["cue_sequence"], dtype=np.uint8
+                        )
+                        return sequence
 
-        # If the loop above is escaped, this is due to not receiving any message from Unity. Raises an error.
-        message = (
-            f"The MesoscopeExperiment has requested the task Cue Sequence by sending the trigger to the "
-            f"'CueSequenceTrigger/' topic and received no response for 2 seconds. It is likely that the Unity game "
-            f"engine is not running or is not configured to work with MesoscopeExperiment."
-        )
+                    else:
+                        # If the topic is not "CueSequence/", aborts with an error
+                        message = (
+                            f"Received an unexpected topic {topic} while waiting for Unity to respond to the cue "
+                            f"sequence request. Make sure the Unity is not configured to send data to other topics "
+                            f"monitored by the MesoscopeExperiment instance until the cue sequence is resolved as part "
+                            f"of the start() method runtime."
+                        )
+                        console.error(message=message, error=RuntimeError)
+
+            # If the loop above is escaped, this is due to not receiving any message from Unity. Raises an error.
+            message = (
+                f"The MesoscopeExperiment has requested the task Cue Sequence by sending the trigger to the "
+                f"'CueSequenceTrigger/' topic and received no response for 2 seconds. It is likely that the Unity game "
+                f"engine is not running or is not configured to work with MesoscopeExperiment. Make sure Unity Game "
+                f"engine is started and configured before continuing."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+
+        message = f"Runtime aborted due to user request."
         console.error(message=message, error=RuntimeError)
-
-        # This backup statement should not be reached, it is here to appease mypy
-        raise RuntimeError(message)  # pragma: no cover
+        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
     def _start_mesoscope(self) -> None:
         """Sends the frame acquisition start TTL pulse to the mesoscope and waits for the frame acquisition to begin.
@@ -917,35 +930,47 @@ class _MesoscopeExperiment:
         process. It is also used to verify that the mesoscope is available and properly configured to acquire frames
         based on the input triggers.
 
+        Notes:
+            This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
+            prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
+
         Raises:
             RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
-                acquisition trigger is sent.
+                acquisition trigger is sent and the user chooses to abort the runtime.
         """
 
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
         timeout_timer = PrecisionTimer("s")
 
-        # Instructs the mesoscope to begin acquiring frames
-        self._microcontrollers.start_mesoscope()
+        status = False
+        outcome = ""
+        # The procedure will be repeated until it succeeds or the user manually aborts the loop
+        while not status and outcome != "abort":
 
-        # Waits at most 2 seconds for the mesoscope to begin sending frame acquisition timestamps to the PC
-        timeout_timer.reset()
-        while timeout_timer.elapsed < 2:
-            # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
-            # acquisition.
-            if self._microcontrollers.mesoscope_frame_count:
-                return
+            # Instructs the mesoscope to begin acquiring frames
+            self._microcontrollers.start_mesoscope()
 
-        # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
-        message = (
-            f"The MesoscopeExperiment has requested the mesoscope to start acquiring frames and received no frame "
-            f"acquisition trigger for 2 seconds. It is likely that the mesoscope has not been armed for frame "
-            f"acquisition or that the mesoscope trigger or frame timestamp connection is not functional."
-        )
-        console.error(message=message, error=RuntimeError)
+            # Waits at most 2 seconds for the mesoscope to begin sending frame acquisition timestamps to the PC
+            timeout_timer.reset()
+            while timeout_timer.elapsed < 2:
+                # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
+                # acquisition.
+                if self._microcontrollers.mesoscope_frame_count:
+                    return
 
-        # This code is here to appease mypy. It should not be reachable
-        raise RuntimeError(message)  # pragma: no cover
+            # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
+            message = (
+                f"The MesoscopeExperiment has requested the mesoscope to start acquiring frames and received no frame "
+                f"acquisition trigger for 2 seconds. It is likely that the mesoscope has not been armed for frame "
+                f"acquisition or that the mesoscope trigger or frame timestamp connection is not functional. Make sure "
+                f"the Mesoscope is configured for data acquisition before continuing."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+
+            message = f"Runtime aborted due to user request."
+            console.error(message=message, error=RuntimeError)
+            raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
     def _change_vr_state(self, new_state: int) -> None:
         """Updates and logs the new VR state.
@@ -1358,8 +1383,8 @@ class _BehaviorTraining:
             f"Open the session descriptor file stored in session's raw_data folder and "
             f"update the notes session with the notes taken during runtime. Then, uninstall the mesoscope objective "
             f"and remove the animal from the VR rig. Failure to do so may DAMAGE the mesoscope objective and HARM the "
-            f"animal. This is the last manual checkpoint, once you hit 'y,' it is safe to start preparing for the next "
-            f"session."
+            f"animal. This is the last manual checkpoint, once it is passed, it is safe to start preparing for the "
+            f"next session."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -2202,7 +2227,7 @@ def run_train_logic(
     # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
     # delivered to the animal
     progress_bar = tqdm(
-        total=maximum_water_volume,  # Volumes are tracked in milliliters
+        total=round(maximum_water_volume, ndigits=3),  # Volumes are tracked in milliliters
         desc="Delivered water volume",
         unit="ml",
     )
