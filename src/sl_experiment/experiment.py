@@ -1686,6 +1686,9 @@ def lick_training_logic(
             if unconsumed_count < maximum_unconsumed_rewards:
                 # If the animal did not accumulate the critical number of unconsumed rewards, delivers the reward.
                 runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+                # Increments the unconsumed reward count each time a rewards is delivered
+                unconsumed_count += 1
             delay_timer.reset()
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
@@ -2354,6 +2357,9 @@ def run_train_logic(
                     # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
                     # purposefully does not track 'manual' water rewards.
                     progress_bar.update(0.005)
+
+                    # Increments the unconsumed reward count each time a rewards is delivered
+                    unconsumed_count += 1
 
                 # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
                 # timer, this guards against animals that carry on running without consuming water rewards.
