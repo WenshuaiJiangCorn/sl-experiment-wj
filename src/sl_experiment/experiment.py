@@ -1404,7 +1404,7 @@ class _BehaviorTraining:
             input("Enter anything to continue: ")
 
             # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            descriptor = self.descriptor.from_yaml(file_path=self._session_data.session_descriptor_path)  # type: ignore
+            descriptor = self.descriptor.from_yaml(file_path=self._session_data.raw_data.session_descriptor_path)  # type: ignore
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel

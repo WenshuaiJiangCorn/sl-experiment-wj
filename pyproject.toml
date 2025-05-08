@@ -67,7 +67,7 @@ dependencies = [
     "pyarrow>=19,<20",
     "pynput>=1,<2",
     "appdirs>=1,<2",
-    "sl-shared-assets==1.0.0rc15",
+    "sl-shared-assets==1.0.0rc16",
 ]
 
 [project.urls]
