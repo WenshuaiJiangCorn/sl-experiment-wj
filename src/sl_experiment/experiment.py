@@ -880,7 +880,6 @@ class _MesoscopeExperiment:
         outcome = ""
         # The procedure will be repeated until it succeeds or the user manually aborts the loop
         while not status and outcome != "abort":
-
             # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
             self._unity.send_data(topic="CueSequenceTrigger/")
 
@@ -946,7 +945,6 @@ class _MesoscopeExperiment:
         outcome = ""
         # The procedure will be repeated until it succeeds or the user manually aborts the loop
         while not status and outcome != "abort":
-
             # Instructs the mesoscope to begin acquiring frames
             self._microcontrollers.start_mesoscope()
 
@@ -1506,6 +1504,7 @@ def lick_training_logic(
     maximum_reward_delay: int = 18,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
+    maximum_unconsumed_rewards: int = 3,
 ) -> None:
     """Encapsulates the logic used to train animals to operate the lick port.
 
@@ -1525,6 +1524,10 @@ def lick_training_logic(
         maximum_reward_delay: The maximum time, in seconds, that can pass between delivering two consecutive rewards.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
+        maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
+            them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
+            If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
+            the animal has to consume all rewards before getting the next reward.
     """
     # Enables the console
     if not console.enabled:
@@ -1550,6 +1553,7 @@ def lick_training_logic(
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
         dispensed_water_volume_ml=0.00,
+        maximum_unconsumed_rewards=maximum_unconsumed_rewards,
     )
 
     # Initializes the main runtime interface class.
@@ -1629,6 +1633,14 @@ def lick_training_logic(
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
 
+    # Initializes assets used to ensure that the animal consumes delivered water rewards.
+    if maximum_unconsumed_rewards < 1:
+        # If the maximum unconsumed reward count is below 1, disables the feature by setting the number to match the
+        # number of rewards to be delivered.
+        maximum_unconsumed_rewards = len(reward_delays)
+    unconsumed_count = 0
+    previous_licks = 0
+
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     try:
         delay_timer.reset()
@@ -1644,6 +1656,12 @@ def lick_training_logic(
                 # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
                 # interest and appear visually smooth to human observers.
                 visualizer.update()
+
+                # If the animal licks during the delay period, this is interpreted as the animal consuming the previous
+                # and any other leftover rewards.
+                if previous_licks < visualizer.lick_count:
+                    previous_licks = visualizer.lick_count
+                    unconsumed_count = 0
 
                 # If the listener detects the default abort sequence, terminates the runtime.
                 if listener.exit_signal:
@@ -1664,8 +1682,10 @@ def lick_training_logic(
                 break  # Breaks the for loop
 
             # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the
-            # next reward delay
-            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+            # next reward delay, unless unconsumed reward guard kicks in.
+            if unconsumed_count < maximum_unconsumed_rewards:
+                # If the animal did not accumulate the critical number of unconsumed rewards, delivers the reward.
+                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
             delay_timer.reset()
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
@@ -2096,6 +2116,8 @@ def run_train_logic(
     increase_threshold: float = 0.1,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
+    maximum_idle_time: float = 0.5,
+    maximum_unconsumed_rewards: int = 3,
 ) -> None:
     """Encapsulates the logic used to train animals to run on the wheel treadmill while being head-fixed.
 
@@ -2130,6 +2152,15 @@ def run_train_logic(
             maximum training time is not reached.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
+        maximum_idle_time: The maximum time, in seconds, the animal's speed can be below the speed threshold to
+            still receive water rewards. This parameter is designed to help animals with a distinct 'step' pattern to
+            not lose water rewards due to taking many large steps, rather than continuously running at a stable speed.
+            This parameter allows the speed to dip below the threshold for at most this number of seconds, for the
+            'running epoch' to not be interrupted.
+        maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
+            them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
+            If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
+            the animal has to consume all rewards before getting the next reward.
     """
     # Enables the console
     if not console.enabled:
@@ -2158,6 +2189,8 @@ def run_train_logic(
         run_duration_increase_step_s=duration_increase_step,
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
+        maximum_unconsumed_rewards=maximum_unconsumed_rewards,
+        maximum_idle_time_s=maximum_idle_time,
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
     )
@@ -2173,6 +2206,24 @@ def run_train_logic(
     # Initializes the timers used during runtime
     runtime_timer = PrecisionTimer("s")
     speed_timer = PrecisionTimer("ms")
+
+    # Initializes assets used to guard against interrupting run epochs for mice that take many large steps. For mice
+    # with a distinct walking pattern of many very large steps, the speed transiently dips below the threshold for a
+    # very brief moment of time, flagging the epoch as unrewarded. To avoid this issue, instead of interrupting the
+    # epoch outright, we now allow the speed to be below the threshold for a short period of time. These assets
+    # help with that task pattern.
+    epoch_timer = PrecisionTimer("ms")
+    epoch_timer_engaged: bool = False
+    maximum_idle_time = max(0.0, maximum_idle_time)  # Ensures positive values or zero
+    maximum_idle_time *= 1000  # Converts to milliseconds
+
+    # Initializes assets used to ensure that the animal consumes delivered water rewards.
+    if maximum_unconsumed_rewards < 1:
+        # If the maximum unconsumed reward count is below 1, disables the feature by setting the number to match the
+        # maximum number of rewards that can possibly be delivered during runtime.
+        maximum_unconsumed_rewards = int(np.ceil(maximum_water_volume / 0.005))
+    previous_licks = 0
+    unconsumed_count = 0
 
     # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
     # optimize main loop runtime speed:
@@ -2284,25 +2335,57 @@ def run_train_logic(
             # computation and uses it to determine whether the animal is performing above the threshold.
             current_speed = visualizer.running_speed
 
+            # If the animal licks during the period that separates two rewards, this is interpreted as the animal
+            # consuming the previous and any other leftover rewards.
+            if previous_licks < visualizer.lick_count:
+                previous_licks = visualizer.lick_count
+                unconsumed_count = 0
+
             # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
             # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
             # not yet maintained the required duration, the loop will keep cycling and accumulating the timer count.
             # This is done until the animal either reaches the required duration or drops below the speed threshold.
             if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
-                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+                # Only issues the rewards if the unconsumed reward counter is below the threshold.
+                if unconsumed_count < maximum_unconsumed_rewards:
+                    runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
-                # 5 uL == 0.005 ml
-                # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
-                # purposefully does not track 'manual' water rewards.
-                progress_bar.update(0.005)
+                    # 5 uL == 0.005 ml
+                    # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
+                    # purposefully does not track 'manual' water rewards.
+                    progress_bar.update(0.005)
 
                 # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
                 # timer, this guards against animals that carry on running without consuming water rewards.
                 speed_timer.reset()
 
-            # If the current speed is below the speed threshold, resets the speed timer.
+                # If the epoch timer was active for the current epoch, resets the timer
+                epoch_timer_engaged = False
+
+            # If the current speed is below the speed threshold, acts depending on whether the runtime is configured to
+            # allow dipping below the threshold
             elif current_speed < speed_threshold:
-                speed_timer.reset()
+                # If the user did not allow dipping below the speed threshold, resets the run duration timer.
+                if maximum_idle_time == 0:
+                    speed_timer.reset()
+
+                # If the user has enabled brief dips below the speed threshold, starts the epoch timer to ensure the
+                # animal recovers the speed in the allotted time.
+                elif not epoch_timer_engaged:
+                    epoch_timer.reset()
+                    epoch_timer_engaged = True
+
+                # If epoch timer is enabled, checks whether the animal has failed to recover its running speed in time.
+                # If so, resets the run duration timer.
+                elif epoch_timer.elapsed >= maximum_idle_time:
+                    speed_timer.reset()
+                    epoch_timer_engaged = False
+
+            # If the animal is maintaining the required speed and the epoch timer was activated by the animal dipping
+            # below the speed threshold, deactivates the timer. This is essential for ensuring the 'step discount'
+            # time is applied to each case of speed dipping below the speed threshold, rather than the entire run epoch.
+            elif epoch_timer_engaged and current_speed >= speed_threshold and speed_timer.elapsed < duration_threshold:
+                epoch_timer_engaged = False
 
             # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
             # track of elapsed training time.

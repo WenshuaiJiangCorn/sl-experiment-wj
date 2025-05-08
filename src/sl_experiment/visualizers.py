@@ -441,3 +441,8 @@ class BehaviorVisualizer:
     def running_speed(self) -> np.float64:
         """Returns the current running speed of the animal, calculated over the window of the last 100 milliseconds."""
         return self._running_speed
+
+    @property
+    def lick_count(self) -> int:
+        """Returns the current lick count of the animal, monotonically incremented each time a lick is detected."""
+        return int(self._previous_lick_count)

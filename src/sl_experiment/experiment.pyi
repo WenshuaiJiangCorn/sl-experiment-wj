@@ -231,9 +231,14 @@ class _MesoscopeExperiment:
         Returns:
             The NumPy array that stores the sequence of virtual reality segments as byte (uint8) values.
 
+        Notes:
+            This method contains an infinite loop that allows retrying the failed connection. This prevents the runtime
+            from aborting unless the user purposefully chooses the hard abort option.
+
         Raises:
-            RuntimeError: If no response from Unity is received within 2 seconds or if Unity sends a message to an
-                unexpected (different) topic other than "CueSequence/" while this method is running.
+            RuntimeError: If Unity sends a message to an unexpected (different) topic other than "CueSequence/" while
+                this method is running. Also, if the user chooses to abort the runtime if the method does not receive a
+                response from Unity in 2 seconds.
         """
     def _start_mesoscope(self) -> None:
         """Sends the frame acquisition start TTL pulse to the mesoscope and waits for the frame acquisition to begin.
@@ -242,9 +247,13 @@ class _MesoscopeExperiment:
         process. It is also used to verify that the mesoscope is available and properly configured to acquire frames
         based on the input triggers.
 
+        Notes:
+            This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
+            prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
+
         Raises:
             RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
-                acquisition trigger is sent.
+                acquisition trigger is sent and the user chooses to abort the runtime.
         """
     def _change_vr_state(self, new_state: int) -> None:
         """Updates and logs the new VR state.
@@ -391,6 +400,7 @@ def lick_training_logic(
     maximum_reward_delay: int = 18,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
+    maximum_unconsumed_rewards: int = 3,
 ) -> None:
     """Encapsulates the logic used to train animals to operate the lick port.
 
@@ -410,6 +420,10 @@ def lick_training_logic(
         maximum_reward_delay: The maximum time, in seconds, that can pass between delivering two consecutive rewards.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
+        maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
+            them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
+            If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
+            the animal has to consume all rewards before getting the next reward.
     """
 
 def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickport: LickPort) -> None:
@@ -459,6 +473,8 @@ def run_train_logic(
     increase_threshold: float = 0.1,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
+    maximum_idle_time: float = 0.5,
+    maximum_unconsumed_rewards: int = 3,
 ) -> None:
     """Encapsulates the logic used to train animals to run on the wheel treadmill while being head-fixed.
 
@@ -493,6 +509,15 @@ def run_train_logic(
             maximum training time is not reached.
         maximum_water_volume: The maximum volume of water, in milliliters, that can be delivered during this runtime.
         maximum_training_time: The maximum time, in minutes, to run the training.
+        maximum_idle_time: The maximum time, in seconds, the animal's speed can be below the speed threshold to
+            still receive water rewards. This parameter is designed to help animals with a distinct 'step' pattern to
+            not lose water rewards due to taking many large steps, rather than continuously running at a stable speed.
+            This parameter allows the speed to dip below the threshold for at most this number of seconds, for the
+            'running epoch' to not be interrupted.
+        maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
+            them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
+            If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
+            the animal has to consume all rewards before getting the next reward.
     """
 
 def run_experiment_logic(

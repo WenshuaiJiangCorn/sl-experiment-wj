@@ -30,6 +30,7 @@ def lick_training(
     maximum_delay: int,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -62,6 +63,8 @@ def run_training(
     duration_step: float,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
+    maximum_idle_time: int,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 

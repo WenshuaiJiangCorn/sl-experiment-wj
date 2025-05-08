@@ -102,6 +102,17 @@ def list_devices(errors: bool) -> None:
     default=20,
     help="The maximum time to run the training, in minutes.",
 )
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=3,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
 def lick_training(
     user: str,
     animal: str,
@@ -111,6 +122,7 @@ def lick_training(
     maximum_delay: int,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -127,6 +139,7 @@ def lick_training(
         maximum_reward_delay=maximum_delay,
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
+        maximum_unconsumed_rewards=unconsumed_rewards,
     )
 
 
@@ -252,6 +265,28 @@ def maintain_vr(project: str) -> None:
     default=20,
     help="The maximum time to run the training, in minutes.",
 )
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=3,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
+@click.option(
+    "-mit",
+    "--maximum_idle_time",
+    type=int,
+    show_default=True,
+    default=0.5,
+    help=(
+        "The maximum time, in seconds, the animal is allowed to maintain speed that is below the speed threshold, to"
+        "still be rewarded. Set to 0 to disable allowing the animal to temporarily dip below running speed threshold."
+    ),
+)
 def run_training(
     user: str,
     project: str,
@@ -264,6 +299,8 @@ def run_training(
     duration_step: float,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
+    maximum_idle_time: int,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 
@@ -287,6 +324,8 @@ def run_training(
         increase_threshold=increase_threshold,
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
+        maximum_unconsumed_rewards=unconsumed_rewards,
+        maximum_idle_time=maximum_idle_time,
     )
 
 
