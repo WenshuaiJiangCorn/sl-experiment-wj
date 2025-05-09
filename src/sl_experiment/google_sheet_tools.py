@@ -13,7 +13,7 @@ from datetime import (
 )
 
 from sl_shared_assets import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
-from ataraxis_base_utilities import console
+from ataraxis_base_utilities import LogLevel, console
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
@@ -710,7 +710,9 @@ class WaterSheetData:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
-    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_name: str) -> None:
+    def update_water_log(
+        self, mouse_weight: float, water_ml: float, experimenter_id: str, session_type: str, session_date: str
+    ) -> None:
         """Updates the water restriction log for the managed animal with today's training or experiment data.
 
         This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water
@@ -728,24 +730,26 @@ class WaterSheetData:
             water_ml: The combined volume of water, in milliliters, given to the animal automatically (during runtime)
                 and manually (by the experimenter, after runtime).
             experimenter_id: The ID of the experimenter running the training or experiment session.
-            session_name: The name (type) of the training or experiment session. This is written to the 'behavior'
+            session_type: The type of the training or experiment session. This is written to the 'behavior'
                 column to describe the type of activity performed by the animal during runtime.
+            session_date: The date of the session. Date is used as the 'id' of each session in the format
+                YYYY-MM-DD-HH-MM-SS-US, so setting this to session name (id) is the expected behavior.
         """
-        # Gets today's date
-        today = datetime.now().strftime("%-m/%-d/%y")
+        # Parses the session's date and converts it into the format used in the log files
+        dt = datetime.strptime(session_date, "%Y-%m-%d-%H-%M-%S-%f")
+        formatted_date = dt.strftime("%-m/%-d/%y")
+        # Gets the session's time in the same format as used in row 3 (baseline row)
+        current_time = dt.strftime("%H:%M")
 
-        # Finds the row inside the water restriction log file with today's date. This assumes that the log file is
+        # Finds the row inside the water restriction log file with session's date. This assumes that the log file is
         # pre-filled with dates.
-        row_index = self._find_date_row(today)
-
-        # Gets the current time in the same format as used in row 3 (baseline row)
-        current_time = datetime.now().strftime("%H:%M")
+        row_index = self._find_date_row(formatted_date)
 
         # Writes each value to the appropriate column, using the same formatting as used in row 3
         self._write_value("weight (g)", row_index, mouse_weight)
         self._write_value("given by:", row_index, experimenter_id)
         self._write_value("water given (ml)", row_index, water_ml)
-        self._write_value("behavior", row_index, session_name)
+        self._write_value("behavior", row_index, session_type)
         self._write_value("time", row_index, current_time)
 
     def _find_date_row(self, target_date: str) -> int:
@@ -765,30 +769,42 @@ class WaterSheetData:
         # Gets the date column letter
         date_column = self._headers["date"]
 
-        # Retrieves all dates from the date column (row 3 and below)
-        date_data = (
-            self._service.spreadsheets()
-            .values()
-            .get(spreadsheetId=self._sheet_id, range=f"'{self._animal_id}'!{date_column}3:{date_column}")
-            .execute()
-        )
-        date_values = date_data.get("values", [])
-
-        # Finds the row with the target date
-        row_index = -1
-        for i, date_cell in enumerate(date_values):
-            # Checks if the cell has a value matching the target date
-            if date_cell and date_cell[0] == target_date:
-                # Adds 3 to account for 0-indexing and the fact we started from row 3
-                row_index = i + 3
-                break
-        else:
-            message = (
-                f"No row found for date {target_date} in the water restriction log file for the animal "
-                f"{self._animal_id}. The water restriction log must be pre-filled with dates at least up to today's "
-                f"date for this class to function."
+        while True:
+            # Retrieves all dates from the date column (row 3 and below)
+            date_data = (
+                self._service.spreadsheets()
+                .values()
+                .get(spreadsheetId=self._sheet_id, range=f"'{self._animal_id}'!{date_column}3:{date_column}")
+                .execute()
             )
-            console.error(message, error=ValueError)
+            date_values = date_data.get("values", [])
+
+            # Finds the row with the target date
+            row_index = -1
+            for i, date_cell in enumerate(date_values):
+                # Checks if the cell has a value matching the target date
+                if date_cell and date_cell[0] == target_date:
+                    # Adds 3 to account for 0-indexing and the fact we started from row 3
+                    row_index = i + 3
+                    break
+            else:
+                message = (
+                    f"Unable to find the row for the target date {target_date} inside the water restriction log "
+                    f"sheet. This indicates that the log has not been filled with dates up to the requested date. "
+                    f"Modify the sheet to contain the required date and try again."
+                )
+                console.echo(message=message, level=LogLevel.WARNING)
+                response = input("Enter anything to retry. Enter 'a' to abort: ").lower()
+                if response == "a":
+                    message = (
+                        f"No row found for date {target_date} in the water restriction log file for the animal "
+                        f"{self._animal_id}. The water restriction log must be pre-filled with dates at least up to "
+                        f"the requested date."
+                    )
+                    console.error(message, error=ValueError)  # Aborts with an error
+                    raise ValueError(message)  # Fallback to appease mypy, should not be reachable.
+                continue  # Cycles the while loop if the user chooses to retry
+            break  # Breaks the while loop if the row is found
 
         return row_index
 

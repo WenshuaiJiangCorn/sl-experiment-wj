@@ -211,7 +211,9 @@ class WaterSheetData:
     def __init__(self, animal_id: int, credentials_path: Path, sheet_id: str) -> None: ...
     def __del__(self) -> None:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
-    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_name: str) -> None:
+    def update_water_log(
+        self, mouse_weight: float, water_ml: float, experimenter_id: str, session_type: str, session_date: str
+    ) -> None:
         """Updates the water restriction log for the managed animal with today's training or experiment data.
 
         This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water
@@ -229,8 +231,10 @@ class WaterSheetData:
             water_ml: The combined volume of water, in milliliters, given to the animal automatically (during runtime)
                 and manually (by the experimenter, after runtime).
             experimenter_id: The ID of the experimenter running the training or experiment session.
-            session_name: The name (type) of the training or experiment session. This is written to the 'behavior'
+            session_type: The type of the training or experiment session. This is written to the 'behavior'
                 column to describe the type of activity performed by the animal during runtime.
+            session_date: The date of the session. Date is used as the 'id' of each session in the format
+                YYYY-MM-DD-HH-MM-SS-US, so setting this to session name (id) is the expected behavior.
         """
     def _find_date_row(self, target_date: str) -> int:
         """Finds the row index inside the manged water restriction log file containing the target date.

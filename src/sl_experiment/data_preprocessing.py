@@ -1010,7 +1010,8 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
             mouse_weight=descriptor.mouse_weight_g,
             water_ml=total_water,
             experimenter_id=descriptor.experimenter,
-            session_name=session_data.session_type,
+            session_type=session_data.session_type,
+            session_date=session_data.session_name,
         )
 
         message = f"Water restriction log entry: written."
