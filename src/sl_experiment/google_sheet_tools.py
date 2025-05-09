@@ -12,6 +12,7 @@ from datetime import (
     timezone,
 )
 
+import pytz
 from sl_shared_assets import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
 from ataraxis_base_utilities import LogLevel, console
 from googleapiclient.discovery import build
@@ -737,9 +738,15 @@ class WaterSheetData:
         """
         # Parses the session's date and converts it into the format used in the log files
         dt = datetime.strptime(session_date, "%Y-%m-%d-%H-%M-%S-%f")
-        formatted_date = dt.strftime("%-m/%-d/%y")
+
+        # Session timestamps are in UTC, but our log uses eastern time for user convenience. Converts the date to
+        # ET
+        eastern = pytz.timezone("US/Eastern")
+        dt_eastern = dt.astimezone(eastern)
+
+        formatted_date = dt_eastern.strftime("%-m/%-d/%y")
         # Gets the session's time in the same format as used in row 3 (baseline row)
-        current_time = dt.strftime("%H:%M")
+        current_time = dt_eastern.strftime("%H:%M")
 
         # Finds the row inside the water restriction log file with session's date. This assumes that the log file is
         # pre-filled with dates.
