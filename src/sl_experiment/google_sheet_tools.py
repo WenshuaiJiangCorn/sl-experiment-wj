@@ -738,6 +738,7 @@ class WaterSheetData:
         """
         # Parses the session's date and converts it into the format used in the log files
         dt = datetime.strptime(session_date, "%Y-%m-%d-%H-%M-%S-%f")
+        dt = dt.replace(tzinfo=pytz.UTC)  # Marks the datetime as UTC
 
         # Session timestamps are in UTC, but our log uses eastern time for user convenience. Converts the date to
         # ET
