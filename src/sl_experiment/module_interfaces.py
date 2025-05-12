@@ -852,8 +852,8 @@ class ValveInterface(ModuleInterface):
         self, valve_calibration_data: tuple[tuple[int | float, int | float], ...], debug: bool = False
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
-        # kOpen, kClosed, kCalibrated, kToneOn, kToneOff
-        #  data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56)}
+        # kOpen, kClosed, kCalibrated, kToneOn, kToneOff, kTonePinNotSet
+        #  data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56), np.uint8(57)}
         data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
         mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
 
@@ -1114,6 +1114,45 @@ class ValveInterface(ModuleInterface):
             command=np.uint8(4),
             noblock=np.bool(False),
         )
+        self._input_queue.put(command)  # type: ignore
+
+    def tone(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False) -> None:
+        """Triggers ValveModule to an audible tone without changing the state of the managed valve.
+
+        This command will only work for ValveModules connected to a piezoelectric buzzer and configured to interface
+        with the buzzer's trigger pin. It allows emitting tones without water rewards, which is primarily used during
+        training runtimes that pause delivering water when the animal is not consuming rewards.
+
+        Notes:
+            While enforcing auditory tone durations is not as important as enforcing valve open times, this command
+            runs in blocking mode by default to match the behavior of the tone-emitting valve pulse command.
+
+        Args:
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
+                will only run once. The exact repetition delay will be further affected by other modules managed by the
+                same microcontroller and may not be perfectly accurate.
+            noblock: Determines whether the command should block the microcontroller while the tone is delivered or
+                not. Blocking ensures precise tone duration. Non-blocking allows the microcontroller to perform other
+                operations while waiting, increasing its throughput.
+        """
+        command: OneOffModuleCommand | RepeatedModuleCommand
+        if repetition_delay == 0:
+            command = OneOffModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(5),
+                noblock=np.bool(noblock),
+            )
+        else:
+            command = RepeatedModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(5),
+                noblock=np.bool(noblock),
+                cycle_delay=repetition_delay,
+            )
         self._input_queue.put(command)  # type: ignore
 
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:

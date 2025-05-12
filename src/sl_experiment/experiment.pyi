@@ -382,6 +382,12 @@ class _BehaviorTraining:
 
         This method is used by the training runtimes to reward the animal with water as part of the training process.
         """
+    def simulate_reward(self) -> None:
+        """Uses the buzzer controlled by the valve module to deliver an audible tone without delivering any water.
+
+        This method is used by the training runtimes when the animal refuses to consume water rewards. The tone notifies
+        the animal that it performs the training as expected, while simultaneously minimizing water reward wasting.
+        """
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
         """Returns the tracker SharedMemoryArrays for (in this order) the LickInterface, ValveInterface, and

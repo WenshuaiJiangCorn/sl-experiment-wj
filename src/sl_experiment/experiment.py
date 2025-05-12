@@ -1402,7 +1402,9 @@ class _BehaviorTraining:
             input("Enter anything to continue: ")
 
             # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            descriptor = self.descriptor.from_yaml(file_path=self._session_data.raw_data.session_descriptor_path)  # type: ignore
+            descriptor = self.descriptor.from_yaml(  # type: ignore
+                file_path=self._session_data.raw_data.session_descriptor_path
+            )
 
         # Parks both controllers and then disconnects from their Connection classes. Note, the parking is performed
         # in-parallel
@@ -1479,6 +1481,14 @@ class _BehaviorTraining:
         This method is used by the training runtimes to reward the animal with water as part of the training process.
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
+
+    def simulate_reward(self) -> None:
+        """Uses the buzzer controlled by the valve module to deliver an audible tone without delivering any water.
+
+        This method is used by the training runtimes when the animal refuses to consume water rewards. The tone notifies
+        the animal that it performs the training as expected, while simultaneously minimizing water reward wasting.
+        """
+        self._microcontrollers.simulate_reward()
 
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
@@ -1687,8 +1697,14 @@ def lick_training_logic(
                 # If the animal did not accumulate the critical number of unconsumed rewards, delivers the reward.
                 runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
-                # Increments the unconsumed reward count each time a rewards is delivered
+                # Increments the unconsumed reward count each time a reward is delivered
                 unconsumed_count += 1
+
+            # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
+            # rewards.
+            else:
+                runtime.simulate_reward()
+
             delay_timer.reset()
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
@@ -2358,8 +2374,13 @@ def run_train_logic(
                     # purposefully does not track 'manual' water rewards.
                     progress_bar.update(0.005)
 
-                    # Increments the unconsumed reward count each time a rewards is delivered
+                    # Increments the unconsumed reward count each time a reward is delivered
                     unconsumed_count += 1
+
+                # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
+                # rewards.
+                else:
+                    runtime.simulate_reward()
 
                 # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
                 # timer, this guards against animals that carry on running without consuming water rewards.

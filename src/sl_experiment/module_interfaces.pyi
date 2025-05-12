@@ -573,6 +573,25 @@ class ValveInterface(ModuleInterface):
             parameters are submitted to the ValveModule's hardware memory via the set_parameters() class method before
             running the calibration() command.
         """
+    def tone(self, repetition_delay: np.uint32 = ..., noblock: bool = False) -> None:
+        """Triggers ValveModule to an audible tone without changing the state of the managed valve.
+
+        This command will only work for ValveModules connected to a piezoelectric buzzer and configured to interface
+        with the buzzer's trigger pin. It allows emitting tones without water rewards, which is primarily used during
+        training runtimes that pause delivering water when the animal is not consuming rewards.
+
+        Notes:
+            While enforcing auditory tone durations is not as important as enforcing valve open times, this command
+            runs in blocking mode by default to match the behavior of the tone-emitting valve pulse command.
+
+        Args:
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
+                will only run once. The exact repetition delay will be further affected by other modules managed by the
+                same microcontroller and may not be perfectly accurate.
+            noblock: Determines whether the command should block the microcontroller while the tone is delivered or
+                not. Blocking ensures precise tone duration. Non-blocking allows the microcontroller to perform other
+                operations while waiting, increasing its throughput.
+        """
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
         will use to deliver that fluid volume.

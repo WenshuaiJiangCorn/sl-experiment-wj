@@ -494,6 +494,13 @@ class MicroControllerInterfaces:
         Args:
             volume: The volume of water to deliver, in microliters.
         """
+    def simulate_reward(self) -> None:
+        """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.
+
+        This method is used during training when animal refuses to consume water rewards. In this case, the water
+        rewards are not delivered, but the tones are still played to notify the animal it is performing the task as
+        required.
+        """
     def reference_valve(self) -> None:
         """Runs the reference valve calibration procedure.
 
