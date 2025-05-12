@@ -691,6 +691,7 @@ class LickInterface(ModuleInterface):
         _debug: Stores the debug flag.
         _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
             of licks detected since class initialization.
+        _previous_readout_zero: Stores a boolean indicator of whether the previous voltage readout was a 0-value.
     """
 
     _debug: bool
@@ -699,6 +700,7 @@ class LickInterface(ModuleInterface):
     _volt_per_adc_unit: np.float64
     _communication: MQTTCommunication | None
     _lick_tracker: SharedMemoryArray
+    _previous_readout_zero: bool
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None: ...
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""

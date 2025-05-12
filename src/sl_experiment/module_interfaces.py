@@ -1284,6 +1284,7 @@ class LickInterface(ModuleInterface):
         _debug: Stores the debug flag.
         _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
             of licks detected since class initialization.
+        _previous_readout_zero: Stores a boolean indicator of whether the previous voltage readout was a 0-value.
     """
 
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None:
@@ -1317,6 +1318,9 @@ class LickInterface(ModuleInterface):
             prototype=np.zeros(shape=1, dtype=np.uint64),
             exist_ok=True,
         )
+
+        # Precreates storage variables used to prevent excessive lick reporting
+        self._previous_readout_zero: bool = False
 
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
@@ -1359,8 +1363,17 @@ class LickInterface(ModuleInterface):
         if self._debug:
             console.echo(f"Lick ADC signal: {detected_voltage}")
 
-        # If the voltage level exceeds the lick threshold, reports it to Unity via MQTT. Threshold is inclusive.
-        if detected_voltage >= self._lick_threshold:
+        # Since the sensor is pulled to 0 to indicate lack of tongue contact, a zero-readout necessarily means no
+        # lick. Sets zero-tracker to 1 to indicate that a zero-state has been encountered
+        if detected_voltage == 0:
+            self._previous_readout_zero = True
+            return
+
+        # If the voltage level exceeds the lick threshold and this is the first time the threshold is exceeded since
+        # the last zero-value, reports it to Unity via MQTT. Threshold is inclusive. This exploits the fact that every
+        # pair of licks has to be separated by a zero-value (lack of tongue contact). So, to properly report the licks,
+        # only does it once per encountering a zero-value.
+        if detected_voltage >= self._lick_threshold and self._previous_readout_zero:
             # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
             # which acts as a binary lick trigger.
             self._communication.send_data(topic=self._sensor_topic, payload=None)  # type: ignore
@@ -1369,6 +1382,9 @@ class LickInterface(ModuleInterface):
             count = self._lick_tracker.read_data(index=0, convert_output=False)
             count += 1
             self._lick_tracker.write_data(index=0, data=count)
+
+            # This disables further reports until the sensor sends a zero-value again
+            self._previous_readout_zero = False
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""

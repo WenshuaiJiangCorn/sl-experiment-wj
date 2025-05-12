@@ -650,7 +650,7 @@ class MicroControllerInterfaces:
         # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
         self.mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), report_pulses=True, debug=debug)
-        self.lick: LickInterface = LickInterface(lick_threshold=300, debug=debug)  # Lick sensor
+        self.lick: LickInterface = LickInterface(lick_threshold=800, debug=debug)  # Lick sensor
         self.torque: TorqueInterface = TorqueInterface(
             baseline_voltage=2046,  # ~1.65 V
             maximum_voltage=2750,  # This was determined experimentally and matches the torque that overcomes break
@@ -741,7 +741,7 @@ class MicroControllerInterfaces:
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
         self.lick.set_parameters(
-            signal_threshold=np.uint16(250), delta_threshold=np.uint16(250), averaging_pool_size=np.uint8(10)
+            signal_threshold=np.uint16(400), delta_threshold=np.uint16(400), averaging_pool_size=np.uint8(10)
         )
 
         # Configures the torque sensor to filter out noise and sub-threshold 'slack' torque signals.
