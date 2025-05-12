@@ -107,7 +107,7 @@ def list_devices(errors: bool) -> None:
     "--unconsumed_rewards",
     type=int,
     show_default=True,
-    default=3,
+    default=1,
     help=(
         "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
         "is paused. Set to 0 to disable enforcing reward consumption."
@@ -270,7 +270,7 @@ def maintain_vr(project: str) -> None:
     "--unconsumed_rewards",
     type=int,
     show_default=True,
-    default=3,
+    default=1,
     help=(
         "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
         "is paused. Set to 0 to disable enforcing reward consumption."
@@ -281,7 +281,7 @@ def maintain_vr(project: str) -> None:
     "--maximum_idle_time",
     type=int,
     show_default=True,
-    default=0.5,
+    default=0.3,
     help=(
         "The maximum time, in seconds, the animal is allowed to maintain speed that is below the speed threshold, to"
         "still be rewarded. Set to 0 to disable allowing the animal to temporarily dip below running speed threshold."
