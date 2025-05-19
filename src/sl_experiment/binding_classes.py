@@ -647,7 +647,7 @@ class MicroControllerInterfaces:
         # logic to maintain the necessary precision.
 
         # Module interfaces:
-        # Mesoscope frame timestamp recorder. THe class is configured to report detected pulses during runtime to
+        # Mesoscope frame timestamp recorder. The class is configured to report detected pulses during runtime to
         # support checking whether mesoscope start trigger correctly starts the frame acquisition process.
         self.mesoscope_frame: TTLInterface = TTLInterface(module_id=np.uint8(1), report_pulses=True, debug=debug)
         self.lick: LickInterface = LickInterface(lick_threshold=500, debug=debug)  # Lick sensor
@@ -748,9 +748,9 @@ class MicroControllerInterfaces:
         self.torque.set_parameters(
             report_ccw=np.bool(True),
             report_cw=np.bool(True),
-            signal_threshold=np.uint16(100),
-            delta_threshold=np.uint16(70),
-            averaging_pool_size=np.uint8(5),
+            signal_threshold=np.uint16(300),
+            delta_threshold=np.uint16(300),
+            averaging_pool_size=np.uint8(10),
         )
 
         # The setup procedure is complete.
