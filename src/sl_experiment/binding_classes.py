@@ -732,8 +732,8 @@ class MicroControllerInterfaces:
         # Configures the water valve to deliver ~ 5 uL of water. Also configures the valve calibration method to run the
         # 'reference' calibration for 5 uL rewards used to verify the valve calibration before every experiment.
         self.valve.set_parameters(
-            pulse_duration=np.uint32(35590),
-            calibration_delay=np.uint32(200000),
+            pulse_duration=np.uint32(35590),  # This is essentially irrelevant, as it is overridden each time anyway
+            calibration_delay=np.uint32(300000),  # This is hardcoded for safety reasons
             calibration_count=np.uint16(200),
             tone_duration=np.uint32(300000),
         )
