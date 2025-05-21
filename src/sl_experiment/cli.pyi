@@ -39,7 +39,7 @@ def lick_training(
     animal to operate the lick-port and associate licking at the port with water delivery.
     """
 
-def maintain_vr(project: str) -> None:
+def maintain_acquisition_system(project: str) -> None:
     """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
 
     This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve

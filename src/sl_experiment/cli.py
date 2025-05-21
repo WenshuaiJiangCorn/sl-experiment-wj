@@ -18,13 +18,13 @@ from .data_preprocessing import purge_redundant_data, preprocess_session_data
 
 @click.command()
 @click.option(
-    "--string", "-i", prompt="Enter the string to be checksummed", help="The string to calculate the CRC checksum for."
+    "-i", "--input_string", prompt="Enter the string to be checksummed: ", help="The string to calculate the CRC checksum for."
 )
-def calculate_crc(string: str) -> None:
+def calculate_crc(input_string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
     calculator = CRCCalculator()
-    crc_checksum = calculator.string_checksum(string)
-    click.echo(f"The CRC32-XFER checksum for the input string '{string}' is: {crc_checksum}")
+    crc_checksum = calculator.string_checksum(input_string)
+    click.echo(f"The CRC32-XFER checksum for the input string '{input_string}' is: {crc_checksum}")
 
 
 @click.command()
@@ -34,11 +34,35 @@ def calculate_crc(string: str) -> None:
     is_flag=True,
     show_default=True,
     default=False,
-    help="Determines whether to display errors encountered when connecting to all evaluated serial ports.",
+    help="Determines whether to display errors encountered when connecting to evaluated serial ports.",
 )
 def list_devices(errors: bool) -> None:
     """Displays information about all Zaber devices available through USB ports of the host-system."""
     discover_zaber_devices(silence_errors=not errors)
+
+
+@click.command()
+@click.option(
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project whose configuration data should be used during Mesoscope-VR system maintenance. If "
+         "the maintenance runtime is used to save Zaber snapshots for new animals, the project also determines where "
+         "the snapshots are saved.",
+)
+def maintain_acquisition_system(project: str) -> None:
+    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
+
+    This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
+    used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
+    unlocking the wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap
+    around the wheel surface (weekly to monthly).
+
+    The interface also contains Zaber motors (HeadBar and LickPort) bindings to facilitate testing the quality of
+    implanted cranial windows before running training sessions for new animals.
+    """
+    vr_maintenance_logic(project_name=project)
 
 
 @click.command()
@@ -141,30 +165,6 @@ def lick_training(
         maximum_training_time=maximum_time,
         maximum_unconsumed_rewards=unconsumed_rewards,
     )
-
-
-@click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project whose configuration data should be used during VR maintenance. If the maintenance "
-    "runtime is used to save Zaber snapshots for new animals, the project also determines where the snapshots are "
-    "saved.",
-)
-def maintain_vr(project: str) -> None:
-    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
-
-    This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
-    used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
-    unlocking the wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap
-    around the wheel surface (weekly to monthly).
-
-    The interface also contains Zaber motors (HeadBar and LickPort) bindings to facilitate testing the quality of
-    implanted cranial windows before running training sessions for new animals.
-    """
-    vr_maintenance_logic(project_name=project)
 
 
 @click.command()
