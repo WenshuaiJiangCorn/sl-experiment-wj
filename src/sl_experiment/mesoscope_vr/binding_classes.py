@@ -31,41 +31,51 @@ from ..shared_components.module_interfaces import (
 )
 
 
-class HeadBar:
-    """Interfaces with Zaber motors that control the position of the HeadBar manipulator arm.
+class ZaberMotors:
+    """Interfaces with Zaber motors that control the position of the head bar, lick port, and running wheel inside the
+    mesoscope cage.
 
-    This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes. It is used
-    by the major runtime classes, such as MesoscopeExperiment, to interface with HeadBar motors. The class is designed
-    to transition the HeadBar between a set of predefined states and should not be used directly by the user.
+    This class abstracts working with Zaber motors that move the head bar in Z, Pitch, and Roll axes, the lick port in
+    X, Y, and Z axes, and the running wheel in the X axis. It is used by the major runtime classes, such as
+    _MesoscopeExperiment, to position various VR-interface elements and the mouse to facilitate data acquisition and
+    task performance. The class is designed to transition the motors between a set of predefined states and should not
+    be used directly by the user.
 
     Notes:
         This class does not contain the guards that notify users about risks associated with moving the motors. Do not
         use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
         mesoscope, or harm the animal.
 
-        To fine-tune the position of any HeadBar motors in real time, use the main Zaber Launcher interface
+        To fine-tune the position of any Zaber motors in real time, use the main Zaber Launcher interface
         (https://software.zaber.com/zaber-launcher/download) installed on the VRPC.
 
         Unless you know that the motors are homed and not parked, always call the prepare_motors() method before
         calling any other methods. Otherwise, Zaber controllers will likely ignore the issued commands.
 
     Args:
-        headbar_port: The USB port used by the HeadBar Zaber motor controllers (devices).
-        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during
-            previous runtime.
+        headbar_port: The USB port used by the head bar adn running wheel Zaber motor controllers (devices).
+        lickport_port: The USB port used by the lick port Zaber motor controllers (devices).
+        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during the
+            previous runtime (if any).
 
     Attributes:
         _headbar: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the headbar holder.
-        _headbar_z: The ZaberAxis class instance for the HeadBar z-axis motor.
-        _headbar_pitch: The ZaberAxis class instance for the HeadBar pitch-axis motor.
-        _headbar_roll: The ZaberAxis class instance for the HeadBar roll-axis motor.
-        _previous_positions: An instance of _ZaberPositions class that stores the positions of HeadBar motors during a
+            devices (controllers) that allow repositioning the head bar holder and the running wheel.
+        _headbar_z: The ZaberAxis class instance for the head bar z-axis motor.
+        _headbar_pitch: The ZaberAxis class instance for the head bar pitch-axis motor.
+        _headbar_roll: The ZaberAxis class instance for the head bar roll-axis motor.
+        _wheel_x: The ZaberAxis class instance for the running-wheel X-axis motor.
+        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
+            devices (controllers) that allow repositioning the lick port.
+        _lickport_z: Stores the Axis (motor) class that controls the position of the lick port along the Z axis.
+        _lickport_x: Stores the Axis (motor) class that controls the position of the lick port along the X axis.
+        _lickport_y: Stores the Axis (motor) class that controls the position of the lick port along the Y axis.
+        _previous_positions: An instance of _ZaberPositions class that stores the positions of Zaber motors during a
            previous runtime. If this data is not available, this attribute is set to None to indicate there are no
            previous positions to use.
     """
 
-    def __init__(self, headbar_port: str, zaber_positions_path: Path) -> None:
+    def __init__(self, headbar_port: str, lickport_port: str, zaber_positions_path: Path) -> None:
         # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # headbar attached to the mouse in Z, Roll, and Pitch dimensions. Note, this assumes that the chaining order of
         # individual zaber devices is fixed and is always Z-Pitch-Roll.
@@ -75,245 +85,11 @@ class HeadBar:
         self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
         self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
 
-        # If the previous positions path points to an existing .yaml file, loads the data from the file into
-        # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
-        # previous positions.
-        self._previous_positions: None | ZaberPositions = None
-        if zaber_positions_path.exists():
-            self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
+        # Somewhat counterintuitively, the HeadBar motor group is daisy-chained to the motor that moves the running
+        # wheel (treadmill) in the X-axis. This assumes that the device is always daisy-chained last (connected to the
+        # Roll controller)
+        self._wheel_x: ZaberAxis = self._headbar.get_device(3).axis
 
-    def restore_position(self, wait_until_idle: bool = True) -> None:
-        """Restores the HeadBar motor positions to the states recorded at the end of the previous runtime.
-
-        For most runtimes, this method is used to restore the HeadBar to the state used during a previous experiment or
-        training session for each animal. Since all animals are slightly different, the optimal HeadBar positions will
-        vary slightly for each animal.
-
-        Notes:
-            If previous positions are not available, the method falls back to moving the HeadBar motors to the general
-            'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
-            to work for most animals and provide an initial HeadBar position for the animal to be mounted into the VR
-            rig.
-
-            When used together with the LickPort class, this method should always be called before the similar method
-            from the LickPort class.
-
-            This method moves all HeadBar axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
-        """
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._previous_positions is None:
-            message = (
-                "No previous positions found when attempting to restore HeadBar to the previous runtime state. Setting "
-                "the HeadBar motors to the default animal mounting positions loaded from motor controller non-volatile "
-                "memory."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-        else:
-            # Otherwise, restores Zaber positions.
-            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
-
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
-
-    def prepare_motors(self, wait_until_idle: bool = True) -> None:
-        """Unparks and homes all HeadBar motors.
-
-        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all HeadBar
-        motors can be moved (are not parked) and have a stable point of reference. The motors are left at their
-        respective homing positions at the end of this method's runtime, and it is assumed that a different class
-        method is called after this method to set the motors into the desired position.
-
-        Notes:
-            This method moves all HeadBar axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
-        """
-
-        # Unparks all motors.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-
-        # Homes all motors in-parallel.
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
-
-    def park_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all HeadBar motors to their parking positions and parks (locks) them preventing future movements.
-
-        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all HeadBar motors
-        are positioned in a way that guarantees that they can be homed during the next runtime.
-
-        Notes:
-            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller. If
-            this class is used together with the LickPort class, this method should always be called before the similar
-            method from the LickPort class.
-
-            This method moves all HeadBar axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
-        """
-
-        # Moves all HeadBar motors to their parking positions
-        self._headbar_z.move(amount=self._headbar_z.park_position, absolute=True, native=True)
-        self._headbar_pitch.move(amount=self._headbar_pitch.park_position, absolute=True, native=True)
-        self._headbar_roll.move(amount=self._headbar_roll.park_position, absolute=True, native=True)
-
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
-
-    def calibrate_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all HeadBar motors to the water valve calibration position.
-
-        This position is stored in the non-volatile memory of each motor controller. This position is used during the
-        water valve calibration to provide experimenters with easier access to the LickPort tube.
-
-        Notes:
-            This method moves all HeadBar axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
-        """
-        # Moves all HeadBar motors to their calibration positions
-        self._headbar_z.move(amount=self._headbar_z.valve_position, absolute=True, native=True)
-        self._headbar_pitch.move(amount=self._headbar_pitch.valve_position, absolute=True, native=True)
-        self._headbar_roll.move(amount=self._headbar_roll.valve_position, absolute=True, native=True)
-
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
-
-    def mount_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all HeadBar motors to the animal mounting position.
-
-        This position is stored in the non-volatile memory of each motor controller. This position is used when the
-        animal is mounted into the VR rig to provide the experimenter with easy access to the HeadBar holder.
-
-        Notes:
-            This method moves all HeadBar axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
-        """
-        # Moves all motors to their mounting positions
-        self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-        self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-        self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
-
-    def get_positions(self) -> tuple[int, int, int]:
-        """Returns the current position of all HeadBar motors in native motor units.
-
-        The positions are returned in the order of : Z, Pitch, and Roll. These positions can be saves as a
-        zaber_positions.yaml file to be used during the following runtimes.
-        """
-        return (
-            int(self._headbar_z.get_position(native=True)),
-            int(self._headbar_pitch.get_position(native=True)),
-            int(self._headbar_roll.get_position(native=True)),
-        )
-
-    def wait_until_idle(self) -> None:
-        """This method blocks in-place while at least one motor in the managed motor group is moving.
-
-        Primarily, this method is used to issue commands to multiple motor groups and then block until all motors in
-        all groups finish moving. This optimizes the overall time taken to move the motors.
-        """
-        # Waits for the motors to finish moving.
-        while self._headbar_z.is_busy or self._headbar_pitch.is_busy or self._headbar_roll.is_busy:
-            pass
-
-    def disconnect(self) -> None:
-        """Disconnects from the access port of the motor group.
-
-        This method should be called after the motors are parked (moved to their final parking position) to release
-        the connection resources. If this method is not called, the runtime will NOT be able to terminate.
-
-        Notes:
-            Calling this method will execute the motor parking sequence, which involves moving the motors to their
-            parking position. Make sure there are no animals mounted on the rig and that the mesoscope objective is
-            removed from the rig before executing this command.
-        """
-        message = f"HeadBar motor connection: Terminated"
-        console.echo(message, LogLevel.SUCCESS)
-        self._headbar.disconnect()
-
-
-class LickPort:
-    """Interfaces with Zaber motors that control the position of the LickPort manipulator arm.
-
-    This class abstracts working with Zaber motors that move the LickPort in Z, X, and Y axes. It is used
-    by the major runtime classes, such as MesoscopeExperiment, to interface with LickPort motors. The class is designed
-    to transition the LickPort between a set of predefined states and should not be used directly by the user.
-
-    Notes:
-        This class does not contain the guards that notify users about risks associated with moving the motors. Do not
-        use any methods from this class unless you know what you are doing. It is very easy to damage the motors, the
-        mesoscope, or harm the animal.
-
-        To fine-tune the position of any HeadBar motors in real time, use the main Zaber Launcher interface
-        (https://software.zaber.com/zaber-launcher/download) installed on the VRPC.
-
-        Unless you know that the motors are homed and not parked, always call the prepare_motors() method before
-        calling any other methods. Otherwise, Zaber controllers will likely ignore the issued commands.
-
-    Args:
-        lickport_port: The USB port used by the LickPort Zaber motor controllers (devices).
-        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during
-            previous runtime.
-
-    Attributes:
-        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the lick tube.
-        _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
-        _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
-        _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
-        _previous_positions: An instance of _ZaberPositions class that stores the positions of LickPort motors during a
-           previous runtime. If this data is not available, this attribute is set to None to indicate there are no
-           previous positions to use.
-    """
-
-    def __init__(self, lickport_port: str, zaber_positions_path: Path) -> None:
         # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # lick tube in Z, X, and Y dimensions. Note, this assumes that the chaining order of individual zaber devices is
         # fixed and is always Z-X-Y.
@@ -330,203 +106,200 @@ class LickPort:
         if zaber_positions_path.exists():
             self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
 
-    def restore_position(self, wait_until_idle: bool = True) -> None:
-        """Restores the LickPort motor positions to the states recorded at the end of the previous runtime.
+    def restore_position(self) -> None:
+        """Restores the Zaber motor positions to the states recorded at the end of the previous runtime.
 
-        For most runtimes, this method is used to restore the LickPort to the state used during a previous experiment or
-        training session for each animal. Since all animals are slightly different, the optimal LickPort positions will
-        vary slightly for each animal.
+        For most runtimes, this method is used to restore the motors to the state used during a previous experiment or
+        training session for each animal. Since all animals are slightly different, the optimal Zaber motor positions
+        will vary slightly for each animal.
 
         Notes:
-            If previous positions are not available, the method falls back to moving the LickPort motors to the general
-            'parking' positions saved in the non-volatile memory of each motor controller. Note, this is in contrast to
-            the HeadBar, which falls back to using the 'mounting' positions. The mounting position for the LickPort
-            aligns it to the top left corner of the running wheel, to provide experimenter with easier access to the
-            HeadBar. The parking position, on the other hand, positions the lick tube roughly next to the animal's
-            head.
+            If previous positions are not available, the method falls back to moving the motors to the general
+            'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
+            to work for most animals and provide an initial position for the animal to be mounted into the VR rig.
 
-            When used together with the HeadBar class, this method should always be called after the similar method
-            from the HeadBar class.
-
-            This method moves all LickPort axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
+            This method moves all Zaber axes in-parallel to optimize runtime speed. This relies on the Mesoscope-VR
+            system to be assembled in a way where it is safe to move all motors at the same time.
         """
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
         if self._previous_positions is None:
             message = (
-                "No previous positions found when attempting to restore LickPort to the previous runtime state. "
-                "Setting the LickPort motors to the default parking positions loaded from motor controller "
-                "non-volatile memory."
+                "No previous positions found when attempting to restore Zaber motors to the previous runtime state. "
+                "Setting all motors to the default animal mounting positions loaded from motor controller non-volatile "
+                "memory..."
             )
             console.echo(message=message, level=LogLevel.ERROR)
+            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
+            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
+            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
+            self._wheel_x.move(amount=self._wheel_x.mount_position, absolute=True, native=True)
             self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
             self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
             self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
         else:
             # Otherwise, restores Zaber positions.
+            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
+            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
+            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
+            self._wheel_x.move(amount=self._previous_positions.wheel_x, absolute=True, native=True)
             self._lickport_z.move(amount=self._previous_positions.lickport_z, absolute=True, native=True)
             self._lickport_x.move(amount=self._previous_positions.lickport_x, absolute=True, native=True)
             self._lickport_y.move(amount=self._previous_positions.lickport_y, absolute=True, native=True)
 
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
 
-    def prepare_motors(self, wait_until_idle: bool = True) -> None:
-        """Unparks and homes all LickPort motors.
+    def prepare_motors(self) -> None:
+        """Unparks and homes all motors.
 
-        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all LickPort
+        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all Zaber
         motors can be moved (are not parked) and have a stable point of reference. The motors are left at their
         respective homing positions at the end of this method's runtime, and it is assumed that a different class
         method is called after this method to set the motors into the desired position.
 
         Notes:
-            This method moves all LickPort axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
+            This method moves all motor axes in-parallel to optimize runtime speed.
         """
 
         # Unparks all motors.
+        self._headbar_z.unpark()
+        self._headbar_pitch.unpark()
+        self._headbar_roll.unpark()
+        self._wheel_x.unpark()
         self._lickport_z.unpark()
         self._lickport_x.unpark()
         self._lickport_y.unpark()
 
         # Homes all motors in-parallel.
+        self._headbar_z.home()
+        self._headbar_pitch.home()
+        self._headbar_roll.home()
+        self._wheel_x.home()
         self._lickport_z.home()
         self._lickport_x.home()
         self._lickport_y.home()
 
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
 
-    def park_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all LickPort motors to their parking positions and parks (locks) them preventing future movements.
+    def park_position(self) -> None:
+        """Moves all motors to their parking positions and parks (locks) them preventing future movements.
 
-        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all LickPort motors
+        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all Zaber motors
         are positioned in a way that guarantees that they can be homed during the next runtime.
 
         Notes:
-            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller. If
-            this class is used together with the HeadBar class, this method should always be called after the similar
-            method from the HeadBar class.
+            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller.
 
-            This method moves all LickPort axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
+            This method moves all motor axes in-parallel to optimize runtime speed.
         """
 
-        # Moves all motors to their parking positions
+        # Moves all Zaber motors to their parking positions
+        self._headbar_z.move(amount=self._headbar_z.park_position, absolute=True, native=True)
+        self._headbar_pitch.move(amount=self._headbar_pitch.park_position, absolute=True, native=True)
+        self._headbar_roll.move(amount=self._headbar_roll.park_position, absolute=True, native=True)
+        self._wheel_x.move(amount=self._wheel_x.park_position, absolute=True, native=True)
         self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
         self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
         self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
 
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
 
-    def calibrate_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all LickPort motors to the water valve calibration position.
+    def maintenance_position(self) -> None:
+        """Moves all motors to the VR system maintenance position.
 
-        This position is stored in the non-volatile memory of each motor controller. This position is used during the
-        water valve calibration to provide experimenters with easier access to the LickPort tube.
+        This position is stored in the non-volatile memory of each motor controller. Primarily, this position is used
+        during the water valve calibration and during running-wheel maintenance (cleaning, replacing surface material,
+        etc.).
 
         Notes:
-            This method moves all LickPort axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in-parallel to optimize runtime speed.
 
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
+            Formerly, the only maintenance step was the calibration of the water-valve, so some low-level functions
+            still reference it as 'valve-position' and 'calibrate-position'.
         """
-        # Moves all motors to their calibration positions
+        # Moves all motors to their maintenance positions
+        self._headbar_z.move(amount=self._headbar_z.valve_position, absolute=True, native=True)
+        self._headbar_pitch.move(amount=self._headbar_pitch.valve_position, absolute=True, native=True)
+        self._headbar_roll.move(amount=self._headbar_roll.valve_position, absolute=True, native=True)
+        self._wheel_x.move(amount=self._wheel_x.valve_position, absolute=True, native=True)
         self._lickport_z.move(amount=self._lickport_z.valve_position, absolute=True, native=True)
         self._lickport_x.move(amount=self._lickport_x.valve_position, absolute=True, native=True)
         self._lickport_y.move(amount=self._lickport_y.valve_position, absolute=True, native=True)
 
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
 
-    def mount_position(self, wait_until_idle: bool = True) -> None:
-        """Moves all LickPort motors to the animal mounting position.
+    def mount_position(self) -> None:
+        """Moves all motors to the animal mounting position.
 
         This position is stored in the non-volatile memory of each motor controller. This position is used when the
-        animal is mounted into the VR rig to provide the experimenter with easy access to the HeadBar holder.
+        animal is mounted into the VR rig to provide the experimenter with easy access to the head bar holder.
 
         Notes:
-            This method moves all LickPort axes in-parallel to optimize runtime speed.
-
-        Args:
-            wait_until_idle: Determines whether to block in-place until all motors finish moving or to return without
-                waiting for the motors to stop moving. This is primarily used to move multiple motor groups at the same
-                time.
+            This method moves all MOTOR axes in-parallel to optimize runtime speed.
         """
         # Moves all motors to their mounting positions
+        self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
+        self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
+        self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
+        self._wheel_x.move(amount=self._wheel_x.mount_position, absolute=True, native=True)
         self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
         self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
         self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
 
-        # If requested, waits for the motors to finish moving before returning to caller. Otherwise, returns
-        # without waiting for the motors to stop moving. The latter case is used to issue commands to multiple motor
-        # groups at the same time.
-        if wait_until_idle:
-            self.wait_until_idle()
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
 
-    def get_positions(self) -> tuple[int, int, int]:
-        """Returns the current position of all LickPort motors in native motor units.
-
-        The positions are returned in the order of : Z, X, and Y. These positions can be saves as a zaber_positions.yaml
-        file to be used during the following runtimes.
+    def generate_position_snapshot(self) -> ZaberPositions:
+        """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
+        instance, and returns it to caller.
         """
-        return (
-            int(self._lickport_z.get_position(native=True)),
-            int(self._lickport_x.get_position(native=True)),
-            int(self._lickport_y.get_position(native=True)),
+        return ZaberPositions(
+            headbar_z=int(self._headbar_z.get_position(native=True)),
+            headbar_pitch=int(self._headbar_pitch.get_position(native=True)),
+            headbar_roll=int(self._headbar_roll.get_position(native=True)),
+            wheel_x=int(self._wheel_x.get_position(native=True)),
+            lickport_z=int(self._lickport_z.get_position(native=True)),
+            lickport_x=int(self._lickport_x.get_position(native=True)),
+            lickport_y=int(self._lickport_y.get_position(native=True)),
         )
 
     def wait_until_idle(self) -> None:
-        """This method blocks in-place while at least one motor in the managed motor group is moving.
+        """This method blocks in-place while at least one motor in the managed motor group(s) is moving.
 
         Primarily, this method is used to issue commands to multiple motor groups and then block until all motors in
         all groups finish moving. This optimizes the overall time taken to move the motors.
         """
+
         # Waits for the motors to finish moving.
-        while self._lickport_z.is_busy or self._lickport_x.is_busy or self._lickport_y.is_busy:
+        while (
+            self._headbar_z.is_busy
+            or self._headbar_pitch.is_busy
+            or self._headbar_roll.is_busy
+            or self._wheel_x.is_busy
+            or self._lickport_z.is_busy
+            or self._lickport_x.is_busy
+            or self._lickport_y.is_busy
+        ):
             pass
 
     def disconnect(self) -> None:
-        """Disconnects from the access port of the motor group.
+        """Disconnects from the communication port(s) of the managed motor groups.
 
         This method should be called after the motors are parked (moved to their final parking position) to release
         the connection resources. If this method is not called, the runtime will NOT be able to terminate.
 
         Notes:
             Calling this method will execute the motor parking sequence, which involves moving the motors to their
-            parking position. Make sure there are no animals mounted on the rig and that the mesoscope objective is
+            parking position. Make sure there are no animals mounted on the rig and that the Mesoscope objective is
             removed from the rig before executing this command.
         """
-        message = f"LickPort motor connection: Terminated"
-        console.echo(message, LogLevel.SUCCESS)
+        self._headbar.disconnect()
         self._lickport.disconnect()
+        message = f"Zaber motor connection: Terminated"
+        console.echo(message, LogLevel.SUCCESS)
 
 
 class MicroControllerInterfaces:
