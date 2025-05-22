@@ -140,7 +140,7 @@ the 'Applying Zaber Configuration' document for the correct application procedur
 to work with this library, you need to overwrite the non-volatile User Data of each motor device (controller) with
 the data expected by this library. See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
 **ZaberSettings** class to learn more about the settings used by this library. See the source code from the 
-[zaber_bindings.py](/src/sl_experiment/zaber_bindings.py) module to learn how these settings are used during runtime.
+[zaber_bindings.py](/src/sl_experiment/shared_components/zaber_bindings.py) module to learn how these settings are used during runtime.
 
 ### Behavior Cameras
 To record the animal’s behavior, we use a group of three cameras. The **face_camera** is a high-end machine-vision 

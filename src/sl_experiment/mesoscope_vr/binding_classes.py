@@ -1,7 +1,5 @@
 """This module binds Ataraxis classes for all Mesoscope-VR components (cameras, microcontrollers, Zaber motors). These
-bindings streamline the API used to interface with these components during experiment and training runtimes. Critically,
-these classes statically define optimal runtime configuration parameters for all managed components. Source code
-refactoring and a new library release are required each time these settings need to be updated."""
+bindings streamline the API used to interface with these components during experiment and training runtimes."""
 
 from pathlib import Path
 
@@ -20,8 +18,9 @@ from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, SharedMemoryArray
 from ataraxis_communication_interface import MicroControllerInterface
 
-from .zaber_bindings import ZaberAxis, ZaberConnection
-from .module_interfaces import (
+from src.sl_experiment.shared_components.zaber_bindings import ZaberAxis, ZaberConnection
+
+from ..shared_components.module_interfaces import (
     TTLInterface,
     LickInterface,
     BreakInterface,

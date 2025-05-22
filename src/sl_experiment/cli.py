@@ -6,19 +6,23 @@ from pathlib import Path
 import click
 from sl_shared_assets import SessionData, ProjectConfiguration
 
-from .experiment import (
+from src.sl_experiment.mesoscope_vr.experiment import (
     run_train_logic,
     lick_training_logic,
     run_experiment_logic,
     vr_maintenance_logic,
 )
+from src.sl_experiment.mesoscope_vr.data_preprocessing import purge_redundant_data, preprocess_session_data
+
 from .zaber_bindings import CRCCalculator, discover_zaber_devices
-from .data_preprocessing import purge_redundant_data, preprocess_session_data
 
 
 @click.command()
 @click.option(
-    "-i", "--input_string", prompt="Enter the string to be checksummed: ", help="The string to calculate the CRC checksum for."
+    "-i",
+    "--input_string",
+    prompt="Enter the string to be checksummed: ",
+    help="The string to calculate the CRC checksum for.",
 )
 def calculate_crc(input_string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
@@ -48,8 +52,8 @@ def list_devices(errors: bool) -> None:
     type=str,
     required=True,
     help="The name of the project whose configuration data should be used during Mesoscope-VR system maintenance. If "
-         "the maintenance runtime is used to save Zaber snapshots for new animals, the project also determines where "
-         "the snapshots are saved.",
+    "the maintenance runtime is used to save Zaber snapshots for new animals, the project also determines where "
+    "the snapshots are saved.",
 )
 def maintain_acquisition_system(project: str) -> None:
     """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.

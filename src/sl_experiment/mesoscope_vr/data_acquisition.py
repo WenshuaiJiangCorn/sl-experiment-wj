@@ -33,10 +33,11 @@ from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from .visualizers import BehaviorVisualizer
+from src.sl_experiment.mesoscope_vr.visualizers import BehaviorVisualizer
+from src.sl_experiment.mesoscope_vr.data_preprocessing import preprocess_session_data
+
 from .binding_classes import HeadBar, LickPort, VideoSystems, MicroControllerInterfaces
 from .module_interfaces import BreakInterface, ValveInterface
-from .data_preprocessing import preprocess_session_data
 
 
 class _KeyboardListener:

@@ -33,7 +33,7 @@ from sl_shared_assets import (
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
 
-from .google_sheet_tools import SurgerySheet, WaterSheetData
+from ..shared_components import SurgerySheet, WaterSheetData
 
 
 def _delete_directory(directory_path: Path) -> None:
