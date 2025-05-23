@@ -33,11 +33,10 @@ from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from src.sl_experiment.mesoscope_vr.visualizers import BehaviorVisualizer
-from src.sl_experiment.mesoscope_vr.data_preprocessing import preprocess_session_data
-
+from .visualizers import BehaviorVisualizer
 from .binding_classes import HeadBar, LickPort, VideoSystems, MicroControllerInterfaces
-from .module_interfaces import BreakInterface, ValveInterface
+from ..shared_components import BreakInterface, ValveInterface
+from .data_preprocessing import preprocess_session_data
 
 
 class _KeyboardListener:
@@ -1734,396 +1733,6 @@ def lick_training_logic(
     runtime.stop()
 
 
-def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickport: LickPort) -> None:
-    """Generates a snapshot of Zaber motor positions, Mesoscope objective positions, and the cranial window state of an
-    animal.
-
-    This worker function is accessible through the maintain_vr() runtime. It is used when checking the state of the
-    cranial window for new animals before they are added to a project. This function works similar to how major
-    runtime management classes save the data of each processed animal during regular training or experiment sessions.
-
-    Args:
-        configuration: The ProjectConfiguration instance for the project to which the animal is intended to be added.
-        headbar: The HeadBar instance used to interface with HeadBar group motors.
-        lickport: The LickPort instance used to interface with LickPort group motors.
-    """
-    animal_id = input("Enter the id of the animal: ")
-
-    # Initializes a new session using the ProjectConfiguration class and the input animal id
-    session_data = SessionData.create(
-        animal_id=animal_id,
-        project_configuration=configuration,
-        session_type="Window checking",
-    )
-
-    # Retrieves current motor positions and packages them into a ZaberPositions object.
-    head_bar_positions = headbar.get_positions()
-    lickport_positions = lickport.get_positions()
-    zaber_positions = ZaberPositions(
-        headbar_z=head_bar_positions[0],
-        headbar_pitch=head_bar_positions[1],
-        headbar_roll=head_bar_positions[2],
-        lickport_z=lickport_positions[0],
-        lickport_x=lickport_positions[1],
-        lickport_y=lickport_positions[2],
-    )
-
-    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
-    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
-    zaber_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.zaber_positions_path))
-
-    message = f"HeadBar and LickPort position snapshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
-    # is generated.
-    mesodata_path = Path(session_data.mesoscope_data.meso_data_path)
-    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-    while len(screenshots) != 1:
-        message = (
-            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
-            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
-            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
-            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
-            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
-            f"screenshots stored in the folder before proceeding."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-
-    # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
-    screenshot_path: Path = screenshots[0]
-    sh.copy(screenshot_path, Path(session_data.raw_data.window_screenshot_path))
-    screenshot_path.unlink()
-    message = f"Cranial window and dot-alignment screenshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
-    # forces the user to fill it with data.
-    mesoscope_positions = MesoscopePositions()
-    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
-    message = f"Mesoscope positions precursor file: Generated."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Forces the user to update the mesoscope positions file with current mesoscope data.
-    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-        file_path=Path(session_data.raw_data.mesoscope_positions_path)
-    )
-    while (
-        mesoscope_positions.mesoscope_x_position == 0.0
-        and mesoscope_positions.mesoscope_y_position == 0.0
-        and mesoscope_positions.mesoscope_z_position == 0.0
-    ):
-        message = (
-            f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
-            f"local persistent directory before proceeding further."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(session_data.raw_data.mesoscope_positions_path)
-        )
-
-    # Dumps the updated data into the persistent_data folder of the animal
-    mesoscope_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.mesoscope_positions_path))
-
-    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline pulls the
-    # surgery data into the raw_data folder and copies the session folder to the NAS and BioHPC server.
-    preprocess_session_data(session_data=session_data)
-
-
-def vr_maintenance_logic(project_name: str) -> None:
-    """Encapsulates the logic used to maintain the solenoid valve and the running wheel.
-
-    This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
-    contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
-    'referenced' to verify it functions as expected. At the end of each day, the valve is emptied. Similarly, the wheel
-    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly basis (depending on the
-    used wrap).
-
-    Notes:
-        This runtime is also co-opted to check animal windows after the recovery period. This is mostly handled via the
-        ScanImage software running on the mesoscope PC, while this runtime generates a snapshot of HeadBar and LickPort
-        positions used during the verification.
-
-    Args:
-        project_name: The name of the project whose configuration data should be used when interfacing with the solenoid
-            valve. Primarily, this is used to extract valve calibration data to perform valve 'referencing' (testing)
-            procedure. When testing cranial windows, this is also used to determine where to save the Zaber position
-            snapshot.
-    """
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
-    message = f"Initializing Mesoscope-VR maintenance runtime..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Uses the input project name to load the valve calibration data
-    project_configuration = ProjectConfiguration.load(project_name=project_name)
-
-    # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
-    # things to console).
-    delay_timer = PrecisionTimer("s")
-
-    message = f"Initializing interface assets..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
-    with tempfile.TemporaryDirectory(prefix="sl_maintenance_") as output_dir:
-        output_path: Path = Path(output_dir)
-
-        # Initializes the data logger. Due to how the MicroControllerInterface class is implemented, this is required
-        # even for runtimes that do not need to save data.
-        logger = DataLogger(
-            output_directory=output_path,
-            instance_name="temp",
-            exist_ok=True,
-            process_count=1,
-            thread_count=10,
-        )
-        logger.start()
-
-        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
-        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
-        message = (
-            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
-            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
-            "control the HeadBar and LickPort motor positions until you reset the runtime."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Initializes HeadBar and LickPort binding classes
-        headbar = HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
-        lickport = LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
-
-        message = f"Zaber controllers: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Initializes the face camera. This is only relevant when the pipeline is used check cranial windows in
-        # implanted animals.
-        cameras = VideoSystems(
-            data_logger=logger,
-            output_directory=output_path,
-            face_camera_index=project_configuration.face_camera_index,
-            left_camera_index=project_configuration.left_camera_index,
-            right_camera_index=project_configuration.right_camera_index,
-            harvesters_cti_path=Path(project_configuration.harvesters_cti_path),
-        )
-        cameras.start_face_camera()
-        message = f"Face camera display: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
-        # time.
-        valve: ValveInterface = ValveInterface(
-            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
-            debug=True,
-        )
-        wheel: BreakInterface = BreakInterface(debug=True)
-        controller: MicroControllerInterface = MicroControllerInterface(
-            controller_id=np.uint8(101),
-            microcontroller_serial_buffer_size=8192,
-            microcontroller_usb_port=project_configuration.actor_port,
-            data_logger=logger,
-            module_interfaces=(valve, wheel),
-        )
-        controller.start()
-        controller.unlock_controller()
-
-        # Delays for 1 second for the valve to initialize and send the state message. This avoids the visual clash
-        # with the zaber positioning dialog
-        delay_timer.delay_noblock(delay=1)
-
-        message = f"Actor MicroController: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
-        # proceed with motor movements.
-        message = (
-            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
-            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
-            "mesoscope and / or HARM the animal."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
-        # with each other, so it is safe to move both assemblies at the same time.
-        headbar.prepare_motors(wait_until_idle=False)
-        lickport.prepare_motors(wait_until_idle=True)
-        headbar.wait_until_idle()
-
-        # Moves the motors in calibration position.
-        headbar.calibrate_position(wait_until_idle=False)
-        lickport.calibrate_position(wait_until_idle=True)
-        headbar.wait_until_idle()
-
-        message = f"HeadBar and LickPort motors: Positioned for Mesoscope-VR maintenance runtime."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Notifies the user about supported calibration commands
-        message = (
-            "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
-            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Supported HeadBar and "
-            "LickPort motor positioning commands: image, mount, maintain. Supported Mesoscope position, HeadBar and "
-            "LickPort motor position, and window screenshot saving command: snapshot. Use 'q' command to terminate the "
-            "runtime."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-
-        while True:
-            command = input()  # Silent input to avoid visual spam.
-
-            if command == "open":
-                message = f"Opening valve."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.toggle(state=True)
-
-            if command == "close":
-                message = f"Closing valve."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.toggle(state=False)
-
-            if command == "close_10":
-                message = f"Closing the valve after a 10-second delay..."
-                console.echo(message=message, level=LogLevel.INFO)
-                start = delay_timer.elapsed
-                previous_time = delay_timer.elapsed
-                while delay_timer.elapsed - start < 10:
-                    if previous_time != delay_timer.elapsed:
-                        previous_time = delay_timer.elapsed
-                        console.echo(
-                            message=f"Remaining time: {10 - (delay_timer.elapsed - start)} seconds.",
-                            level=LogLevel.INFO,
-                        )
-                valve.toggle(state=False)  # Closes the valve after a 10-second delay
-
-            if command == "reward":
-                message = f"Delivering 5 uL water reward..."
-                console.echo(message=message, level=LogLevel.INFO)
-                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
-                valve.set_parameters(pulse_duration=pulse_duration)
-                valve.send_pulse()
-
-            if command == "reference":
-                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure..."
-                console.echo(message=message, level=LogLevel.INFO)
-                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
-                valve.set_parameters(pulse_duration=pulse_duration)
-                valve.calibrate()
-
-            if command == "calibrate_15":
-                message = f"Running 15 ms pulse valve calibration..."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(15000))  # 15 ms in us
-                valve.calibrate()
-
-            if command == "calibrate_30":
-                message = f"Running 30 ms pulse valve calibration..."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(30000))  # 30 ms in us
-                valve.calibrate()
-
-            if command == "calibrate_45":
-                message = f"Running 45 ms pulse valve calibration..."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(45000))  # 45 ms in us
-                valve.calibrate()
-
-            if command == "calibrate_60":
-                message = f"Running 60 ms pulse valve calibration..."
-                console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
-                valve.calibrate()
-
-            if command == "lock":
-                message = f"Locking wheel break..."
-                console.echo(message=message, level=LogLevel.INFO)
-                wheel.toggle(state=True)
-
-            if command == "unlock":
-                message = f"Unlocking wheel break..."
-                console.echo(message=message, level=LogLevel.INFO)
-                wheel.toggle(state=False)
-
-            if command == "snapshot":
-                _snapshot_logic(configuration=project_configuration, headbar=headbar, lickport=lickport)
-                message = f"Initial animal data snapshot: Generated."
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "image":
-                message = f"Moving HeadBar and LickPort to the default brain imaging position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.mount_position(wait_until_idle=False)
-                lickport.park_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "mount":
-                message = f"Moving HeadBar and LickPort to the animal mounting position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.mount_position(wait_until_idle=False)
-                lickport.mount_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "maintain":
-                message = f"Moving HeadBar and LickPort to the default Mesoscope-VR maintenance position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.calibrate_position(wait_until_idle=False)
-                lickport.calibrate_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "q":
-                message = f"Terminating Mesoscope-VR maintenance runtime."
-                console.echo(message=message, level=LogLevel.INFO)
-                break
-
-        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
-        message = (
-            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during Mesoscope-VR "
-            "maintenance, such as water collection flasks, from the Mesoscope-VR cage."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Shuts down zaber bindings
-        headbar.park_position(wait_until_idle=False)
-        lickport.park_position(wait_until_idle=True)
-        headbar.wait_until_idle()
-        headbar.disconnect()
-        lickport.disconnect()
-
-        message = f"HeadBar and LickPort connections: terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Shuts down microcontroller interfaces
-        controller.stop()
-
-        message = f"Actor MicroController: Terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Shuts down the face camera
-        cameras.stop()
-        message = f"Face camera: Terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Stops the data logger
-        logger.stop()
-
-        message = f"Runtime: Terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # The logs will be cleaned up by deleting the temporary directory when this runtime exits.
-
-
 def run_train_logic(
     experimenter: str,
     project_name: str,
@@ -2644,3 +2253,393 @@ def run_experiment_logic(
     # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
     # destinations.
     runtime.stop()
+
+
+def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickport: LickPort) -> None:
+    """Generates a snapshot of Zaber motor positions, Mesoscope objective positions, and the cranial window state of an
+    animal.
+
+    This worker function is accessible through the maintain_vr() runtime. It is used when checking the state of the
+    cranial window for new animals before they are added to a project. This function works similar to how major
+    runtime management classes save the data of each processed animal during regular training or experiment sessions.
+
+    Args:
+        configuration: The ProjectConfiguration instance for the project to which the animal is intended to be added.
+        headbar: The HeadBar instance used to interface with HeadBar group motors.
+        lickport: The LickPort instance used to interface with LickPort group motors.
+    """
+    animal_id = input("Enter the id of the animal: ")
+
+    # Initializes a new session using the ProjectConfiguration class and the input animal id
+    session_data = SessionData.create(
+        animal_id=animal_id,
+        project_configuration=configuration,
+        session_type="Window checking",
+    )
+
+    # Retrieves current motor positions and packages them into a ZaberPositions object.
+    head_bar_positions = headbar.get_positions()
+    lickport_positions = lickport.get_positions()
+    zaber_positions = ZaberPositions(
+        headbar_z=head_bar_positions[0],
+        headbar_pitch=head_bar_positions[1],
+        headbar_roll=head_bar_positions[2],
+        lickport_z=lickport_positions[0],
+        lickport_x=lickport_positions[1],
+        lickport_y=lickport_positions[2],
+    )
+
+    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
+    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
+    zaber_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.zaber_positions_path))
+
+    message = f"HeadBar and LickPort position snapshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
+    # is generated.
+    mesodata_path = Path(session_data.mesoscope_data.meso_data_path)
+    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+    while len(screenshots) != 1:
+        message = (
+            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
+            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
+            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
+            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
+            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
+            f"screenshots stored in the folder before proceeding."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+
+    # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
+    screenshot_path: Path = screenshots[0]
+    sh.copy(screenshot_path, Path(session_data.raw_data.window_screenshot_path))
+    screenshot_path.unlink()
+    message = f"Cranial window and dot-alignment screenshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
+    # forces the user to fill it with data.
+    mesoscope_positions = MesoscopePositions()
+    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+    message = f"Mesoscope positions precursor file: Generated."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Forces the user to update the mesoscope positions file with current mesoscope data.
+    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+        file_path=Path(session_data.raw_data.mesoscope_positions_path)
+    )
+    while (
+        mesoscope_positions.mesoscope_x_position == 0.0
+        and mesoscope_positions.mesoscope_y_position == 0.0
+        and mesoscope_positions.mesoscope_z_position == 0.0
+    ):
+        message = (
+            f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
+            f"local persistent directory before proceeding further."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(session_data.raw_data.mesoscope_positions_path)
+        )
+
+    # Dumps the updated data into the persistent_data folder of the animal
+    mesoscope_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.mesoscope_positions_path))
+
+    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline pulls the
+    # surgery data into the raw_data folder and copies the session folder to the NAS and BioHPC server.
+    preprocess_session_data(session_data=session_data)
+
+
+def vr_maintenance_logic(project_name: str) -> None:
+    """Encapsulates the logic used to maintain the solenoid valve and the running wheel.
+
+    This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
+    contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
+    'referenced' to verify it functions as expected. At the end of each day, the valve is emptied. Similarly, the wheel
+    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly basis (depending on the
+    used wrap).
+
+    Notes:
+        This runtime is also co-opted to check animal windows after the recovery period. This is mostly handled via the
+        ScanImage software running on the mesoscope PC, while this runtime generates a snapshot of HeadBar and LickPort
+        positions used during the verification.
+
+    Args:
+        project_name: The name of the project whose configuration data should be used when interfacing with the solenoid
+            valve. Primarily, this is used to extract valve calibration data to perform valve 'referencing' (testing)
+            procedure. When testing cranial windows, this is also used to determine where to save the Zaber position
+            snapshot.
+    """
+    # Enables the console
+    if not console.enabled:
+        console.enable()
+
+    message = f"Initializing Mesoscope-VR maintenance runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Uses the input project name to load the valve calibration data
+    project_configuration = ProjectConfiguration.load(project_name=project_name)
+
+    # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
+    # things to console).
+    delay_timer = PrecisionTimer("s")
+
+    message = f"Initializing interface assets..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
+    with tempfile.TemporaryDirectory(prefix="sl_maintenance_") as output_dir:
+        output_path: Path = Path(output_dir)
+
+        # Initializes the data logger. Due to how the MicroControllerInterface class is implemented, this is required
+        # even for runtimes that do not need to save data.
+        logger = DataLogger(
+            output_directory=output_path,
+            instance_name="temp",
+            exist_ok=True,
+            process_count=1,
+            thread_count=10,
+        )
+        logger.start()
+
+        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+        message = (
+            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
+            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
+            "control the HeadBar and LickPort motor positions until you reset the runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+
+        # Initializes HeadBar and LickPort binding classes
+        headbar = HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
+        lickport = LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
+
+        message = f"Zaber controllers: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes the face camera. This is only relevant when the pipeline is used check cranial windows in
+        # implanted animals.
+        cameras = VideoSystems(
+            data_logger=logger,
+            output_directory=output_path,
+            face_camera_index=project_configuration.face_camera_index,
+            left_camera_index=project_configuration.left_camera_index,
+            right_camera_index=project_configuration.right_camera_index,
+            harvesters_cti_path=Path(project_configuration.harvesters_cti_path),
+        )
+        cameras.start_face_camera()
+        message = f"Face camera display: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
+        # time.
+        valve: ValveInterface = ValveInterface(
+            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
+            debug=True,
+        )
+        wheel: BreakInterface = BreakInterface(debug=True)
+        controller: MicroControllerInterface = MicroControllerInterface(
+            controller_id=np.uint8(101),
+            microcontroller_serial_buffer_size=8192,
+            microcontroller_usb_port=project_configuration.actor_port,
+            data_logger=logger,
+            module_interfaces=(valve, wheel),
+        )
+        controller.start()
+        controller.unlock_controller()
+
+        # Delays for 1 second for the valve to initialize and send the state message. This avoids the visual clash
+        # with the zaber positioning dialog
+        delay_timer.delay_noblock(delay=1)
+
+        message = f"Actor MicroController: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
+        # proceed with motor movements.
+        message = (
+            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
+            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
+            "mesoscope and / or HARM the animal."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+
+        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
+        # with each other, so it is safe to move both assemblies at the same time.
+        headbar.prepare_motors(wait_until_idle=False)
+        lickport.prepare_motors(wait_until_idle=True)
+        headbar.wait_until_idle()
+
+        # Moves the motors in calibration position.
+        headbar.calibrate_position(wait_until_idle=False)
+        lickport.calibrate_position(wait_until_idle=True)
+        headbar.wait_until_idle()
+
+        message = f"HeadBar and LickPort motors: Positioned for Mesoscope-VR maintenance runtime."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Notifies the user about supported calibration commands
+        message = (
+            "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
+            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Supported HeadBar and "
+            "LickPort motor positioning commands: image, mount, maintain. Supported Mesoscope position, HeadBar and "
+            "LickPort motor position, and window screenshot saving command: snapshot. Use 'q' command to terminate the "
+            "runtime."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+
+        while True:
+            command = input()  # Silent input to avoid visual spam.
+
+            if command == "open":
+                message = f"Opening valve."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.toggle(state=True)
+
+            if command == "close":
+                message = f"Closing valve."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.toggle(state=False)
+
+            if command == "close_10":
+                message = f"Closing the valve after a 10-second delay..."
+                console.echo(message=message, level=LogLevel.INFO)
+                start = delay_timer.elapsed
+                previous_time = delay_timer.elapsed
+                while delay_timer.elapsed - start < 10:
+                    if previous_time != delay_timer.elapsed:
+                        previous_time = delay_timer.elapsed
+                        console.echo(
+                            message=f"Remaining time: {10 - (delay_timer.elapsed - start)} seconds.",
+                            level=LogLevel.INFO,
+                        )
+                valve.toggle(state=False)  # Closes the valve after a 10-second delay
+
+            if command == "reward":
+                message = f"Delivering 5 uL water reward..."
+                console.echo(message=message, level=LogLevel.INFO)
+                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
+                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.send_pulse()
+
+            if command == "reference":
+                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure..."
+                console.echo(message=message, level=LogLevel.INFO)
+                pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
+                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.calibrate()
+
+            if command == "calibrate_15":
+                message = f"Running 15 ms pulse valve calibration..."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(15000))  # 15 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_30":
+                message = f"Running 30 ms pulse valve calibration..."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(30000))  # 30 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_45":
+                message = f"Running 45 ms pulse valve calibration..."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(45000))  # 45 ms in us
+                valve.calibrate()
+
+            if command == "calibrate_60":
+                message = f"Running 60 ms pulse valve calibration..."
+                console.echo(message=message, level=LogLevel.INFO)
+                valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
+                valve.calibrate()
+
+            if command == "lock":
+                message = f"Locking wheel break..."
+                console.echo(message=message, level=LogLevel.INFO)
+                wheel.toggle(state=True)
+
+            if command == "unlock":
+                message = f"Unlocking wheel break..."
+                console.echo(message=message, level=LogLevel.INFO)
+                wheel.toggle(state=False)
+
+            if command == "snapshot":
+                _snapshot_logic(configuration=project_configuration, headbar=headbar, lickport=lickport)
+                message = f"Initial animal data snapshot: Generated."
+                console.echo(message=message, level=LogLevel.SUCCESS)
+
+            if command == "image":
+                message = f"Moving HeadBar and LickPort to the default brain imaging position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.mount_position(wait_until_idle=False)
+                lickport.park_position()
+                headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
+
+            if command == "mount":
+                message = f"Moving HeadBar and LickPort to the animal mounting position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.mount_position(wait_until_idle=False)
+                lickport.mount_position()
+                headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
+
+            if command == "maintain":
+                message = f"Moving HeadBar and LickPort to the default Mesoscope-VR maintenance position..."
+                console.echo(message=message, level=LogLevel.INFO)
+                headbar.calibrate_position(wait_until_idle=False)
+                lickport.calibrate_position()
+                headbar.wait_until_idle()
+                message = f"HeadBar and LickPort: Positioned"
+                console.echo(message=message, level=LogLevel.SUCCESS)
+
+            if command == "q":
+                message = f"Terminating Mesoscope-VR maintenance runtime."
+                console.echo(message=message, level=LogLevel.INFO)
+                break
+
+        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
+        message = (
+            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during Mesoscope-VR "
+            "maintenance, such as water collection flasks, from the Mesoscope-VR cage."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+
+        # Shuts down zaber bindings
+        headbar.park_position(wait_until_idle=False)
+        lickport.park_position(wait_until_idle=True)
+        headbar.wait_until_idle()
+        headbar.disconnect()
+        lickport.disconnect()
+
+        message = f"HeadBar and LickPort connections: terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Shuts down microcontroller interfaces
+        controller.stop()
+
+        message = f"Actor MicroController: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Shuts down the face camera
+        cameras.stop()
+        message = f"Face camera: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Stops the data logger
+        logger.stop()
+
+        message = f"Runtime: Terminated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # The logs will be cleaned up by deleting the temporary directory when this runtime exits.

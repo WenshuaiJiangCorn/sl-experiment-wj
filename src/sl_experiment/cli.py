@@ -5,7 +5,6 @@ from pathlib import Path
 
 import click
 from sl_shared_assets import SessionData, ProjectConfiguration
-
 from src.sl_experiment.mesoscope_vr.experiment import (
     run_train_logic,
     lick_training_logic,
