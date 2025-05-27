@@ -33,7 +33,7 @@ from sl_shared_assets import (
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
 
-from ..shared_components import SurgerySheet, WaterSheetData
+from ..shared_components import SurgerySheet, WaterSheet
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -1000,7 +1000,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         total_water = training_water + experimenter_water
 
         # Connects to the WR sheet and generates the new water restriction log entry
-        wr_sheet = WaterSheetData(
+        wr_sheet = WaterSheet(
             animal_id=animal_id,
             credentials_path=Path(project_configuration.google_credentials_path),
             sheet_id=project_configuration.water_log_sheet_id,

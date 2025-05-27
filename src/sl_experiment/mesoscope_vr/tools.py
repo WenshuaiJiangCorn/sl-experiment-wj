@@ -1,12 +1,18 @@
 """This module provides additional tools and classes used by other modules of the mesoscope_vr package. Primarily, this
-includes various dataclasses specific to the Mesoscope-VR systems and utility functions used from other modules. The
-contents of this module are not intended to be used outside the mesoscope_vr package."""
+includes various dataclasses specific to the Mesoscope-VR systems and utility functions used by other package modules.
+The contents of this module are not intended to be used outside the mesoscope_vr package."""
 
 from pathlib import Path
 from dataclasses import field, dataclass
 
 from sl_shared_assets import SessionData, MesoscopeSystemConfiguration, get_system_configuration_data
 from ataraxis_base_utilities import console, ensure_directory_exists
+from typing import Any
+from multiprocessing import Process
+from pynput import keyboard
+from ataraxis_data_structures import SharedMemoryArray
+import numpy as np
+from ataraxis_time import PrecisionTimer
 
 
 def get_system_configuration() -> MesoscopeSystemConfiguration:
@@ -28,7 +34,7 @@ def get_system_configuration() -> MesoscopeSystemConfiguration:
 
 
 @dataclass()
-class VRPCPersistentData:
+class _VRPCPersistentData:
     """Stores the paths to the directories and files that make up the 'persistent_data' directory on the VRPC.
 
     VRPC persistent data directory is used to preserve configuration data, such as the positions of Zaber motors and
@@ -80,7 +86,7 @@ class VRPCPersistentData:
 
 
 @dataclass()
-class ScanImagePCData:
+class _ScanImagePCData:
     """Stores the paths to the directories and files that make up the 'meso_data' directory on the ScanImagePC.
 
     During runtime, the ScanImagePC should organize all collected data under this root directory. During preprocessing,
@@ -134,7 +140,7 @@ class ScanImagePCData:
 
 
 @dataclass()
-class VRPCDestinations:
+class _VRPCDestinations:
     """Stores the paths to the VRPC filesystem-mounted directories of the Synology NAS and BioHPC server.
 
     The paths from this section are primarily used to transfer preprocessed data to the long-term storage destinations.
@@ -195,12 +201,12 @@ class MesoscopeData:
         session = session_data.session_name
 
         # Instantiates additional path data classes
-        self.vrpc_persistent_data = VRPCPersistentData(
+        self.vrpc_persistent_data = _VRPCPersistentData(
             session_type=session_data.session_type,
             persistent_data_path=system_configuration.paths.root_directory.joinpath(project, animal, "persistent_data"),
         )
 
-        self.scanimagepc_data = ScanImagePCData(
+        self.scanimagepc_data = _ScanImagePCData(
             session_name=session,
             meso_data_path=system_configuration.paths.mesoscope_directory,
             persistent_data_path=system_configuration.paths.mesoscope_directory.joinpath(
@@ -208,7 +214,7 @@ class MesoscopeData:
             ),
         )
 
-        self.destinations = VRPCDestinations(
+        self.destinations = _VRPCDestinations(
             nas_raw_data_path=system_configuration.paths.nas_directory.joinpath(project, animal, session, "raw_data"),
             server_raw_data_path=system_configuration.paths.server_storage_directory.joinpath(
                 project, animal, session, "raw_data"
@@ -217,3 +223,170 @@ class MesoscopeData:
                 project, animal, session, "processed_data"
             ),
         )
+
+
+class KeyboardListener:
+    """Monitors the keyboard input for various runtime control signals and changes internal attributes to communicate
+    detected signals to outside callers.
+
+    This class is used during most Mesoscope-VR runtimes to allow the user to manually control various aspects of the
+    Mesoscope-VR system and data acquisition runtime. For example, it is used to abort a data acquisition session early
+    by gracefully stopping all Mesoscope-VR assets and running data preprocessing on the collected data.
+
+    Notes:
+        This keyboard monitor will pick up keyboard strokes directed at other applications during runtime. While our
+        unique key combinations are likely not used elsewhere, exercise caution when using other applications while this
+        monitor class is active.
+
+        The monitor runs in a separate process (on a separate core) and sends the data to the main process via
+        shared memory arrays. This prevents the listener from competing for resources with the runtime logic and the
+        visualizer class.
+
+    Attributes:
+        _data_array: A SharedMemoryArray used to store the data recorded by the remote listener process.
+        _currently_pressed: Stores the keys that are currently being pressed.
+        _keyboard_process: The Listener instance used to monitor keyboard strokes. The listener runs in a remote
+            process.
+        _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
+    """
+
+    def __init__(self) -> None:
+        self._data_array = SharedMemoryArray.create_array(
+            name="keyboard_listener", prototype=np.zeros(shape=5, dtype=np.int32), exist_ok=True
+        )
+        self._currently_pressed: set[str] = set()
+
+        # Starts the listener process
+        self._keyboard_process = Process(target=self._run_keyboard_listener, daemon=True)
+        self._keyboard_process.start()
+        self._started = True
+
+    def __del__(self) -> None:
+        """Ensures all class resources are released before the instance is destroyed.
+
+        This is a fallback method, using shutdown() should be standard.
+        """
+        if self._started:
+            self.shutdown()
+
+    def shutdown(self) -> None:
+        """This method should be called at the end of runtime to properly release all resources and terminate the
+        remote process."""
+        if self._keyboard_process.is_alive():
+            self._data_array.write_data(index=0, data=np.int32(1))  # Termination signal
+            self._keyboard_process.terminate()
+            self._keyboard_process.join(timeout=1.0)
+        self._data_array.disconnect()
+        self._data_array.destroy()
+        self._started = False
+
+    def _run_keyboard_listener(self) -> None:
+        """The main function that runs in the parallel process to monitor keyboard inputs."""
+
+        # Sets up listeners for both press and release
+        self._listener: keyboard.Listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._listener.daemon = True
+        self._listener.start()
+
+        # Connects to the shared memory array from the remote process
+        self._data_array.connect()
+
+        # Initializes the timer used to delay the process. This reduces the CPU load
+        delay_timer = PrecisionTimer("ms")
+
+        # Keeps the process alive until it receives the shutdown command via the SharedMemoryArray instance
+        while self._data_array.read_data(index=0, convert_output=True) == 0:
+            delay_timer.delay_noblock(delay=10, allow_sleep=True)  # 10 ms delay
+
+        # If the loop above is escaped, this indicates that the listener process has been terminated. Disconnects from
+        # the shared memory array and exits
+        self._data_array.disconnect()
+
+    def _on_press(self, key: Any) -> None:
+        """Adds newly pressed keys to the storage set and determines whether the pressed key combination matches one of
+        the expected combinations.
+
+        This method is used as the 'on_press' callback for the Listener instance.
+        """
+        # Updates the set with current data
+        self._currently_pressed.add(str(key))
+
+        # Checks if ESC is pressed (required for all combinations)
+        if "Key.esc" in self._currently_pressed:
+            # Exit combination: ESC + q
+            if "'q'" in self._currently_pressed:
+                self._data_array.write_data(index=1, data=np.int32(1))
+
+            # Reward combination: ESC + r
+            if "'r'" in self._currently_pressed:
+                self._data_array.write_data(index=2, data=np.int32(1))
+
+            # Running speed threshold control: ESC + Up/Down arrows
+            if "Key.up" in self._currently_pressed:
+                previous_value = self._data_array.read_data(index=3, convert_output=False)
+                previous_value += 1
+                self._data_array.write_data(index=3, data=previous_value)
+
+            if "Key.down" in self._currently_pressed:
+                previous_value = self._data_array.read_data(index=3, convert_output=False)
+                previous_value -= 1
+                self._data_array.write_data(index=3, data=previous_value)
+
+            # Running duration threshold control: ESC + Left/Right arrows
+            if "Key.right" in self._currently_pressed:
+                previous_value = self._data_array.read_data(index=4, convert_output=False)
+                previous_value -= 1
+                self._data_array.write_data(index=4, data=previous_value)
+
+            if "Key.left" in self._currently_pressed:
+                previous_value = self._data_array.read_data(index=4, convert_output=False)
+                previous_value += 1
+                self._data_array.write_data(index=4, data=previous_value)
+
+    def _on_release(self, key: Any) -> None:
+        """Removes no longer pressed keys from the storage set.
+
+        This method is used as the 'on_release' callback for the Listener instance.
+        """
+        # Removes no longer pressed keys from the set
+        key_str = str(key)
+        if key_str in self._currently_pressed:
+            self._currently_pressed.remove(key_str)
+
+    @property
+    def exit_signal(self) -> bool:
+        """Returns True if the listener has detected the runtime abort keys combination (ESC + q) being pressed.
+
+        This indicates that the user has requested the runtime to gracefully abort.
+        """
+        return bool(self._data_array.read_data(index=1, convert_output=True))
+
+    @property
+    def reward_signal(self) -> bool:
+        """Returns True if the listener has detected the water reward delivery keys combination (ESC + r) being
+        pressed.
+
+        This indicates that the user has requested the system to deliver a water reward to the animal.
+
+        Notes:
+            Each time this property is accessed, the flag is reset to 0.
+        """
+        reward_flag = bool(self._data_array.read_data(index=2, convert_output=True))
+        self._data_array.write_data(index=2, data=np.int32(0))
+        return reward_flag
+
+    @property
+    def speed_modifier(self) -> int:
+        """Returns the current user-defined modifier to apply to the running speed threshold.
+
+        This is used during run training to manually update the running speed threshold.
+        """
+        return int(self._data_array.read_data(index=3, convert_output=True))
+
+    @property
+    def duration_modifier(self) -> int:
+        """Returns the current user-defined modifier to apply to the running epoch duration threshold.
+
+        This is used during run training to manually update the running epoch duration threshold.
+        """
+        return int(self._data_array.read_data(index=4, convert_output=True))

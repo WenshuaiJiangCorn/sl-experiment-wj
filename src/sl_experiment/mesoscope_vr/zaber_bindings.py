@@ -1,6 +1,6 @@
-"""This module provides interfaces for Zaber controllers and motors used in some data acquisition systems. Primarily,
-the module extends the bindings exposed by ZaberMotion library to work with the specific requirements of the Sun lab
-data collection pipelines."""
+"""This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR data acquisition system.
+Primarily, the module extends the bindings exposed by ZaberMotion library to work with the specific requirements of the
+Sun lab data collection pipelines."""
 
 from typing import Any
 from dataclasses import field, dataclass

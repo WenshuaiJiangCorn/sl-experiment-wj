@@ -21,16 +21,15 @@ from ataraxis_communication_interface import MicroControllerInterface
 
 from .tools import get_system_configuration
 from ..shared_components import (
-    ZaberAxis,
     TTLInterface,
     LickInterface,
     BreakInterface,
     ValveInterface,
     ScreenInterface,
     TorqueInterface,
-    ZaberConnection,
     EncoderInterface,
 )
+from .zaber_bindings import ZaberAxis, ZaberConnection
 
 
 class ZaberMotors:
@@ -282,8 +281,10 @@ class ZaberMotors:
         instance, and returns it to caller.
 
         This method is used by runtime classes to update ZaberPositions instance c ached on disk for each animal.
+        The method also updates the local ZaberPositions copy stored inside the class instance with the data from the
+        generated snapshot. Primarily, this has to be done to support the Zaber motor shutdown sequence.
         """
-        return ZaberPositions(
+        self._previous_positions = ZaberPositions(
             headbar_z=int(self._headbar_z.get_position(native=True)),
             headbar_pitch=int(self._headbar_pitch.get_position(native=True)),
             headbar_roll=int(self._headbar_roll.get_position(native=True)),
@@ -292,6 +293,7 @@ class ZaberMotors:
             lickport_x=int(self._lickport_x.get_position(native=True)),
             lickport_y=int(self._lickport_y.get_position(native=True)),
         )
+        return self._previous_positions
 
     def wait_until_idle(self) -> None:
         """Blocks in-place while at least one motor in the managed motor group(s) is moving.
@@ -300,8 +302,8 @@ class ZaberMotors:
         all groups finish moving. This optimizes the overall time taken to move the motors.
         """
 
-        # Waits for the motors to finish moving. Note, motor state polling includes built-in delay mechanism to prevent
-        # overwhelming the communication interface.
+        # Waits for the motors to finish moving. Note, motor state polling includes the built-in delay mechanism to
+        # prevent overwhelming the communication interface.
         while (
             self._headbar_z.is_busy
             or self._headbar_pitch.is_busy
@@ -325,6 +327,7 @@ class ZaberMotors:
             removed from the rig before executing this command.
         """
         self._headbar.disconnect()
+        self._wheel.disconnect()
         self._lickport.disconnect()
         message = f"Zaber motor connection: Terminated"
         console.echo(message, LogLevel.SUCCESS)
