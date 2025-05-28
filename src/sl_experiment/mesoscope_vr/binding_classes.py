@@ -20,6 +20,7 @@ from ataraxis_time.time_helpers import convert_time
 from ataraxis_communication_interface import MicroControllerInterface
 
 from .tools import get_system_configuration
+from .zaber_bindings import ZaberAxis, ZaberConnection
 from ..shared_components import (
     TTLInterface,
     LickInterface,
@@ -29,7 +30,6 @@ from ..shared_components import (
     TorqueInterface,
     EncoderInterface,
 )
-from .zaber_bindings import ZaberAxis, ZaberConnection
 
 
 class ZaberMotors:
@@ -109,6 +109,13 @@ class ZaberMotors:
         self._previous_positions: None | ZaberPositions = None
         if zaber_positions_path.exists():
             self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
+        else:
+            message = (
+                "No previous position data found when attempting to load Zaber motor positions used during a previous "
+                "runtime. Setting all Zaber motors to use the default positions cached in non-volatile memory of each "
+                "motor controller."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
 
     def restore_position(self) -> None:
         """Restores the Zaber motor positions to the states recorded at the end of the previous runtime.
@@ -127,13 +134,6 @@ class ZaberMotors:
         """
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
         if self._previous_positions is None:
-            message = (
-                "No previous positions found when attempting to restore Zaber motors to the previous runtime state. "
-                "Setting all motors to the default animal mounting positions loaded from motor controller non-volatile "
-                "memory..."
-            )
-            console.echo(message=message, level=LogLevel.WARNING)
-
             # Mounting position for the headbar and the wheel essentially mimics the parking position for the
             # lickport motors.
             self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
@@ -148,7 +148,6 @@ class ZaberMotors:
             self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
             self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
         else:
-
             # Otherwise, restores Zaber positions for all motors.
             self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
             self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)

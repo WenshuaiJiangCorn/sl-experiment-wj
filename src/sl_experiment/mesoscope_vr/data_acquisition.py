@@ -1,6 +1,7 @@
 """This module provides classes that abstract working with Sun lab's Mesoscope-VR system to acquire training or
-experiment data. Primarily, this includes the runtime management classes (highest level of internal data acquisition and
-processing API) and specialized runtime logic functions (user-facing external API functions).
+experiment data or maintain the system modules. Primarily, this includes the runtime management classes
+(highest level of internal data acquisition and processing API) and specialized runtime logic functions
+(user-facing external API functions).
 """
 
 import os
@@ -16,25 +17,24 @@ from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from sl_shared_assets import (
     SessionData,
-    ZaberPositions,
     MesoscopePositions,
     ProjectConfiguration,
-    MesoscopeHardwareState,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
-    MesoscopeExperimentConfiguration,
+    MesoscopeHardwareState,
     MesoscopeExperimentDescriptor,
+    MesoscopeExperimentConfiguration,
 )
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 from ataraxis_time.time_helpers import get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
+from .tools import MesoscopeData, KeyboardListener, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
-from ..shared_components import BreakInterface, ValveInterface, WaterSheet, SurgerySheet
+from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface
 from .data_preprocessing import preprocess_session_data
-from .tools import MesoscopeData, KeyboardListener
 
 
 class _MesoscopeExperiment:
@@ -98,6 +98,10 @@ class _MesoscopeExperiment:
         # Caches SessionDescriptor and MesoscopeExperimentConfiguration instances to class attributes.
         self.descriptor: MesoscopeExperimentDescriptor = session_descriptor
         self._experiment_configuration: MesoscopeExperimentConfiguration = experiment_configuration
+
+        # Caches the descriptor to disk. Primarily, this is required for preprocessing the data if the session runtime
+        # terminates unexpectedly.
+        self.descriptor.to_yaml(file_path=Path(session_data.raw_data.session_descriptor_path))
 
         # Saves SessionData to class attribute and uses it to initialize the MesoscopeData instance. MesoscopeData works
         # similar to SessionData, but only stores the paths used by the Mesoscope-VR system while managing the session's
@@ -271,15 +275,14 @@ class _MesoscopeExperiment:
                 "field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
                 "y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
                 "z={previous_positions.mesoscope_tilt}, fast_z={previous_positions.mesoscope_fast_z}, "
-                f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}. Run all mesoscope "
-                f"and Unity preparation procedures before continuing. This is the last manual checkpoint, after this "
-                f"message the runtime control function will begin the experiment. "
+                f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}. Do NOT start the "
+                f"Mesoscope or Unity game engine at this time. This is done at a later manual checkpoint."
             )
         else:
             message = (
                 "If necessary, adjust all Zaber motor positions and position the mesoscope objective above the imaging "
-                "field. Run all mesoscope and Unity preparation procedures before continuing. This is the last manual "
-                "checkpoint, after this message the runtime control function will begin the experiment."
+                "field. Do NOT start the Mesoscope or Unity game engine at this time. This is done at a later manual "
+                "checkpoint."
             )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -356,6 +359,16 @@ class _MesoscopeExperiment:
         # Establishes a direct communication with Unity over MQTT. This is in addition to some ModuleInterfaces using
         # their own communication channels.
         self._unity.connect()
+
+        # This checkpoint is moved here to avoid potential issues introduced by resetting the microcontrollers while
+        # the mesoscope is monitoring for trigger cues. The rest procedure sometimes generates a TTL 'blip', which may
+        # inadvertently interfere with mesoscope frame acquisition triggers.
+        message = (
+            f"Run all mesoscope and Unity preparation procedures before continuing. This is the last manual "
+            f"checkpoint, after this message the runtime control function will begin the experiment."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
 
         # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
         # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
@@ -454,6 +467,7 @@ class _MesoscopeExperiment:
 
         # Overwrites the delivered water volume with the volume recorded over the runtime.
         self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
+        self.descriptor.incomplete = False  # If the runtime reaches this point, the session is likely complete.
 
         # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
         self.descriptor.to_yaml(file_path=Path(self._session_data.raw_data.session_descriptor_path))
@@ -531,8 +545,10 @@ class _MesoscopeExperiment:
         # feature primarily used during training to restore the training parameters between training sessions of the
         # same type. However, the MesoscopeData resolves the paths to the persistent descriptor files in a way that
         # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
-        sh.copy2(src=self._session_data.raw_data.session_descriptor_path,
-                 dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path)
+        sh.copy2(
+            src=self._session_data.raw_data.session_descriptor_path,
+            dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
+        )
 
         # Forces the user to update the mesoscope positions file with current mesoscope data. This is only triggered if
         # the mesoscope positions file is a precursor. Otherwise, this check will not be triggered. This is intentional,
@@ -845,6 +861,7 @@ class _BehaviorTraining:
 
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
+        _lick_training: Tracks whether the class is used to run the lick or the run training session.
         descriptor: Stores the session descriptor instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
@@ -864,9 +881,14 @@ class _BehaviorTraining:
     ) -> None:
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
+        self._lick_training: bool = False  # Initializes to False, but the value depends on the training class state
 
-        # Caches SessionDescriptor instance to class attributes.
+        # Caches SessionDescriptor instance to class attribute.
         self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = session_descriptor
+
+        # Caches the descriptor to disk. Primarily, this is required for preprocessing the data if the session runtime
+        # terminates unexpectedly.
+        self.descriptor.to_yaml(file_path=Path(session_data.raw_data.session_descriptor_path))
 
         # Saves SessionData to class attribute and uses it to initialize the MesoscopeData instance. MesoscopeData works
         # similar to SessionData, but only stores the paths used by the Mesoscope-VR system while managing the session's
@@ -1107,6 +1129,8 @@ class _BehaviorTraining:
 
         # Overwrites the delivered water volume with the volume recorded over the runtime.
         self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
+        self.descriptor.incomplete = False  # If the runtime reaches this point, the session is likely complete.
+
         self.descriptor.to_yaml(file_path=Path(self._session_data.raw_data.session_descriptor_path))
 
         # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
@@ -1162,8 +1186,10 @@ class _BehaviorTraining:
         # feature primarily used during training to restore the training parameters between training sessions of the
         # same type. However, the MesoscopeData resolves the paths to the persistent descriptor files in a way that
         # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
-        sh.copy2(src=self._session_data.raw_data.session_descriptor_path,
-                 dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path)
+        sh.copy2(
+            src=self._session_data.raw_data.session_descriptor_path,
+            dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
+        )
 
         # Instructs the user to remove the animal from the VR rig.
         message = (
@@ -1188,9 +1214,9 @@ class _BehaviorTraining:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def lick_train_state(self) -> None:
-        """Configures the VR system for running the lick training.
+        """Configures the Mesoscope-VR system for running the lick training.
 
-        In the rest state, the break is engaged to prevent the mouse from moving the wheel. The encoder module is
+        In this state, the break is engaged to prevent the mouse from moving the wheel. The encoder module is
         disabled, and the torque sensor is enabled. The VR screens are switched off, cutting off light emission.
         The lick sensor monitoring is on to record animal licking data.
         """
@@ -1214,9 +1240,9 @@ class _BehaviorTraining:
         self._lick_training = True
 
     def run_train_state(self) -> None:
-        """Configures the VR system for running the run training.
+        """Configures the Mesoscope-VR system for running the run training.
 
-        In the rest state, the break is disengaged, allowing the mouse to run on the wheel. The encoder module is
+        In this state, the break is disengaged, allowing the mouse to run on the wheel. The encoder module is
         enabled, and the torque sensor is disabled. The VR screens are switched off, cutting off light emission.
         The lick sensor monitoring is on to record animal licking data.
         """
@@ -1269,105 +1295,6 @@ class _BehaviorTraining:
         )
 
 
-def _snapshot_logic(configuration: ProjectConfiguration, headbar: HeadBar, lickport: LickPort) -> None:
-    """Generates a snapshot of Zaber motor positions, Mesoscope objective positions, and the cranial window state of an
-    animal.
-
-    This worker function is accessible through the maintain_vr() runtime. It is used when checking the state of the
-    cranial window for new animals before they are added to a project. This function works similar to how major
-    runtime management classes save the data of each processed animal during regular training or experiment sessions.
-
-    Args:
-        configuration: The ProjectConfiguration instance for the project to which the animal is intended to be added.
-        headbar: The HeadBar instance used to interface with HeadBar group motors.
-        lickport: The LickPort instance used to interface with LickPort group motors.
-    """
-    animal_id = input("Enter the id of the animal: ")
-
-    # Initializes a new session using the ProjectConfiguration class and the input animal id
-    session_data = SessionData.create(
-        animal_id=animal_id,
-        project_configuration=configuration,
-        session_type="Window checking",
-    )
-
-    # Retrieves current motor positions and packages them into a ZaberPositions object.
-    head_bar_positions = headbar.get_positions()
-    lickport_positions = lickport.get_positions()
-    zaber_positions = ZaberPositions(
-        headbar_z=head_bar_positions[0],
-        headbar_pitch=head_bar_positions[1],
-        headbar_roll=head_bar_positions[2],
-        lickport_z=lickport_positions[0],
-        lickport_x=lickport_positions[1],
-        lickport_y=lickport_positions[2],
-    )
-
-    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
-    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
-    zaber_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.zaber_positions_path))
-
-    message = f"HeadBar and LickPort position snapshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Forces the user to always have a single screenshot and does not allow proceeding until the screenshot
-    # is generated.
-    mesodata_path = Path(session_data.mesoscope_data.meso_data_path)
-    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-    while len(screenshots) != 1:
-        message = (
-            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
-            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
-            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
-            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
-            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
-            f"screenshots stored in the folder before proceeding."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-
-    # Copies the screenshot to all destination metadata folders and removes it from the ScanImagePC
-    screenshot_path: Path = screenshots[0]
-    sh.copy(screenshot_path, Path(session_data.raw_data.window_screenshot_path))
-    screenshot_path.unlink()
-    message = f"Cranial window and dot-alignment screenshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Generates the mesoscope positions file precursor in the persistent directory of the target animal and
-    # forces the user to fill it with data.
-    mesoscope_positions = MesoscopePositions()
-    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
-    message = f"Mesoscope positions precursor file: Generated."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Forces the user to update the mesoscope positions file with current mesoscope data.
-    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-        file_path=Path(session_data.raw_data.mesoscope_positions_path)
-    )
-    while (
-        mesoscope_positions.mesoscope_x_position == 0.0
-        and mesoscope_positions.mesoscope_y_position == 0.0
-        and mesoscope_positions.mesoscope_z_position == 0.0
-    ):
-        message = (
-            f"Update the mesoscope objective positions inside the precursor file stored in the animal's "
-            f"local persistent directory before proceeding further."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(session_data.raw_data.mesoscope_positions_path)
-        )
-
-    # Dumps the updated data into the persistent_data folder of the animal
-    mesoscope_positions.to_yaml(file_path=Path(session_data.vrpc_persistent_data.mesoscope_positions_path))
-
-    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline pulls the
-    # surgery data into the raw_data folder and copies the session folder to the NAS and BioHPC server.
-    preprocess_session_data(session_data=session_data)
-
-
 def lick_training_logic(
     experimenter: str,
     project_name: str,
@@ -1377,7 +1304,8 @@ def lick_training_logic(
     maximum_reward_delay: int = 18,
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
-    maximum_unconsumed_rewards: int = 3,
+    maximum_unconsumed_rewards: int = 1,
+    load_previous_parameters: bool = False,
 ) -> None:
     """Encapsulates the logic used to train animals to operate the lick port.
 
@@ -1400,22 +1328,65 @@ def lick_training_logic(
         maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
             them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
             If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
-            the animal has to consume all rewards before getting the next reward.
+            the animal has to consume each reward before getting the next reward.
+        load_previous_parameters: Determines whether to override all input runtime-defining parameters with the
+            parameters used during the previous session. If this is set to True, the function will ignore most input
+            parameters and will instead load them from the cached session descriptor of the previous session. If the
+            descriptor is not available, the function will fall back to using input parameters.
     """
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
     message = f"Initializing lick training runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Uses project name to load the project configuration data
-    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
+    # Queries the data acquisition system runtime parameters
+    system_configuration = get_system_configuration()
 
-    # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData.create(
-        animal_id=animal_id, session_type="Lick training", project_configuration=project_configuration
+    # Verifies that the target project exists
+    project_folder = system_configuration.paths.root_directory.joinpath(project_name)
+    if not project_folder.exists():
+        message = (
+            f"Unable to execute the lick training for the animal {animal_id} of project {project_name}. The target "
+            f"project does not exist on the local machine. Use the 'sl-create-project' command to create the project "
+            f"before running training or experiment sessions."
+        )
+        console.error(message=message, error=FileNotFoundError)
+
+    # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
+    # hierarchy as part of this initialization process
+    session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type="lick training")
+    mesoscope_data = MesoscopeData(session_data=session_data)
+
+    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
+    # both classes to run through the init checks. The classes are later re-instantiated during session data
+    # preprocessing
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
+        file_path=session_data.raw_data.project_configuration_path
     )
+    _ = WaterSheet(
+        animal_id=int(animal_id),
+        session_date=session_data.session_name,
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.water_log_sheet_id,
+    )
+    _ = SurgerySheet(
+        project_name=project_name,
+        animal_id=int(animal_id),
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.surgery_sheet_id,
+    )
+
+    # If the managed animal has cached data from a previous lick training session and the function is
+    # configured to load previous data, replaces all runtime-defining parameters passed to the function with data
+    # loaded from the previous session's descriptor file
+    previous_descriptor_path = mesoscope_data.vrpc_persistent_data.session_descriptor_path
+    if previous_descriptor_path.exists() and load_previous_parameters:
+        previous_descriptor: LickTrainingDescriptor = LickTrainingDescriptor.from_yaml(  # type: ignore
+            file_path=previous_descriptor_path
+        )
+        maximum_reward_delay = previous_descriptor.maximum_reward_delay_s
+        minimum_reward_delay = previous_descriptor.minimum_reward_delay
+        maximum_training_time = previous_descriptor.maximum_training_time_m
+        maximum_water_volume = previous_descriptor.maximum_water_volume_ml
+        maximum_unconsumed_rewards = previous_descriptor.maximum_unconsumed_rewards
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
@@ -1427,11 +1398,11 @@ def lick_training_logic(
         mouse_weight_g=animal_weight,
         dispensed_water_volume_ml=0.00,
         maximum_unconsumed_rewards=maximum_unconsumed_rewards,
+        incomplete=True,  # Has to be initialized to True, so that if session aborts, it is marked as incomplete
     )
 
     # Initializes the main runtime interface class.
     runtime = _BehaviorTraining(
-        project_configuration=project_configuration,
         session_data=session_data,
         session_descriptor=descriptor,
     )
@@ -1609,7 +1580,8 @@ def run_training_logic(
     maximum_water_volume: float = 1.0,
     maximum_training_time: int = 20,
     maximum_idle_time: float = 0.5,
-    maximum_unconsumed_rewards: int = 3,
+    maximum_unconsumed_rewards: int = 1,
+    load_previous_parameters: bool = False,
 ) -> None:
     """Encapsulates the logic used to train animals to run on the wheel treadmill while being head-fixed.
 
@@ -1653,21 +1625,73 @@ def run_training_logic(
             them, before reward delivery (but not the training!) pauses until the animal consumes available rewards.
             If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
             the animal has to consume all rewards before getting the next reward.
+        load_previous_parameters: Determines whether to override all input runtime-defining parameters with the
+            parameters used during the previous session. If this is set to True, the function will ignore most input
+            parameters and will instead load them from the cached session descriptor of the previous session. If the
+            descriptor is not available, the function will fall back to using input parameters.
     """
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
     message = f"Initializing run training runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Uses project name to load the project configuration data
-    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
+    # Queries the data acquisition system runtime parameters
+    system_configuration = get_system_configuration()
 
-    # Uses information stored in the project configuration to initialize the SessionData instance for the session
-    session_data = SessionData.create(
-        animal_id=animal_id, session_type="Run training", project_configuration=project_configuration
+    # Verifies that the target project exists
+    project_folder = system_configuration.paths.root_directory.joinpath(project_name)
+    if not project_folder.exists():
+        message = (
+            f"Unable to execute the run training for the animal {animal_id} of project {project_name}. The target "
+            f"project does not exist on the local machine. Use the 'sl-create-project' command to create the project "
+            f"before running training or experiment sessions."
+        )
+        console.error(message=message, error=FileNotFoundError)
+
+    # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
+    # hierarchy as part of this initialization process
+    session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type="run training")
+    mesoscope_data = MesoscopeData(session_data=session_data)
+
+    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
+    # both classes to run through the init checks. The classes are later re-instantiated during session data
+    # preprocessing
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
+        file_path=session_data.raw_data.project_configuration_path
     )
+    _ = WaterSheet(
+        animal_id=int(animal_id),
+        session_date=session_data.session_name,
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.water_log_sheet_id,
+    )
+    _ = SurgerySheet(
+        project_name=project_name,
+        animal_id=int(animal_id),
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.surgery_sheet_id,
+    )
+
+    # If the managed animal has cached data from a previous run training session and the function is
+    # configured to load previous data, replaces all runtime-defining parameters passed to the function with data
+    # loaded from the previous session's descriptor file
+    previous_descriptor_path = mesoscope_data.vrpc_persistent_data.session_descriptor_path
+    if previous_descriptor_path.exists() and load_previous_parameters:
+        previous_descriptor: RunTrainingDescriptor = RunTrainingDescriptor.from_yaml(  # type: ignore
+            file_path=previous_descriptor_path
+        )
+
+        # Sets initial speed and duration thresholds to the FINAL thresholds from the previous session. This way, each
+        # consecutive run training session begins where the previous one has ended.
+        initial_speed_threshold = previous_descriptor.final_run_speed_threshold_cm_s
+        initial_duration_threshold = previous_descriptor.final_run_duration_threshold_s
+
+        # Restores other parameters to the same fields of the previous descriptor
+        increase_threshold = previous_descriptor.increase_threshold_ml
+        speed_increase_step = previous_descriptor.run_speed_increase_step_cm_s
+        duration_increase_step = previous_descriptor.run_duration_increase_step_s
+        maximum_training_time = previous_descriptor.maximum_training_time_m
+        maximum_water_volume = previous_descriptor.maximum_water_volume_ml
+        maximum_unconsumed_rewards = previous_descriptor.maximum_unconsumed_rewards
+        maximum_idle_time = previous_descriptor.maximum_idle_time_s
 
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
@@ -1685,12 +1709,12 @@ def run_training_logic(
         maximum_idle_time_s=maximum_idle_time,
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
+        incomplete=True,  # Has to be initialized to True, so that if session aborts, it is marked as incomplete
     )
 
     # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
     # the current VRPC setup and may need to be adjusted as that setup evolves over time.
     runtime = _BehaviorTraining(
-        project_configuration=project_configuration,
         session_data=session_data,
         session_descriptor=descriptor,
     )
@@ -1770,9 +1794,10 @@ def run_training_logic(
     # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
     # delivered to the animal
     progress_bar = tqdm(
-        total=round(maximum_water_volume, ndigits=3),  # Volumes are tracked in milliliters
+        total=round(maximum_water_volume, ndigits=3),
         desc="Delivered water volume",
         unit="ml",
+        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} [{elapsed}<{remaining}, {rate_fmt}]",
     )
 
     # Tracks the data necessary to update the training progress bar
@@ -1996,41 +2021,74 @@ def experiment_logic(
         animal_id: The numeric ID of the animal participating in the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
     """
-
-    # Enables the console
-    if not console.enabled:
-        console.enable()
-
     message = f"Initializing {experiment_name} experiment runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Uses project name to load the project configuration data
-    project_configuration: ProjectConfiguration = ProjectConfiguration.load(project_name=project_name)
+    # Queries the data acquisition system runtime parameters
+    system_configuration = get_system_configuration()
 
-    # Uses information stored in the project configuration to initialize the SessionData instance for the session
+    # Verifies that the target project exists
+    project_folder = system_configuration.paths.root_directory.joinpath(project_name)
+    if not project_folder.exists():
+        message = (
+            f"Unable to execute the {experiment_name} experiment for the animal {animal_id} of project {project_name}. "
+            f"The target project does not exist on the local machine. Use the 'sl-create-project' command to create "
+            f"the project before running training or experiment sessions."
+        )
+        console.error(message=message, error=FileNotFoundError)
+
+    # Initializes the SessionData and creates the necessary session directory hierarchy as part of this initialization
+    # process
     session_data = SessionData.create(
+        project_name=project_name,
         animal_id=animal_id,
-        session_type="Experiment",
-        project_configuration=project_configuration,
+        session_type="mesoscope experiment",
         experiment_name=experiment_name,
     )
 
+    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
+    # both classes to run through the init checks. The classes are later re-instantiated during session data
+    # preprocessing
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
+        file_path=session_data.raw_data.project_configuration_path
+    )
+    _ = WaterSheet(
+        animal_id=int(animal_id),
+        session_date=session_data.session_name,
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.water_log_sheet_id,
+    )
+    _ = SurgerySheet(
+        project_name=project_name,
+        animal_id=int(animal_id),
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.surgery_sheet_id,
+    )
+
     # Uses initialized SessionData instance to load the experiment configuration data
-    experiment_configuration: MesoscopeExperimentConfiguration = MesoscopeExperimentConfiguration.from_yaml(  # type: ignore
+    experiment_config: MesoscopeExperimentConfiguration = MesoscopeExperimentConfiguration.from_yaml(  # type: ignore
         file_path=Path(session_data.raw_data.experiment_configuration_path)
     )
 
-    # Generates the runtime class and other assets
-    # Pre-generates the SessionDescriptor class and populates it with experiment data.
+    # Verifies that all Mesoscope-VR states used during experiments are valid
+    valid_states = {1, 2}
+    for state in experiment_config.experiment_states.values():
+        if state.system_state_code not in valid_states:
+            message = (
+                f"Invalid Mesoscope-VR system state code {state.system_state_code} encountered when verifying "
+                f"{experiment_name} experiment configuration. Currently, only codes 1 (rest) and 2 (run) are supported "
+                f"for the Mesoscope-VR system."
+            )
+            console.error(message=message, error=ValueError)
+
+    # Generates the session descriptor class
     descriptor = MesoscopeExperimentDescriptor(
         experimenter=experimenter, mouse_weight_g=animal_weight, dispensed_water_volume_ml=0.0
     )
 
-    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
-    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
+    # Initializes the main runtime interface class.
     runtime = _MesoscopeExperiment(
-        project_configuration=project_configuration,
-        experiment_configuration=experiment_configuration,
+        experiment_configuration=experiment_config,
         session_data=session_data,
         session_descriptor=descriptor,
     )
@@ -2055,24 +2113,17 @@ def experiment_logic(
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
     try:
-        for state in experiment_configuration.experiment_states.values():
+        for state in experiment_config.experiment_states.values():
             runtime_timer.reset()  # Resets the timer
 
             # Sets the Experiment state
             runtime.change_experiment_state(state.experiment_state_code)
 
-            # Resolves and sets the VR state
-            if state.vr_state_code == 1:
+            # Resolves and sets the Mesoscope-VR system state
+            if state.system_state_code == 1:
                 runtime.rest()
-            elif state.vr_state_code == 2:
+            elif state.system_state_code == 2:
                 runtime.run()
-            else:
-                warning_text = (
-                    f"Invalid VR state code {state.vr_state_code} encountered when executing experiment runtime. "
-                    f"Currently, only codes 1 (rest) and 2 (run) are supported. Skipping the unsupported state."
-                )
-                console.echo(message=warning_text, level=LogLevel.ERROR)
-                continue
 
             # Creates a tqdm progress bar for the current experiment state
             with tqdm(
@@ -2085,9 +2136,9 @@ def experiment_logic(
                 while runtime_timer.elapsed < state.state_duration_s:
                     visualizer.update()  # Continuously updates the visualizer
 
-                    # Updates the progress bar every second. While the current implementation is not safe, we know that
-                    # the loop will cycle much faster than 1 second, so it should not be possible for the delta to ever
-                    # exceed 1 second.
+                    # Updates the progress bar every second. While the current implementation is technically not safe,
+                    # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
+                    # delta to ever exceed 1 second.
                     if runtime_timer.elapsed != previous_seconds:
                         pbar.update(1)
                         previous_seconds = runtime_timer.elapsed
@@ -2118,44 +2169,28 @@ def experiment_logic(
     runtime.stop()
 
 
-def maintenance_logic(project_name: str) -> None:
-    """Encapsulates the logic used to maintain the solenoid valve and the running wheel.
+def maintenance_logic() -> None:
+    """Encapsulates the logic used to maintain various components of the Mesoscope-VR system.
 
-    This runtime allows interfacing with the water valve and the wheel break outside training and experiment runtime
-    contexts. Usually, at the beginning of each experiment or training day the valve is filled with water and
-    'referenced' to verify it functions as expected. At the end of each day, the valve is emptied. Similarly, the wheel
-    is cleaned after each session and the wheel surface wrap is replaced on a weekly or monthly basis (depending on the
-    used wrap).
-
-    Notes:
-        This runtime is also co-opted to check animal windows after the recovery period. This is mostly handled via the
-        ScanImage software running on the mesoscope PC, while this runtime generates a snapshot of HeadBar and LickPort
-        positions used during the verification.
-
-    Args:
-        project_name: The name of the project whose configuration data should be used when interfacing with the solenoid
-            valve. Primarily, this is used to extract valve calibration data to perform valve 'referencing' (testing)
-            procedure. When testing cranial windows, this is also used to determine where to save the Zaber position
-            snapshot.
+    This runtime is primarily used to verify and, if necessary, recalibrate the water valve between training or
+    experiment days and to maintain the surface material of the running wheel.
     """
-    # Enables the console
-    if not console.enabled:
-        console.enable()
 
-    message = f"Initializing Mesoscope-VR maintenance runtime..."
+    message = f"Initializing Mesoscope-VR system maintenance runtime..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Uses the input project name to load the valve calibration data
-    project_configuration = ProjectConfiguration.load(project_name=project_name)
+    # Queries the data acquisition system runtime parameters. This runtime only needs access to the base acquisition
+    # system configuration data, as it does not generate any new data by itself.
+    system_configuration = get_system_configuration()
 
     # Initializes a timer used to optimize console printouts for using the valve in debug mode (which also posts
     # things to console).
     delay_timer = PrecisionTimer("s")
 
-    message = f"Initializing interface assets..."
+    message = f"Initializing interface classes..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Runs all calibration procedures inside a temporary directory which is deleted at the end of runtime.
+    # All calibration procedures are executed in a temporary directory deleted after runtime.
     with tempfile.TemporaryDirectory(prefix="sl_maintenance_") as output_dir:
         output_path: Path = Path(output_dir)
 
@@ -2173,89 +2208,64 @@ def maintenance_logic(project_name: str) -> None:
         # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
         # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
         message = (
-            "Preparing to connect to HeadBar and LickPort Zaber controllers. Make sure that ZaberLauncher app is "
-            "running before proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually "
-            "control the HeadBar and LickPort motor positions until you reset the runtime."
+            "Preparing to connect to all Zaber motor controllers. Make sure that ZaberLauncher app is running before "
+            "proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually control Zaber motor "
+            "positions until you reset the runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        # Initializes HeadBar and LickPort binding classes
-        headbar = HeadBar("/dev/ttyUSB0", output_path.joinpath("zaber_positions.yaml"))
-        lickport = LickPort("/dev/ttyUSB1", output_path.joinpath("zaber_positions.yaml"))
+        # Providing the class with an invalid path makes sure it falls back to using default positions cached in
+        # non-volatile memory of each device.
+        zaber_motors: ZaberMotors = ZaberMotors(zaber_positions_path=output_path.joinpath("invalid_path.yaml"))
 
-        message = f"Zaber controllers: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Initializes the face camera. This is only relevant when the pipeline is used check cranial windows in
-        # implanted animals.
-        cameras = VideoSystems(
-            data_logger=logger,
-            output_directory=output_path,
-            face_camera_index=project_configuration.face_camera_index,
-            left_camera_index=project_configuration.left_camera_index,
-            right_camera_index=project_configuration.right_camera_index,
-            harvesters_cti_path=Path(project_configuration.harvesters_cti_path),
-        )
-        cameras.start_face_camera()
-        message = f"Face camera display: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Initializes the Actor MicroController with the valve and break modules. Ignores all other modules at this
-        # time.
+        # Initializes the interface for the Actor MicroController that manages the valve and break modules.
         valve: ValveInterface = ValveInterface(
-            valve_calibration_data=project_configuration.valve_calibration_data,  # type: ignore
-            debug=True,
+            valve_calibration_data=system_configuration.microcontrollers.valve_calibration_data,
+            debug=True,  # Hardcoded to True during maintenance
         )
-        wheel: BreakInterface = BreakInterface(debug=True)
+        wheel: BreakInterface = BreakInterface(
+            minimum_break_strength=system_configuration.microcontrollers.minimum_break_strength_g_cm,
+            maximum_break_strength=system_configuration.microcontrollers.maximum_break_strength_g_cm,
+            object_diameter=system_configuration.microcontrollers.wheel_diameter_cm,
+            debug=True,  # Hardcoded to True during maintenance
+        )
         controller: MicroControllerInterface = MicroControllerInterface(
-            controller_id=np.uint8(101),
-            microcontroller_serial_buffer_size=8192,
-            microcontroller_usb_port=project_configuration.actor_port,
+            controller_id=np.uint8(101),  # Hardcoded
+            microcontroller_serial_buffer_size=8192,  # Hardcoded
+            microcontroller_usb_port=system_configuration.microcontrollers.actor_port,
             data_logger=logger,
             module_interfaces=(valve, wheel),
         )
         controller.start()
-        controller.unlock_controller()
+        controller.unlock_controller()  # Unlocks actor controller to allow manipulating managed hardware
 
         # Delays for 1 second for the valve to initialize and send the state message. This avoids the visual clash
         # with the zaber positioning dialog
         delay_timer.delay_noblock(delay=1)
 
-        message = f"Actor MicroController: Started."
+        message = f"Actor MicroController interface: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
-        # proceed with motor movements.
         message = (
-            "Preparing to move HeadBar and LickPort motors. Remove the mesoscope objective, swivel out the VR screens, "
-            "and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE the "
-            "mesoscope and / or HARM the animal."
+            "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out the "
+            "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
+            "the mesoscope and / or HARM the animal."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
-        # with each other, so it is safe to move both assemblies at the same time.
-        headbar.prepare_motors(wait_until_idle=False)
-        lickport.prepare_motors(wait_until_idle=True)
-        headbar.wait_until_idle()
+        zaber_motors.prepare_motors()  # homes all motors
+        zaber_motors.maintenance_position()  # Moves all motors to maintenance position
 
-        # Moves the motors in calibration position.
-        headbar.calibrate_position(wait_until_idle=False)
-        lickport.calibrate_position(wait_until_idle=True)
-        headbar.wait_until_idle()
-
-        message = f"HeadBar and LickPort motors: Positioned for Mesoscope-VR maintenance runtime."
+        message = f"Zaber motors: Positioned for Mesoscope-VR system maintenance."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user about supported calibration commands
         message = (
             "Supported valve commands: open, close, close_10, reference, reward, calibrate_15, calibrate_30, "
-            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Supported HeadBar and "
-            "LickPort motor positioning commands: image, mount, maintain. Supported Mesoscope position, HeadBar and "
-            "LickPort motor position, and window screenshot saving command: snapshot. Use 'q' command to terminate the "
-            "runtime."
+            "calibrate_45, calibrate_60. Supported break (wheel) commands: lock, unlock. Use 'q' command to terminate "
+            "the runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -2263,12 +2273,12 @@ def maintenance_logic(project_name: str) -> None:
             command = input()  # Silent input to avoid visual spam.
 
             if command == "open":
-                message = f"Opening valve."
+                message = f"Opening the valve..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.toggle(state=True)
 
             if command == "close":
-                message = f"Closing valve."
+                message = f"Closing the valve..."
                 console.echo(message=message, level=LogLevel.INFO)
                 valve.toggle(state=False)
 
@@ -2281,7 +2291,7 @@ def maintenance_logic(project_name: str) -> None:
                     if previous_time != delay_timer.elapsed:
                         previous_time = delay_timer.elapsed
                         console.echo(
-                            message=f"Remaining time: {10 - (delay_timer.elapsed - start)} seconds.",
+                            message=f"Remaining time: {10 - (delay_timer.elapsed - start)} seconds...",
                             level=LogLevel.INFO,
                         )
                 valve.toggle(state=False)  # Closes the valve after a 10-second delay
@@ -2290,38 +2300,70 @@ def maintenance_logic(project_name: str) -> None:
                 message = f"Delivering 5 uL water reward..."
                 console.echo(message=message, level=LogLevel.INFO)
                 pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
-                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.set_parameters(
+                    pulse_duration=pulse_duration,
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.send_pulse()
 
             if command == "reference":
-                message = f"Running the reference (200 x 5 uL pulse time) valve calibration procedure..."
+                message = f"Running the reference valve calibration procedure..."
+                console.echo(message=message, level=LogLevel.INFO)
+                message = f"Expecting to dispense 1 ml of water (200 pulses x 5 uL each)..."
                 console.echo(message=message, level=LogLevel.INFO)
                 pulse_duration = valve.get_duration_from_volume(target_volume=5.0)
-                valve.set_parameters(pulse_duration=pulse_duration)
+                valve.set_parameters(
+                    pulse_duration=pulse_duration,  # Hardcoded to 5 uL for consistent behavior
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(200),  # Hardcoded to 200 pulses for consistent behavior
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.calibrate()
 
             if command == "calibrate_15":
-                message = f"Running 15 ms pulse valve calibration..."
+                message = f"Running 15 ms pulse duration valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(15000))  # 15 ms in us
+                valve.set_parameters(
+                    pulse_duration=np.uint32(15000),  # 15 ms in us
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.calibrate()
 
             if command == "calibrate_30":
                 message = f"Running 30 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(30000))  # 30 ms in us
+                valve.set_parameters(
+                    pulse_duration=np.uint32(30000),  # 30 ms in us
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.calibrate()
 
             if command == "calibrate_45":
                 message = f"Running 45 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(45000))  # 45 ms in us
+                valve.set_parameters(
+                    pulse_duration=np.uint32(45000),  # 45 ms in us
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.calibrate()
 
             if command == "calibrate_60":
                 message = f"Running 60 ms pulse valve calibration..."
                 console.echo(message=message, level=LogLevel.INFO)
-                valve.set_parameters(pulse_duration=np.uint32(60000))  # 60 ms in us
+                valve.set_parameters(
+                    pulse_duration=np.uint32(60000),  # 60 ms in us
+                    calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
+                    calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
+                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                )
                 valve.calibrate()
 
             if command == "lock":
@@ -2334,76 +2376,256 @@ def maintenance_logic(project_name: str) -> None:
                 console.echo(message=message, level=LogLevel.INFO)
                 wheel.toggle(state=False)
 
-            if command == "snapshot":
-                _snapshot_logic(configuration=project_configuration, headbar=headbar, lickport=lickport)
-                message = f"Initial animal data snapshot: Generated."
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "image":
-                message = f"Moving HeadBar and LickPort to the default brain imaging position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.mount_position(wait_until_idle=False)
-                lickport.park_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "mount":
-                message = f"Moving HeadBar and LickPort to the animal mounting position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.mount_position(wait_until_idle=False)
-                lickport.mount_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
-            if command == "maintain":
-                message = f"Moving HeadBar and LickPort to the default Mesoscope-VR maintenance position..."
-                console.echo(message=message, level=LogLevel.INFO)
-                headbar.calibrate_position(wait_until_idle=False)
-                lickport.calibrate_position()
-                headbar.wait_until_idle()
-                message = f"HeadBar and LickPort: Positioned"
-                console.echo(message=message, level=LogLevel.SUCCESS)
-
             if command == "q":
-                message = f"Terminating Mesoscope-VR maintenance runtime."
+                message = f"Terminating Mesoscope-VR maintenance runtime..."
                 console.echo(message=message, level=LogLevel.INFO)
                 break
 
-        # Instructs the user to remove the objective and the animal before resetting all zaber motors.
+        # Instructs the user to remove all objects that may interfere with moving the motors.
         message = (
-            "Preparing to reset the HeadBar and LickPort motors. Remove all objects used during Mesoscope-VR "
-            "maintenance, such as water collection flasks, from the Mesoscope-VR cage."
+            "Preparing to reset all Zaber motors. Remove all objects used during Mesoscope-VR maintenance, such as "
+            "water collection flasks, from the Mesoscope-VR cage."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
         # Shuts down zaber bindings
-        headbar.park_position(wait_until_idle=False)
-        lickport.park_position(wait_until_idle=True)
-        headbar.wait_until_idle()
-        headbar.disconnect()
-        lickport.disconnect()
-
-        message = f"HeadBar and LickPort connections: terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        zaber_motors.park_position()
+        zaber_motors.disconnect()
 
         # Shuts down microcontroller interfaces
         controller.stop()
 
-        message = f"Actor MicroController: Terminated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Shuts down the face camera
-        cameras.stop()
-        message = f"Face camera: Terminated."
+        message = f"Actor MicroController interface: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Stops the data logger
         logger.stop()
 
-        message = f"Runtime: Terminated."
+        message = f"Mesoscope-VR system maintenance runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # The logs will be cleaned up by deleting the temporary directory when this runtime exits.
+
+def window_checking_logic(
+    project_name: str,
+    animal_id: str,
+) -> None:
+    """Encapsulates the logic used to verify the surgery quality (cranial window) and generate the initial snapshot of
+    the Mesoscope-VR system configuration for a newly added animal of the target project.
+
+    This function is used when new animals are added to the project, before any other training or experiment runtime.
+    Primarily, it is used to verify that the surgery went as expected and the animal is fit for providing high-quality
+    scientific data. As part of this process, the function also generates the snapshot of zaber motor positions and the
+    mesoscope objective position to be reused by future sessions.
+
+    Notes:
+        This function largely behaves similar to all other training and experiment session runtimes. However, it does
+        not use most of the Mesoscope-VR components and does not make most of the runtime data files typically generated
+        by other sessions. All window checking sessions are automatically marked as 'incomplete' and excluded from
+        automated data processing.
+
+    Args:
+        project_name: The name of the project to which the checked animal belongs.
+        animal_id: The numeric ID of the animal whose cranial window is being checked.
+    """
+    message = f"Initializing window checking runtime..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Queries the data acquisition system runtime parameters.
+    system_configuration = get_system_configuration()
+
+    # Verifies that the target project exists
+    project_folder = system_configuration.paths.root_directory.joinpath(project_name)
+    if not project_folder.exists():
+        message = (
+            f"Unable to execute the run training for the animal {animal_id} of project {project_name}. The target "
+            f"project does not exist on the local machine. Use the 'sl-create-project' command to create the project "
+            f"before running training or experiment sessions."
+        )
+        console.error(message=message, error=FileNotFoundError)
+
+    # Initializes the SessionData and MesoscopeData classes for the session.
+    session_data = SessionData.create(
+        project_name=project_name,
+        animal_id=animal_id,
+        session_type="window checking",
+    )
+    mesoscope_data = MesoscopeData(session_data=session_data)
+
+    # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
+    # through the init checks. The class is later re-instantiated during session data preprocessing
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
+        file_path=session_data.raw_data.project_configuration_path
+    )
+    _ = SurgerySheet(
+        project_name=project_name,
+        animal_id=int(animal_id),
+        credentials_path=system_configuration.paths.google_credentials_path,
+        sheet_id=project_configuration.surgery_sheet_id,
+    )
+
+    message = f"Initializing interface classes..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Initializes the data logger. This initialization follows the same procedure as the BehaviorTraining or
+    # MesoscopeExperiment classes
+    logger: DataLogger = DataLogger(
+        output_directory=Path(session_data.raw_data.raw_data_path),
+        instance_name="behavior",  # Creates behavior_log subfolder under raw_data
+        sleep_timer=0,
+        exist_ok=True,
+        process_count=1,
+        thread_count=10,
+    )
+    logger.start()
+
+    # Initializes the face camera. Body cameras are not used during window checking.
+    cameras = VideoSystems(data_logger=logger, output_directory=session_data.raw_data.camera_data_path)
+    cameras.start_face_camera()
+    message = f"Face camera display: Started."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+    # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+    message = (
+        "Preparing to connect to all Zaber motor controllers. Make sure that ZaberLauncher app is running before "
+        "proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually control Zaber motor "
+        "positions until you reset the runtime."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Initializes the Zaber motors interface
+    zaber_motors: ZaberMotors = ZaberMotors(
+        zaber_positions_path=mesoscope_data.vrpc_persistent_data.zaber_positions_path
+    )
+
+    # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
+    # proceed with motor movements.
+    message = (
+        "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the VR "
+        "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
+        "the mesoscope and / or HARM the animal."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
+    # with each other, so it is safe to move both assemblies at the same time.
+    zaber_motors.prepare_motors()
+
+    # Sets the motors into the mounting position. Since there should not be any previous positions, all motors should
+    # be set to the default mounting position.
+    zaber_motors.mount_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Gives user time to mount the animal and requires confirmation before proceeding further.
+    message = (
+        "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig and install the "
+        "mesoscope objetive. DO NOT adjust any motors manually at this time, as all changes to all motors will be "
+        "reset by moving them to the imaging position. Keep the mesoscope objective away from the animal's head."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Primarily, this sets the LickPort to the default parking position. The HeadBar and Wheel should not move, as they
+    # are already 'restored'. However, if the user did move them manually, they too will be restored to default
+    # positions.
+    zaber_motors.restore_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # This section is where most manual manipulations take place, as the user needs to move the objective to the imaging
+    # plane and check the quality of surgery.
+    message = (
+        "Adjust all Zaber motor positions and position the mesoscope objective above the imaging field to asses the "
+        "animal surgery and cranial window implantation quality. This is the last manual checkpoint, after this "
+        "message the runtime control function will start generating the snapshot of the animal cranial window state "
+        "and Mesoscope-VR system parameters."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Retrieves current motor positions and packages them into a ZaberPositions object.
+    zaber_positions = zaber_motors.generate_position_snapshot()
+
+    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
+    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
+    zaber_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.zaber_positions_path))
+
+    message = f"Zaber motor position snapshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Forces the user to always have a single cranial window screenshot and does not allow proceeding until the
+    # screenshot is generated.
+    mesodata_path = Path(mesoscope_data.scanimagepc_data.meso_data_path)
+    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+    while len(screenshots) != 1:
+        message = (
+            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
+            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
+            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
+            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
+            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
+            f"screenshots stored in the folder before proceeding."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
+
+    # Moves the screenshot to the raw_data session folder
+    screenshot_path: Path = screenshots[0]
+    sh.move(src=screenshot_path, dst=Path(session_data.raw_data.window_screenshot_path))
+    message = f"Cranial window and dot-alignment screenshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Generates the mesoscope positions file precursor in the raw_data folder of the managed session and forces the
+    # user to update it with the current mesoscope objective positions.
+    mesoscope_positions = MesoscopePositions()
+    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+    message = f"Mesoscope positions precursor file: Generated."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Forces the user to update the mesoscope positions file with current mesoscope data.
+    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+        file_path=Path(session_data.raw_data.mesoscope_positions_path)
+    )
+    while (
+        mesoscope_positions.mesoscope_x == 0.0
+        and mesoscope_positions.mesoscope_y == 0.0
+        and mesoscope_positions.mesoscope_z == 0.0
+    ):
+        message = (
+            "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data directory "
+            "has been updated to include the mesoscope objective positions used during runtime. Manually edit the "
+            "mesoscope_positions.yaml file and replace the default text under the all available position fields "
+            "with coordinates displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to "
+            "the file by using 'CTRL+S' combination."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+
+        # Reloads the mesoscope positions data each time to verify whether the user ahs edited the data.
+        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(session_data.raw_data.mesoscope_positions_path)
+        )
+
+    # Dumps the updated data into the persistent_data folder of the animal
+    mesoscope_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
+
+    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline primarily just
+    # copies the session raw_data folder to the NAS and BioHPC server.
+    preprocess_session_data(session_data=session_data)
+
+    # Shuts down the face camera
+    cameras.stop()
+    message = f"Face camera: Terminated."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Terminates the runtime
+    cameras.stop()
+    message = f"Window checking runtime: Terminated."
+    console.echo(message=message, level=LogLevel.SUCCESS)

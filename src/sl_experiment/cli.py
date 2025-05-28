@@ -5,15 +5,18 @@ from pathlib import Path
 
 import click
 from sl_shared_assets import SessionData, ProjectConfiguration
-from src.sl_experiment.mesoscope_vr.experiment import (
-    run_train_logic,
-    lick_training_logic,
-    run_experiment_logic,
-    vr_maintenance_logic,
-)
-from src.sl_experiment.mesoscope_vr.data_preprocessing import purge_redundant_data, preprocess_session_data
 
-from .zaber_bindings import CRCCalculator, discover_zaber_devices
+from .mesoscope_vr import (
+    CRCCalculator,
+    experiment_logic,
+    maintenance_logic,
+    run_training_logic,
+    lick_training_logic,
+    purge_redundant_data,
+    window_checking_logic,
+    discover_zaber_devices,
+    preprocess_session_data,
+)
 
 
 @click.command()
@@ -45,16 +48,7 @@ def list_devices(errors: bool) -> None:
 
 
 @click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project whose configuration data should be used during Mesoscope-VR system maintenance. If "
-    "the maintenance runtime is used to save Zaber snapshots for new animals, the project also determines where "
-    "the snapshots are saved.",
-)
-def maintain_acquisition_system(project: str) -> None:
+def maintain_acquisition_system() -> None:
     """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
 
     This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
@@ -65,7 +59,7 @@ def maintain_acquisition_system(project: str) -> None:
     The interface also contains Zaber motors (HeadBar and LickPort) bindings to facilitate testing the quality of
     implanted cranial windows before running training sessions for new animals.
     """
-    vr_maintenance_logic(project_name=project)
+    maintenance_logic()
 
 
 @click.command()
@@ -315,7 +309,7 @@ def run_training(
     """
 
     # Runs the training session.
-    run_train_logic(
+    run_training_logic(
         experimenter=user,
         project_name=project,
         animal_id=animal,
@@ -386,7 +380,7 @@ def run_experiment(
     user-written configuration .yaml file, which should be stored inside the 'configuration' folder of the target
     project. The experiments are discovered by name, allowing a single project to have multiple different experiments.
     """
-    run_experiment_logic(
+    run_experiment(
         experimenter=user,
         project_name=project,
         experiment_name=experiment,

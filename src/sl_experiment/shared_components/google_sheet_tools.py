@@ -33,7 +33,6 @@ _required_surgery_headers: set[str] = {
     "cage #",
     "location housed",
     "status",
-
     # Procedure Data headers
     "date",
     "start",
@@ -43,15 +42,13 @@ _required_surgery_headers: set[str] = {
     "surgery notes",
     "post-op notes",
     "surgery quality",
-
     # Drug Data headers (required)
     "lrs (ml)",
     "ketoprofen (ml)",
     "buprenorphine (ml)",
     "dexamethasone (ml)",
-
     # Updating surgery quality:
-    "surgery quality"
+    "surgery quality",
 }
 
 _required_water_restriction_headers: set[str] = {
@@ -60,7 +57,7 @@ _required_water_restriction_headers: set[str] = {
     "given by:",
     "water given (ml)",
     "behavior",
-    "time"
+    "time",
 }
 
 
@@ -797,9 +794,7 @@ class WaterSheet:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
-    def update_water_log(
-        self, mouse_weight: float, water_ml: float, experimenter_id: str, session_type: str
-    ) -> None:
+    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_type: str) -> None:
         """Updates the water restriction log for the managed animal's training or experiment data.
 
         This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water

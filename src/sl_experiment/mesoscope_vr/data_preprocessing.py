@@ -1,8 +1,6 @@
-"""This module provides the methods used to preprocess experimental data after acquisition. The primary purpose of this
-procedure is to prepare the data for storage and further processing in the Sun lab data cluster.
-
-This module also provides some of the dataclasses used to store runtime information on disk (session descriptors,
-hardware configuration) and the main SessionData class used to manage the data of each session.
+"""This module provides functions used to preprocess the data acquired by the Mesoscope-VR system after acquisition.
+Primarily, preprocessing prepares the data for long-term storage and further processing in the Sun lab data cluster by
+efficiently and losslessly compressing the raw data and moving it ot he BioHPC server and the NAS back-up storage.
 """
 
 import os
@@ -29,11 +27,15 @@ from sl_shared_assets import (
     MesoscopeExperimentDescriptor,
     transfer_directory,
     calculate_directory_checksum,
+    Server,
+    Job,
 )
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
+from ataraxis_time import PrecisionTimer
 
-from ..shared_components import SurgerySheet, WaterSheet
+from ..shared_components import WaterSheet, SurgerySheet
+from .tools import MesoscopeData, get_system_configuration
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -77,7 +79,8 @@ def _delete_directory(directory_path: Path) -> None:
 
 
 def _get_stack_number(tiff_path: Path) -> int | None:
-    """A helper function that determines the number of mesoscope-acquired tiff stacks using its file name.
+    """A helper function that determines the position of the input tiff stack in the overall sequence of tiff stacks
+    acquired by the mesoscope during the acquisition cycle.
 
     This is used to sort all TIFF stacks in a directory before recompressing them with LERC scheme. Like
     other helpers, this helper is also used to identify and remove non-mesoscope TIFFs from the dataset.
@@ -86,8 +89,8 @@ def _get_stack_number(tiff_path: Path) -> int | None:
         tiff_path: The path to the TIFF file to evaluate.
 
     Returns:
-        The number of frames contained in the TIFF stack file or None to indicate that the input file is not a valid
-        mesoscope TIFF stack.
+        The position of the stack in the overall stack sequence acquired by the mesoscope during runtime or None to
+        indicate that the input file is not a valid mesoscope TIFF stack.
     """
     try:
         return int(tiff_path.stem.split("_")[-1])  # ScanImage appends _acquisition#_file# to files, we use file# here.
@@ -126,7 +129,7 @@ def _check_stack_size(file: Path) -> int:
 
 
 def _process_stack(
-    tiff_path: Path, first_frame_number: int, output_dir: Path, verify_integrity: bool, batch_size: int = 250
+    tiff_path: Path, first_frame_number: int, output_directory: Path, verify_integrity: bool, batch_size: int = 250
 ) -> dict[str, Any]:
     """Reads a TIFF stack, extracts its frame-variant ScanImage data, and saves it as a LERC-compressed stacked TIFF
     file.
@@ -151,7 +154,7 @@ def _process_stack(
         first_frame_number: The position (number) of the first frame stored in the stack, relative to the overall
             sequence of frames acquired during the experiment. This is used to configure the output file name to include
             the range of frames stored in the stack.
-        output_dir: The path to the directory where to save the processed stacks.
+        output_directory: The path to the directory where to save the processed stacks.
         verify_integrity: Determines whether to verify the integrity of compressed data against the source data.
             The conversion does not alter the source data, so it is usually safe to disable this option, as the chance
             of compromising the data is negligible. Note, enabling this function doubles the RAM usage for each worker
@@ -266,7 +269,7 @@ def _process_stack(
         end_frame = first_frame_number + stack_size - 1  # Ending frame number is length - 1 + start
 
         # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
-        output_path = output_dir.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
+        output_path = output_directory.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
 
         # Calculates the total number of batches required to fully process the stack
         num_batches = int(np.ceil(stack_size / batch_size))
@@ -316,13 +319,13 @@ def _generate_ops(
     frame_data: NDArray[np.int16],
     ops_path: Path,
 ) -> None:
-    """Uses frame-invariant ScanImage metadata and static default values to create an ops.json file in the directory
-    specified by data_path.
+    """Uses frame-invariant ScanImage metadata to create an ops.json at the specified ops_path.
 
-    This function is an implementation of the mesoscope data extraction helper from the suite2p library. The helper
-    function has been reworked to use the metadata parsed by tifffile and reimplemented in Python. Primarily, this
-    function generates the 'fs', 'dx', 'dy', 'lines', 'nroi', 'nplanes' and 'mesoscan' fields of the 'ops' configuration
-    file.
+    This function is an implementation of the mesoscope data extraction helper from the original suite2p library. The
+    helper function has been reworked to use the metadata parsed by tifffile and reimplemented in Python. Primarily,
+    this function generates the 'fs', 'dx', 'dy', 'lines', 'nroi', 'nplanes' and 'mesoscan' fields of the 'ops'
+    configuration file. The Sun lab suite2p implementation is statically configured to find and use these files when
+    working with mesoscope data to configure the single-day cell activity extraction pipeline.
 
     Notes:
         The generated ops.json file will be saved at the location and filename specified by the ops_path.
@@ -471,10 +474,6 @@ def _preprocess_video_names(session_data: SessionData) -> None:
     unique by including session names (timestamps). This is necessary to support DeepLabCut tracking, as DLC is not
     able to resolve unique videos based on their storage paths.
 
-    Notes:
-        This function assumes that the runtime uses 3 cameras with IDs 51 (face camera), 62 (left camera), and 73
-        (right camera).
-
     Args:
         session_data: The SessionData instance for the processed session.
     """
@@ -534,14 +533,16 @@ def _pull_mesoscope_data(
         session_data: The SessionData instance for the processed session.
         remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
             Generally, it is recommended to remove source data to keep ScanImagePC disk usage low. Note, setting
-            this to True will only mark the data for removal. The data will not be removed until 'purge-data' command
-            is used from the terminal.
+            this to True will only mark the data for removal. The removal is carried out by the dedicated data purging
+            function that runs at the end of the session data preprocessing sequence.
         verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
             performed before source folder is marked for removal from the ScanImagePC if remove_sources is True.
     """
-    # Uses the session name to determine the path to the folder that stores raw mesoscope data on the ScanImage PC.
+    # Uses the input SessionData instance to determine the path to the folder that stores raw mesoscope data on the
+    # ScanImage PC.
     session_name = session_data.session_name
-    source = Path(session_data.mesoscope_data.session_specific_path)
+    mesoscope_data = MesoscopeData(session_data)
+    source = Path(mesoscope_data.scanimagepc_data.session_specific_path)
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -559,18 +560,19 @@ def _pull_mesoscope_data(
 
     # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
     # all files are present or fails five times in a row.
+    error = False
     for attempt in range(5):  # A maximum of 5 reattempts is allowed
         # Extracts the names of files stored in the source folder
         files: tuple[Path, ...] = tuple([path for ext in extensions for path in source.glob(ext)])
         file_names: tuple[str, ...] = tuple([file.name for file in files])
-        error = False
+        error = False  # Resets the error tracker at the beginning of each cycle
 
         # Ensures the folder contains motion estimator data files
         if "MotionEstimator.me" not in file_names:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
                 f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
-                f"MotionEstimator.me file, which is required for further frame data processing."
+                f"required MotionEstimator.me file."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
@@ -579,7 +581,7 @@ def _pull_mesoscope_data(
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
                 f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
-                f"zstack.mat file, which is required for further frame data processing."
+                f"required zstack.mat file."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
@@ -603,25 +605,25 @@ def _pull_mesoscope_data(
         # Otherwise, waits for the user to move the files into the requested directory and continues the runtime
         message = (
             f"Unable to locate all required Mesoscope data files when pulling the session {session_name} data to the "
-            f"VRPC. Move all requested files to the mesoscope_frames directory on the ScanImage PC before "
-            f"continuing the runtime. Note, cycling through this message 5 times in a row will abort the "
+            f"VRPC. Move all requested files to the session-specific mesoscope_frames directory on the ScanImage PC "
+            f"before continuing the runtime. Note, cycling through this message 5 times in a row will abort the "
             f"preprocessing with a RuntimeError."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        # If the user has repeatedly failed 10 attempts in a row, exits with a runtime error
-        if attempt >= 4:
-            message = (
-                f"Failed 5 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
-                f"data processing and terminating the preprocessing runtime."
-            )
-            console.error(message=message, error=RuntimeError)
+    # If the user has repeatedly failed 5 attempts in a row, exits with a runtime error.
+    if error:
+        message = (
+            f"Failed 5 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
+            f"data processing and terminating the preprocessing runtime."
+        )
+        console.error(message=message, error=RuntimeError)
 
     # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
     # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
     # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = Path(session_data.scanimagepc_persistent_data.motion_estimator_path)
+    persistent_motion_estimator_path = Path(mesoscope_data.scanimagepc_data.motion_estimator_path)
     if not persistent_motion_estimator_path.exists():
         sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
@@ -655,8 +657,8 @@ def _preprocess_mesoscope_directory(
     verify_integrity: bool = False,
     batch_size: int = 250,
 ) -> None:
-    """Loops over all multi-frame Mesoscope TIFF stacks in the mesoscope_frames, recompresses them using Limited Error
-    Raster Compression (LERC) scheme, and extracts ScanImage metadata.
+    """Loops over all multi-frame Mesoscope TIFF stacks acquired for the session, recompresses them using the Limited
+    Error Raster Compression (LERC) scheme, and extracts ScanImage metadata.
 
     This function is used as a preprocessing step for mesoscope-acquired data that optimizes the size of raw images for
     long-term storage and streaming over the network. To do so, all stacks are re-encoded using LERC scheme, which
@@ -870,6 +872,196 @@ def _preprocess_log_directory(
     log_directory.rename(target=Path(session_data.raw_data.behavior_data_path))
 
 
+def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
+    """Checks the data stored on Sun lab BioHPC server for the presence of telomere.bin markers and removes all matching
+    directories on the VRPC.
+
+    Specifically, this function iterates through all raw_data directories on the VRPC, checks if the corresponding
+    directory on the BioHPC server contains a telomere.bin marker, and removes the local raw_data directory if a marker
+    is found.
+
+    Args:
+        server_root_path: The path to the root directory used to store all experiment and training data on the Sun lab
+            BioHPC server.
+        local_root_path: The path to the root directory used to store all experiment and training data on the VRPC.
+    """
+    # Finds all raw_data directories in the local path for which there is a raw_data with the telomere.bin marker on
+    # the server
+    deletion_candidates = []
+    for raw_data_path in local_root_path.rglob("raw_data"):
+        # Constructs the relative path to the raw_data directory from the local root
+        relative_path = raw_data_path.relative_to(local_root_path)
+
+        # Constructs the corresponding server path
+        server_path = server_root_path.joinpath(relative_path)
+
+        # Checks if the telomere.bin marker exists in the server path
+        if server_path.joinpath("telomere.bin").exists():
+            # If marker exists, removes the local (VRPC) raw_data directory
+            deletion_candidates.append(raw_data_path)
+
+    # If there are no deleting candidates, returns without further processing
+    if len(deletion_candidates) < 1:
+        return
+
+    # Iteratively removes all deletion candidates gathered above
+    for candidate in tqdm(deletion_candidates, desc="Deleting redundant VRPC directories", unit="directory"):
+        _delete_directory(directory_path=candidate)
+
+
+def _preprocess_google_sheet_data(session_data: SessionData) -> None:
+    """Updates the water restriction log and the surgery_data.yaml file.
+
+    This internal method is called as part of preprocessing. Primarily, it is used to ensure that each session folder
+    contains the up-to-date information about the surgical intervention(s) performed on the animal before running the
+    session. It also updates the water restriction log for the managed animal to reflect the water received before and
+    after runtime. Since version 2.0.0 it also determines whether the session is complete and, if so, marks it with the
+    'telomere.bin' marker.
+
+    Raises:
+        ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
+
+    Args:
+        session_data: The SessionData instance for the processed session.
+    """
+
+    # Queries the data acquisition system configuration parameters.
+    system_configuration = get_system_configuration()
+
+    # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
+    # retrieve the Google sheet ID data.
+    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
+        Path(session_data.raw_data.project_configuration_path),  # type: ignore
+    )
+
+    # Resolves the animal ID (name)
+    animal_id = int(session_data.animal_id)
+
+    # Loads the session descriptor file to read the data needed to update the wr log and determine whether to create
+    # the telomere.bin marker
+    descriptor_path = Path(session_data.raw_data.session_descriptor_path)
+    descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
+    quality: str | int = ""
+    if session_data.session_type.lower() == "lick training":
+        descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type.lower() == "run training":
+        descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type.lower() == "mesoscope experiment":
+        descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type.lower() == "window checking":
+        # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
+        # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
+        # surgery, based on the window checking outcome
+        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:  # type: ignore
+            # Forces the user to provide a quality rating between 0 and 2 inclusive.
+            quality = input("Enter the surgery quality level between 0 and 2 inclusive: ")
+    else:
+        message = (
+            f"Unable to extract the water restriction data from the session descriptor file for session "
+            f"{session_data.session_name}. Expected the session_type field of the SessionData instance to be one of "
+            f"the supported options (lick training, run training, mesoscope experiment, or window checking) but "
+            f"instead encountered {session_data.session_type}."
+        )
+        console.error(message, error=ValueError)
+
+        # This should not be reachable, it is here to appease mypy.
+        raise ValueError(message)  # pragma: no cover
+
+    # Only carries out water restriction log processing and telomere.bin creation if the code above did not resolve
+    # the quality level
+    if quality == "":
+        # Calculates the total volume of water, in ml, the animal received during and after the session
+        # noinspection PyUnboundLocalVariable
+        training_water = round(descriptor.dispensed_water_volume_ml, ndigits=3)
+        experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
+        total_water = training_water + experimenter_water
+
+        # Connects to the WR sheet and generates the new water restriction log entry
+        wr_sheet = WaterSheet(
+            session_date=session_data.session_name,
+            animal_id=animal_id,
+            credentials_path=Path(system_configuration.paths.google_credentials_path),
+            sheet_id=project_configuration.water_log_sheet_id,
+        )
+
+        wr_sheet.update_water_log(
+            mouse_weight=descriptor.mouse_weight_g,
+            water_ml=total_water,
+            experimenter_id=descriptor.experimenter,
+            session_type=session_data.session_type,
+        )
+
+        message = f"Water restriction log entry: Written."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # If the session is complete, generates the telomere.bin marker file. Note, window checking sessions are
+        # automatically considered 'incomplete' for the sake of data processing, as they do not contain any experiment
+        # or behavior data that needs automated processing.
+        if not descriptor.incomplete:
+            session_data.raw_data.telomere_path.touch(exist_ok=True)
+
+    # Loads the surgery log Google Sheet file
+    sl_sheet = SurgerySheet(
+        project_name=session_data.project_name,
+        animal_id=animal_id,
+        credentials_path=Path(system_configuration.paths.google_credentials_path),
+        sheet_id=project_configuration.surgery_sheet_id,
+    )
+
+    # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
+    if quality != "":
+        sl_sheet.update_surgery_quality(quality=int(quality))
+
+        message = f"Surgery quality: Updated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Extracts the surgery data from the Google sheet file
+    data: SurgeryData = sl_sheet.extract_animal_data()
+
+    # Saves the data as a .yaml file to the session directory
+    data.to_yaml(Path(session_data.raw_data.surgery_metadata_path))
+
+    message = f"Surgery data snapshot: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+def _verify_remote_data_integrity(session_data: SessionData) -> bool:
+
+    delay_timer = PrecisionTimer("s")
+
+    mesoscope_data = MesoscopeData(session_data)
+
+    system_configuration = get_system_configuration()
+    server_credentials = system_configuration.paths.server_credentials_path
+    server_working_directory = system_configuration.paths.
+
+    job_working_directory = server_working_directory.joinpath("temp")
+    session_raw_directory = system_configuration.paths.server_storage_directory.joinpath(session_data.project_name, session_data.animal_id, session_data.session_name)
+
+    server = Server(credentials_path=server_credentials)
+
+    job = Job(
+        job_name=f"{session_data.session_name} integrity verification.",
+        output_log=job_working_directory.joinpath("stdout.txt"),
+        error_log=job_working_directory.joinpath("stderr.txt"),
+        working_directory=job_working_directory,
+        conda_environment="manage",
+        cpus_to_use=30,
+        ram_gb=50,
+        time_limit=120,
+    )
+    job.add_command(f"sl-verify-session -sp {session_raw_directory} -c -pdr {server_working_directory}")
+
+    job = server.submit_job(job)
+
+    while not server.job_complete(job=job):
+        delay_timer.delay_noblock(delay=5, allow_sleep=True)
+
+    if not mesoscope_data.destinations.server_raw_data_path.joinpath("telomere.bin").exists():
+        return False
+    else:
+        return True
+
+
 def _push_data(
     session_data: SessionData,
     parallel: bool = True,
@@ -935,107 +1127,6 @@ def _push_data(
                 num_threads=num_threads,
                 verify_integrity=False,  # This is now done on the server directly
             )
-
-
-def _preprocess_google_sheet_data(session_data: SessionData) -> None:
-    """Updates the water restriction log and the surgery_data.yaml file.
-
-    This internal method is called as part of preprocessing. Primarily, it is used to ensure that each session folder
-    contains the up-to-date information about the surgical intervention(s) performed on the animal before running the
-    session. It also updates the water restriction log for the managed animal to reflect the water received before and
-    after runtime. This step improves user experience by ensuring all relevant data is always kept together on the NAS
-    and BioHPC server while preventing the experimenter from manually updating the log after data preprocessing.
-
-    Raises:
-        ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
-
-    Args:
-        session_data: The SessionData instance for the processed session.
-    """
-
-    # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
-    # retrieve the Google sheet ID data.
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
-        Path(session_data.raw_data.project_configuration_path),  # type: ignore
-    )
-
-    # Resolves the animal ID (name)
-    animal_id = int(session_data.animal_id)
-
-    # Loads the session descriptor file to read the data needed to update the wr log
-    descriptor_path = Path(session_data.raw_data.session_descriptor_path)
-    descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    quality: str | int = ""
-    if session_data.session_type.lower() == "lick training":
-        descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "run training":
-        descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "experiment":
-        descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "window checking":
-        # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
-        # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
-        # surgery, based on the window checking outcome
-        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:  # type: ignore
-            # Forces the user to provide a quality rating between 0 and 2 inclusive.
-            quality = input("Enter the surgery quality level between 0 and 2 inclusive: ")
-    else:
-        message = (
-            f"Unable to extract the water restriction data from the session descriptor file for session "
-            f"{session_data.session_name}. Expected the session_type field of the SessionData instance to be one of "
-            f"the supported options (Lick training, Run training, Experiment) but instead encountered "
-            f"{session_data.session_type}."
-        )
-        console.error(message, error=ValueError)
-
-        # This should not be reachable, it is here to appease mypy.
-        raise ValueError(message)  # pragma: no cover
-
-    # Only carries out water restriction log processing if the code above did not resolve the quality level
-    if quality == "":
-        # Calculates the total volume of water, in ml, the animal received during and after the session
-        # noinspection PyUnboundLocalVariable
-        training_water = round(descriptor.dispensed_water_volume_ml, ndigits=3)
-        experimenter_water = round(descriptor.experimenter_given_water_volume_ml, ndigits=3)
-        total_water = training_water + experimenter_water
-
-        # Connects to the WR sheet and generates the new water restriction log entry
-        wr_sheet = WaterSheet(
-            animal_id=animal_id,
-            credentials_path=Path(project_configuration.google_credentials_path),
-            sheet_id=project_configuration.water_log_sheet_id,
-        )
-
-        wr_sheet.update_water_log(
-            mouse_weight=descriptor.mouse_weight_g,
-            water_ml=total_water,
-            experimenter_id=descriptor.experimenter,
-            session_type=session_data.session_type,
-            session_date=session_data.session_name,
-        )
-
-        message = f"Water restriction log entry: written."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Loads the surgery log Google Sheet file
-    sl_sheet = SurgerySheet(
-        project_name=session_data.project_name,
-        credentials_path=Path(project_configuration.google_credentials_path),
-        sheet_id=project_configuration.surgery_sheet_id,
-    )
-
-    # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
-    if quality != "":
-        sl_sheet.update_surgery_quality(animal_id=animal_id, quality=int(quality))
-
-    # Extracts the surgery data from the Google sheet file
-    data: SurgeryData = sl_sheet.extract_animal_data(animal_id=animal_id)
-
-    # Saves the data as a .yaml file to the session directory
-    data.to_yaml(Path(session_data.raw_data.surgery_metadata_path))
-
-    message = f"Surgery data: saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 def preprocess_session_data(session_data: SessionData) -> None:
@@ -1114,43 +1205,6 @@ def preprocess_session_data(session_data: SessionData) -> None:
 
     message = "Data preprocessing: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
-
-
-def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
-    """Checks the data stored on Sun lab BioHPC server for the presence of telomere.bin markers and removes all matching
-    directories on the VRPC.
-
-    Specifically, this function iterates through all raw_data directories on the VRPC, checks if the corresponding
-    directory on the BioHPC server contains a telomere.bin marker, and removes the local raw_data directory if a marker
-    is found.
-
-    Args:
-        server_root_path: The path to the root directory used to store all experiment and training data on the Sun lab
-            BioHPC server.
-        local_root_path: The path to the root directory used to store all experiment and training data on the VRPC.
-    """
-    # Finds all raw_data directories in the local path for which there is a raw_data with the telomere.bin marker on
-    # the server
-    deletion_candidates = []
-    for raw_data_path in local_root_path.rglob("raw_data"):
-        # Constructs the relative path to the raw_data directory from the local root
-        relative_path = raw_data_path.relative_to(local_root_path)
-
-        # Constructs the corresponding server path
-        server_path = server_root_path.joinpath(relative_path)
-
-        # Checks if the telomere.bin marker exists in the server path
-        if server_path.joinpath("telomere.bin").exists():
-            # If marker exists, removes the local (VRPC) raw_data directory
-            deletion_candidates.append(raw_data_path)
-
-    # If there are no deleting candidates, returns without further processing
-    if len(deletion_candidates) < 1:
-        return
-
-    # Iteratively removes all deletion candidates gathered above
-    for candidate in tqdm(deletion_candidates, desc="Deleting redundant VRPC directories", unit="directory"):
-        _delete_directory(directory_path=candidate)
 
 
 def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
