@@ -92,7 +92,8 @@ class ZaberMotors:
         # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
         # the running wheel in the X axis.
         self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
-        self._wheel_x: ZaberAxis = self._headbar.get_device(0).axis
+        self._wheel.connect()
+        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
 
         # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # lick tube in Z, X, and Y axes. Note, this assumes that the chaining order of individual zaber devices is
@@ -115,7 +116,7 @@ class ZaberMotors:
                 "runtime. Setting all Zaber motors to use the default positions cached in non-volatile memory of each "
                 "motor controller."
             )
-            console.echo(message=message, level=LogLevel.WARNING)
+            console.echo(message=message, level=LogLevel.ERROR)
 
     def restore_position(self) -> None:
         """Restores the Zaber motor positions to the states recorded at the end of the previous runtime.
@@ -1061,7 +1062,7 @@ class VideoSystems:
         self._left_camera.start_frame_saving()
         self._right_camera.start_frame_saving()
 
-        message = "Body camera frame saving: Started."
+        message = "Body cameras frame saving: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self) -> None:

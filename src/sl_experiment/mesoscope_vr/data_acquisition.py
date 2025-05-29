@@ -1007,14 +1007,6 @@ class _BehaviorTraining:
 
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
-            "Preparing to move the LickPort into position. Mount the animal onto the VR rig. If necessary, adjust the "
-            "HeadBar position to make sure the animal can comfortably run the task."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
             "Preparing to move the motors into the training position. Mount the animal onto the VR rig, but DO NOT "
             "adjust any motors manually at this time, as all changes to all motors will be reset by moving them to the "
             "training position."

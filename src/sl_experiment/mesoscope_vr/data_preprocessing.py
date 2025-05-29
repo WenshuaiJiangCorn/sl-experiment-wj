@@ -1102,7 +1102,6 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     # Instantiates additional configuration and data classes that contain required information to execute server-side
     # verification
     system_configuration = get_system_configuration()
-    mesoscope_data = MesoscopeData(session_data)
 
     # The paths below map the same directories, but relative to different roots. 'remote' paths are relative to the
     # BioHPC server root, providing the paths to the target directories the server itself would use. 'local' paths point
@@ -1134,7 +1133,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     # Instructs the job to verify the integrity of the session data on the server and to create the processed data
     # hierarchy for the session.
-    remote_session_directory = mesoscope_data.destinations.server_raw_data_path
+    remote_session_directory = system_configuration.paths.server_raw_data_root.joinpath(session_data.project_name, session_data.animal_id, session_data.session_name)
     job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory}")
 
     # Submits the job to be executed on the server.

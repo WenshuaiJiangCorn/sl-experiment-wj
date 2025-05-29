@@ -67,15 +67,15 @@ class _VRPCPersistentData:
         # Resolves the session descriptor path based on the session type.
         if self.session_type == "lick training":
             self.session_descriptor_path = self.persistent_data_path.joinpath(f"lick_training_session_descriptor.yaml")
-        if self.session_type == "run training":
+        elif self.session_type == "run training":
             self.session_descriptor_path = self.persistent_data_path.joinpath(f"run_training_session_descriptor.yaml")
-        if self.session_type == "mesoscope experiment":
+        elif self.session_type == "mesoscope experiment":
             self.session_descriptor_path = self.persistent_data_path.joinpath(
                 f"mesoscope_experiment_session_descriptor.yaml"
             )
         else:
             message = (
-                f"Unsupported session type: {self.session_type} encountered when initializing additional path "
+                f"Unsupported session type '{self.session_type}' encountered when initializing additional path "
                 f"dataclasses for the Mesoscope-VR data acquisition system. Supported session types are "
                 f"'lick training', 'run training', and 'mesoscope experiment'."
             )
