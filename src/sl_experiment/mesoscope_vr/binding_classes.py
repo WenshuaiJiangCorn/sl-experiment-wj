@@ -393,7 +393,7 @@ class MicroControllerInterfaces:
         # parameters, this one is frequently queries by class methods, so it is beneficial to statically compute
         # it once.
         self._sensor_polling_delay: float = convert_time(  # type: ignore
-            time=self._system_configuration.microcontrollers.sensor_polling_delay_ms, from_units="ms", to_units="s"
+            time=self._system_configuration.microcontrollers.sensor_polling_delay_ms, from_units="ms", to_units="us"
         )
 
         # Initializes internal tracker variables
