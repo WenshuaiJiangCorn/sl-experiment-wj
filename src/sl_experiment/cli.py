@@ -4,7 +4,7 @@ from this library through the terminal."""
 from pathlib import Path
 
 import click
-from sl_shared_assets import SessionData, ProjectConfiguration
+from sl_shared_assets import SessionData
 
 from .mesoscope_vr import (
     CRCCalculator,
