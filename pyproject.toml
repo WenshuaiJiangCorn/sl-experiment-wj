@@ -68,7 +68,7 @@ dependencies = [
     "pynput>=1,<2",
     "appdirs>=1,<2",
     "pytz>=2025,<2026",
-    "sl-shared-assets==1.0.0rc23",
+    "sl-shared-assets==1.0.0rc24",
 ]
 
 [project.urls]
@@ -162,10 +162,11 @@ dev = [
 [project.scripts]
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
-sl-maintain = "sl_experiment.cli:maintain_vr"
+sl-maintain = "sl_experiment.cli:maintain_acquisition_system"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
+sl-check-window = "sl_experiment.cli:check_window"
 sl-preprocess = "sl_experiment.cli:preprocess_session"
 sl-purge = "sl_experiment.cli:purge_data"
 

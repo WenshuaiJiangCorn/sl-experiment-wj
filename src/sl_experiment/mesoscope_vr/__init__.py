@@ -1,3 +1,7 @@
+"""This package stores the data acquisition and preprocessing assets used by the Mesoscope_VR data acquisition system.
+It exposes the APIs that allow interfacing with the Mesoscope-VR system to acquire new experiment data, train animals,
+and preprocess already acquired data."""
+
 from .zaber_bindings import CRCCalculator, discover_zaber_devices
 from .data_acquisition import (
     experiment_logic,

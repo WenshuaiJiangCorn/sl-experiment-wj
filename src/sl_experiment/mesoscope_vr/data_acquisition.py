@@ -2221,7 +2221,7 @@ def maintenance_logic() -> None:
 
         # Initializes the interface for the Actor MicroController that manages the valve and break modules.
         valve: ValveInterface = ValveInterface(
-            valve_calibration_data=system_configuration.microcontrollers.valve_calibration_data,
+            valve_calibration_data=system_configuration.microcontrollers.valve_calibration_data,  # type: ignore
             debug=True,  # Hardcoded to True during maintenance
         )
         wheel: BreakInterface = BreakInterface(
@@ -2304,7 +2304,7 @@ def maintenance_logic() -> None:
                     pulse_duration=pulse_duration,
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.send_pulse()
 
@@ -2318,7 +2318,7 @@ def maintenance_logic() -> None:
                     pulse_duration=pulse_duration,  # Hardcoded to 5 uL for consistent behavior
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(200),  # Hardcoded to 200 pulses for consistent behavior
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.calibrate()
 
@@ -2329,7 +2329,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(15000),  # 15 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.calibrate()
 
@@ -2340,7 +2340,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(30000),  # 30 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.calibrate()
 
@@ -2351,7 +2351,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(45000),  # 45 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.calibrate()
 
@@ -2362,7 +2362,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(60000),  # 60 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint16(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
                 )
                 valve.calibrate()
 

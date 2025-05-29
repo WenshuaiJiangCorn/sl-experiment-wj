@@ -1,6 +1,6 @@
 """This module provides functions used to preprocess the data acquired by the Mesoscope-VR system after acquisition.
 Primarily, preprocessing prepares the data for long-term storage and further processing in the Sun lab data cluster by
-efficiently and losslessly compressing the raw data and moving it ot he BioHPC server and the NAS back-up storage.
+efficiently and losslessly compressing the raw data and moving it to the BioHPC server and the NAS back-up storage.
 """
 
 import os
@@ -18,7 +18,10 @@ from tqdm import tqdm
 import numpy as np
 import tifffile
 from numpy.typing import NDArray
+from ataraxis_time import PrecisionTimer
 from sl_shared_assets import (
+    Job,
+    Server,
     SessionData,
     SurgeryData,
     ProjectConfiguration,
@@ -27,15 +30,12 @@ from sl_shared_assets import (
     MesoscopeExperimentDescriptor,
     transfer_directory,
     calculate_directory_checksum,
-    Server,
-    Job,
 )
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
-from ataraxis_time import PrecisionTimer
 
-from ..shared_components import WaterSheet, SurgerySheet
 from .tools import MesoscopeData, get_system_configuration
+from ..shared_components import WaterSheet, SurgerySheet
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -754,7 +754,7 @@ def _preprocess_mesoscope_directory(
     # Uses partial to bind the constant arguments to the processing function
     process_func = partial(
         _process_stack,
-        output_dir=output_directory,
+        output_directory=output_directory,
         verify_integrity=verify_integrity,
         batch_size=batch_size,
     )
@@ -872,41 +872,35 @@ def _preprocess_log_directory(
     log_directory.rename(target=Path(session_data.raw_data.behavior_data_path))
 
 
-def _resolve_telomere_markers(server_root_path: Path, local_root_path: Path) -> None:
-    """Checks the data stored on Sun lab BioHPC server for the presence of telomere.bin markers and removes all matching
-    directories on the VRPC.
+def _resolve_telomere_marker(session_data: SessionData) -> None:
+    """Reads the value of the 'incomplete' flag from the session's descriptor file and, if necessary, creates the
+    telomere.bin marker.
 
-    Specifically, this function iterates through all raw_data directories on the VRPC, checks if the corresponding
-    directory on the BioHPC server contains a telomere.bin marker, and removes the local raw_data directory if a marker
-    is found.
+    The telomere marker file is used by our data processing pipelines to determine whether to process the session.
+    Incomplete sessions lacking telomere.bin are excluded from all further automated processing.
 
     Args:
-        server_root_path: The path to the root directory used to store all experiment and training data on the Sun lab
-            BioHPC server.
-        local_root_path: The path to the root directory used to store all experiment and training data on the VRPC.
+        session_data: The SessionData instance for the processed session.
     """
-    # Finds all raw_data directories in the local path for which there is a raw_data with the telomere.bin marker on
-    # the server
-    deletion_candidates = []
-    for raw_data_path in local_root_path.rglob("raw_data"):
-        # Constructs the relative path to the raw_data directory from the local root
-        relative_path = raw_data_path.relative_to(local_root_path)
 
-        # Constructs the corresponding server path
-        server_path = server_root_path.joinpath(relative_path)
-
-        # Checks if the telomere.bin marker exists in the server path
-        if server_path.joinpath("telomere.bin").exists():
-            # If marker exists, removes the local (VRPC) raw_data directory
-            deletion_candidates.append(raw_data_path)
-
-    # If there are no deleting candidates, returns without further processing
-    if len(deletion_candidates) < 1:
+    # Loads the session descriptor file to read the state of the 'incomplete' flag.
+    descriptor_path = Path(session_data.raw_data.session_descriptor_path)
+    descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
+    if session_data.session_type.lower() == "lick training":
+        descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type.lower() == "run training":
+        descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
+    elif session_data.session_type.lower() == "mesoscope experiment":
+        descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
+    else:
+        # Aborts early (without creating the telomere.bin marker file) for any other session type
         return
 
-    # Iteratively removes all deletion candidates gathered above
-    for candidate in tqdm(deletion_candidates, desc="Deleting redundant VRPC directories", unit="directory"):
-        _delete_directory(directory_path=candidate)
+    # If the session is complete, generates the telomere.bin marker file. Note, window checking sessions are
+    # automatically considered 'incomplete' for the sake of data processing, as they do not contain any experiment
+    # or behavior data that needs automated processing.
+    if not descriptor.incomplete:
+        session_data.raw_data.telomere_path.touch(exist_ok=True)
 
 
 def _preprocess_google_sheet_data(session_data: SessionData) -> None:
@@ -915,14 +909,13 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     This internal method is called as part of preprocessing. Primarily, it is used to ensure that each session folder
     contains the up-to-date information about the surgical intervention(s) performed on the animal before running the
     session. It also updates the water restriction log for the managed animal to reflect the water received before and
-    after runtime. Since version 2.0.0 it also determines whether the session is complete and, if so, marks it with the
-    'telomere.bin' marker.
-
-    Raises:
-        ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
+    after runtime.
 
     Args:
         session_data: The SessionData instance for the processed session.
+
+    Raises:
+        ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
     """
 
     # Queries the data acquisition system configuration parameters.
@@ -994,12 +987,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         message = f"Water restriction log entry: Written."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # If the session is complete, generates the telomere.bin marker file. Note, window checking sessions are
-        # automatically considered 'incomplete' for the sake of data processing, as they do not contain any experiment
-        # or behavior data that needs automated processing.
-        if not descriptor.incomplete:
-            session_data.raw_data.telomere_path.touch(exist_ok=True)
-
     # Loads the surgery log Google Sheet file
     sl_sheet = SurgerySheet(
         project_name=session_data.project_name,
@@ -1024,43 +1011,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     message = f"Surgery data snapshot: Saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-def _verify_remote_data_integrity(session_data: SessionData) -> bool:
-
-    delay_timer = PrecisionTimer("s")
-
-    mesoscope_data = MesoscopeData(session_data)
-
-    system_configuration = get_system_configuration()
-    server_credentials = system_configuration.paths.server_credentials_path
-    server_working_directory = system_configuration.paths.
-
-    job_working_directory = server_working_directory.joinpath("temp")
-    session_raw_directory = system_configuration.paths.server_storage_directory.joinpath(session_data.project_name, session_data.animal_id, session_data.session_name)
-
-    server = Server(credentials_path=server_credentials)
-
-    job = Job(
-        job_name=f"{session_data.session_name} integrity verification.",
-        output_log=job_working_directory.joinpath("stdout.txt"),
-        error_log=job_working_directory.joinpath("stderr.txt"),
-        working_directory=job_working_directory,
-        conda_environment="manage",
-        cpus_to_use=30,
-        ram_gb=50,
-        time_limit=120,
-    )
-    job.add_command(f"sl-verify-session -sp {session_raw_directory} -c -pdr {server_working_directory}")
-
-    job = server.submit_job(job)
-
-    while not server.job_complete(job=job):
-        delay_timer.delay_noblock(delay=5, allow_sleep=True)
-
-    if not mesoscope_data.destinations.server_raw_data_path.joinpath("telomere.bin").exists():
-        return False
-    else:
-        return True
-
 
 def _push_data(
     session_data: SessionData,
@@ -1073,27 +1023,24 @@ def _push_data(
     This method generates the xxHash3-128 checksum for the source folder that the server processing pipeline uses to
     verify the integrity of the transferred data.
 
-    Notes:
-        The method also replaces the persisted zaber_positions.yaml file with the file generated during the managed
-        session runtime. This ensures that the persisted file is always up to date with the current zaber motor
-        positions.
-
     Args:
         session_data: The SessionData instance for the processed session.
         parallel: Determines whether to parallelize the data transfer. When enabled, the method will transfer the
-            data to all destinations at the same time (in-parallel). Note, this argument does not affect the number
+            data to all destinations at the same time (in parallel). Note, this argument does not affect the number
             of parallel threads used by each transfer process or the number of threads used to compute the
-            xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below).
+            xxHash3-128 checksum. This is determined by the 'num_threads' argument (see below). Note; each parallel
+            process can use as many threads as specified by 'num_threads' at the same time.
         num_threads: Determines the number of threads used by each transfer process to copy the files and calculate
             the xxHash3-128 checksums. Since each process uses the same number of threads, it is highly
             advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
             number of CPU cores - 4.
     """
 
-    # Resolves a tuple of destination paths
+    # Uses SessionData to get the paths to remote destinations
+    mesoscope_data = MesoscopeData(session_data)
     destinations = (
-        Path(session_data.destinations.nas_raw_data_path),
-        Path(session_data.destinations.server_raw_data_path),
+        Path(mesoscope_data.destinations.nas_raw_data_path),
+        Path(mesoscope_data.destinations.server_raw_data_path),
     )
 
     # Computes the xxHash3-128 checksum for the source folder
@@ -1129,35 +1076,133 @@ def _push_data(
             )
 
 
-def preprocess_session_data(session_data: SessionData) -> None:
-    """Aggregates all data on VRPC, compresses it for efficient network transmission, and transfers the data to the
-    BioHPC server and the Synology NAS for long-term storage.
+def _verify_remote_data_integrity(session_data: SessionData) -> None:
+    """Verifies that the data was moved to the BioHPC server intact and creates the session's processed data directories
+    on the server.
 
-    This method should be called at the end of each training and experiment runtime to compress and safely transfer
-    the data to its long-term storage destinations.
+    This service function runs at the end of the data preprocessing pipeline, after the data has been transferred to
+    the BioHPC server. Primarily, it is used to verify that the data was moved intact, and it is safe to delete the
+    local copy of the data stored on the VRPC. Additionally, it is the only function allowed to crate processed
+    data directories on the BioHPC server, which is a prerequisite for all further data processing steps.
 
     Notes:
-        The method will NOT delete the data from the VRPC or ScanImagePC. To safely remove the data, use the
-        'purge-redundant-data' CLI command. The data will only be removed if it has been marked for removal by our
-        data management algorithms, which ensure we have enough spare copies of the data elsewhere.
+        To optimize runtime speed, the server executes the verification check submitted as a remote job. Depending on
+        the overall server utilization, it is possible for the job execution to be delayed if the server does not have
+        enough spare resources to run the job.
+
+        If integrity verification fails, this job will delete the telomere.bin marker file stored in the session's
+        raw_data folder on the server. If it succeeds, the job will generate an ubiquitin.bin marker file in the
+        local (VRPC) session's raw_data folder, marking it for deletion. Generating the deletion marker file will not
+        itself delete the data, that step is performed at a later time point by a dedicated 'purging' function.
 
     Args:
-        session_data: The SessionData instance for the processed session. This argument is provided by the
-            runtime management function or the CLI function that calls this function.
-    """
-    # Enables console, if it is not enabled
-    if not console.enabled:
-        console.enable()
+        session_data: The SessionData instance for the processed session.
 
-    message = "Initializing data preprocessing..."
+    """
+    # Instantiates additional configuration and data classes that contain required information to execute server-side
+    # verification
+    system_configuration = get_system_configuration()
+    mesoscope_data = MesoscopeData(session_data)
+
+    # The paths below map the same directories, but relative to different roots. 'remote' paths are relative to the
+    # BioHPC server root, providing the paths to the target directories the server itself would use. 'local' paths point
+    # to the same directories as 'remote' paths do, but relative to the VRPC root. These directories are mounted on the
+    # VRPC filesystem via the SMB protocol.
+    remote_processed_directory = system_configuration.paths.server_processed_data_root
+    local_processed_directory = system_configuration.paths.server_working_directory
+
+    # Uses the paths resolved above to additionally resolve the path to the temporary working directory for the job.
+    # And the paths to the server access credentials file.
+    local_job_working_directory = local_processed_directory.joinpath("temp")
+    remote_job_working_directory = remote_processed_directory.joinpath("temp")
+    server_credentials = system_configuration.paths.server_credentials_path
+
+    # Establishes bidirectional communication with the server via the SSH protocol.
+    server = Server(credentials_path=server_credentials)
+
+    # Instantiates the Job object for the integrity verification job.
+    job = Job(
+        job_name=f"{session_data.session_name} integrity verification.",
+        output_log=remote_job_working_directory.joinpath(f"{session_data.session_name}_output.txt"),
+        error_log=remote_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt"),
+        working_directory=remote_job_working_directory,
+        conda_environment="manage",
+        cpus_to_use=30,
+        ram_gb=50,
+        time_limit=120,
+    )
+
+    # Instructs the job to verify the integrity of the session data on the server and to create the processed data
+    # hierarchy for the session.
+    remote_session_directory = mesoscope_data.destinations.server_raw_data_path
+    job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory}")
+
+    # Submits the job to be executed on the server.
+    job = server.submit_job(job)
+    message = f"Server-side session data integrity verification job: Submitted. SLURM-assigned job ID: {job.job_id}."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Waits for the job to complete. Unless the server is overbooked, this should not take long.
+    delay_timer = PrecisionTimer("s")
+    while not server.job_complete(job=job):
+        # Checks completion status every 10 seconds
+        message = f"Waiting for the integrity verification job with ID {job.job_id} to complete..."
+        console.echo(message=message, level=LogLevel.INFO)
+        delay_timer.delay_noblock(delay=10, allow_sleep=True)
+
+    # Checks the outcome of the job by loading the error log file and checking its contents.
+    stderr_file = local_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt")
+    stdout_file = local_job_working_directory.joinpath(f"{session_data.session_name}_output.txt")
+    with open(stderr_file, "r") as file:
+        # If the job encountered an error during runtime, notifies the user. Aborts the runtime early to keep the
+        # job log files and avoid marking the local raw-data folder (on the VRPC) for deletion.
+        if file.read().strip() != "":
+            message = (
+                f"Session {session_data.session_name} server-side data integrity: Compromised. The integrity "
+                f"verification job did not run successfully. Check the error.txt file for the job for details."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            return  # Not a runtime breaking error intentionally
+
+        # Otherwise, if the error log file is empty, this means that the job ran without issues and the data was not
+        # compromised.
+        message = f"Session {session_data.session_name} server-side data integrity: Verified."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Cleans up log files, as they are no longer necessary
+        stderr_file.unlink()
+        stdout_file.unlink()
+
+        # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
+        session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
+
+        # Explicit return just to be sure
+        return
+
+
+def preprocess_session_data(session_data: SessionData) -> None:
+    """Aggregates all data on VRPC, compresses it for efficient network transmission, safely transfers the data to the
+    BioHPC server and the Synology NAS for long-term storage, and removes all local data copies.
+
+    This method should be called at the end of each training and experiment runtime to preprocess the data. Primarily,
+    it prepares the data for further processing, moves it to appropriate long-term storage destinations, and keeps the
+    VRPC and ScanImagePC filesystem free from clutter by removing redundant local data copies.
+
+    Args:
+        session_data: The SessionData instance for the processed session.
+    """
+    message = f"Initializing session {session_data.session_name} data preprocessing..."
     console.echo(message=message, level=LogLevel.INFO)
+
+    # Instantiates additional required dataclasses
+    mesoscope_data = MesoscopeData(session_data)
 
     # If the instance manages a session that acquired mesoscope frames, renames the generic mesoscope_frames
     # directory to include the session name. It is essential that this is done before preprocessing, as
     # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
     # session.
-    general_path = Path(session_data.mesoscope_data.mesoscope_data_path)
-    session_specific_path = Path(session_data.mesoscope_data.session_specific_path)
+    general_path = Path(mesoscope_data.scanimagepc_data.mesoscope_data_path)
+    session_specific_path = Path(mesoscope_data.scanimagepc_data.session_specific_path)
 
     # Note, the renaming only happens if the session-specific cache does not exist, the general
     # mesoscope_frames cache exists, and it is not empty (has files inside).
@@ -1196,6 +1241,10 @@ def preprocess_session_data(session_data: SessionData) -> None:
     # for the animal
     _preprocess_google_sheet_data(session_data=session_data)
 
+    # Checks whether the session data is complete and, if so, generates a telomere.bin marker file. This is used during
+    # processing to automatically exclude incomplete sessions.
+    _resolve_telomere_marker(session_data=session_data)
+
     # Sends preprocessed data to the NAS and the BioHPC server
     _push_data(
         session_data=session_data,
@@ -1203,95 +1252,48 @@ def preprocess_session_data(session_data: SessionData) -> None:
         num_threads=15,
     )
 
-    message = "Data preprocessing: Complete."
+    # Ensures that the data was transferred to the BioHPC server intact and creates required directories for further
+    # data processing. In the future, this step may be extended to also verify the integrity of the data stored on
+    # the NAS.
+    _verify_remote_data_integrity(session_data=session_data)
+
+    message = f"Session {session_data.session_name} data preprocessing: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
 
-def _resolve_ubiquitin_markers(mesoscope_root_path: Path) -> None:
-    """Checks the data stored on the ScanImage PC for the presence of ubiquitin.bin markers and removes all directories
-    that contain the marker.
-
-    This function is used to clear out cached mesoscope frame directories on the ScanImage PC once they have been safely
-    copied and processed on the VRPC.
-
-    Args:
-        mesoscope_root_path: The path to the root directory used to store all mesoscope-acquired data on the ScanImage
-            (Mesoscope) PC.
-    """
-    # Builds a list of deletion candidates and then iteratively removes all discovered directories marked for
-    # deletion
-    file: Path
-    deletion_candidates = [file.parent for file in mesoscope_root_path.rglob("ubiquitin.bin")]
-
-    # If there are no deleting candidates, returns without further processing
-    if len(deletion_candidates) < 1:
-        return
-
-    for candidate in tqdm(deletion_candidates, desc="Deleting redundant ScanImagePC directories", unit="directory"):
-        _delete_directory(directory_path=candidate)
-
-
-def purge_redundant_data(
-    remove_ubiquitin: bool,
-    remove_telomere: bool,
-    local_root_path: Path,
-    server_root_path: Path,
-    mesoscope_root_path: Path,
-) -> None:
+def purge_redundant_data() -> None:
     """Loops over ScanImagePC and VRPC directories that store training and experiment data and removes no longer
     necessary data caches.
 
     This function searches the ScanImagePC and VRPC for no longer necessary directories and removes them from the
-    respective systems. ScanImagePC directories are marked for deletion once they are safely copied to the VRPC (and the
-    integrity of the copied data is verified using xxHash-128 checksum). VRPC directories are marked for deletion once
-    the data is safely copied to the BioHPC server and the server verifies the integrity of the copied data using
-    xxHash-128 checksum.
+    respective systems. ScanImagePC directories are marked for deletion once they are safely copied to the VRPC. VRPC
+    directories are marked for deletion once the data is safely copied to the BioHPC server. Both copying steps include
+    verifying the integrity of the transferred data using xxHash-128 checksums.
 
     Notes:
-        This is a service function intended to maintain the ScanImagePC and VRPC disk space. To ensure data integrity
-        and redundancy at all processing stages, we do not remove the raw data from these PCs even if it has been
-        preprocessed and moved to long-term storage destinations. However, once the data is moved to the BioHPC server
-        and the NAS, it is generally safe to remove the copies stored on the ScanImagePC and VRPC.
-
-        While the NAS is currently not verified for transferred data integrity, it is highly unlikely that the transfer
-        process leads to data corruption. Overall, the way this process is structured ensures that at all stages of
-        data processing there are at least two copies of the data stored on two different machines.
+        This is a service function intended to maintain the ScanImagePC and VRPC disk space. Once the data is moved to
+        the BioHPC server and the NAS, it is generally safe to remove the copies stored on the ScanImagePC and VRPC.
 
         Currently, this function does not discriminate between projects or animals. It will remove all data marked for
-        deletion via the ubiquitin.bin marker or the telomere.bin marker.
-
-    Args:
-        remove_ubiquitin: Determines whether to remove ScanImagePC mesoscope_frames directories marked for deletion
-            with ubiquitin.bin markers. Specifically, this allows removing directories that have been safely moved to
-            the VRPC.
-        remove_telomere: Determines whether to remove VRPC directories whose corresponding BioHPC-server directories
-            are marked with telomere.bin markers. Specifically, this allows removing directories that have been safely
-            moved to and processed by the BioHPC server.
-        local_root_path: The path to the root directory of the VRPC used to store all experiment and training data.
-        server_root_path: The path to the root directory of the BioHPC server used to store all experiment and
-            training data.
-        mesoscope_root_path: The path to the root directory of the ScanImagePC used to store all
-            mesoscope-acquired frame data.
+        deletion via the ubiquitin.bin markers.
     """
-
-    # Enables console, if it is not enabled
-    if not console.enabled:
-        console.enable()
-
-    message = "Initializing data purging..."
+    message = "Initializing redundant data purging..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Removes no longer necessary ScanImagePC directories (cached mesoscope frames)
-    if remove_ubiquitin:
-        message = "Purging redundant ScanImagePC directories..."
-        console.echo(message=message, level=LogLevel.INFO)
-        _resolve_ubiquitin_markers(mesoscope_root_path)
+    # Uses the Mesoscope-VR system configuration file to resolve the paths to the root ScanImagePc and VRPC directories.
+    system_configuration = get_system_configuration()
+    root_paths = [system_configuration.paths.mesoscope_directory, system_configuration.paths.root_directory]
 
-    # Removes no longer necessary VRPC directories (raw_data folders)
-    if remove_telomere:
-        message = "Purging redundant VRPC directories..."
-        console.echo(message=message, level=LogLevel.INFO)
-        _resolve_telomere_markers(server_root_path, local_root_path)
+    # Recursively searches both root directories for folders marked for deletion by ubiquitin.bin marker files.
+    deletion_candidates = [file.parent for root_path in root_paths for file in root_path.rglob("ubiquitin.bin")]
 
-    message = "Purging: Complete"
+    # If there are no deletion candidates, returns without further processing
+    if len(deletion_candidates) == 0:
+        return
+
+    # Removes all discovered redundant data directories
+    for candidate in tqdm(deletion_candidates, desc="Deleting redundant data directories", unit="directory"):
+        _delete_directory(directory_path=candidate)
+
+    message = "Redundant data purging: Complete"
     console.echo(message=message, level=LogLevel.SUCCESS)

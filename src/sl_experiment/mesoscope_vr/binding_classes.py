@@ -391,7 +391,7 @@ class MicroControllerInterfaces:
         # Converts the general sensor polling delay and stores it in class attribute. Unless other duration / delay
         # parameters, this one is frequently queries by class methods, so it is beneficial to statically compute
         # it once.
-        self._sensor_polling_delay = convert_time(
+        self._sensor_polling_delay: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.sensor_polling_delay_ms, from_units="ms", to_units="s"
         )
 
@@ -420,7 +420,7 @@ class MicroControllerInterfaces:
             debug=self._system_configuration.microcontrollers.debug,
         )
         self.valve = ValveInterface(
-            valve_calibration_data=self._system_configuration.microcontrollers.valve_calibration_data,
+            valve_calibration_data=self._system_configuration.microcontrollers.valve_calibration_data,  # type: ignore
             debug=self._system_configuration.microcontrollers.debug,
         )
         self.screens = ScreenInterface(
@@ -527,7 +527,7 @@ class MicroControllerInterfaces:
         )
 
         # Configures mesoscope start and stop trigger pulse durations
-        ttl_pulse_duration = convert_time(
+        ttl_pulse_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.mesoscope_ttl_pulse_duration_ms,
             from_units="ms",
             to_units="us",
@@ -536,7 +536,7 @@ class MicroControllerInterfaces:
         self.mesoscope_stop.set_parameters(pulse_duration=np.uint32(ttl_pulse_duration))
 
         # Configures screen trigger pulse duration
-        screen_pulse_duration = convert_time(
+        screen_pulse_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.screen_trigger_pulse_duration_ms,
             from_units="ms",
             to_units="us",
@@ -544,7 +544,7 @@ class MicroControllerInterfaces:
         self.screens.set_parameters(pulse_duration=np.uint32(screen_pulse_duration))
 
         # Configures the water valve to deliver ~ 5 uL of water by default.
-        tone_duration = convert_time(
+        tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
         self.valve.set_parameters(
@@ -724,7 +724,7 @@ class MicroControllerInterfaces:
 
             # Note, calibration parameters are not used by the command below, but we explicitly set them here for
             # consistency
-            tone_duration = convert_time(time=tone_duration, from_units="ms", to_units="us")
+            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
             self.valve.set_parameters(
                 pulse_duration=self.valve.get_duration_from_volume(volume),
                 calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
@@ -755,7 +755,7 @@ class MicroControllerInterfaces:
 
             # Note, calibration parameters are not used by the command below, but we explicitly set them here for
             # consistency
-            tone_duration = convert_time(time=tone_duration, from_units="ms", to_units="us")
+            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
             self.valve.set_parameters(
                 pulse_duration=self.valve.get_duration_from_volume(self._previous_volume),
                 calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
@@ -777,7 +777,7 @@ class MicroControllerInterfaces:
         syringe filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which
         should overall dispense ~ 1 ml of water.
         """
-        tone_duration = convert_time(
+        tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
         self.valve.set_parameters(
@@ -811,7 +811,7 @@ class MicroControllerInterfaces:
             pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
         """
         pulse_us = pulse_duration * 1000  # Converts milliseconds to microseconds
-        tone_duration = convert_time(
+        tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
         self.valve.set_parameters(

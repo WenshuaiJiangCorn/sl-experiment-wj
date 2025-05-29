@@ -59,7 +59,7 @@ class _VRPCPersistentData:
     is used to automatically restore session runtime parameters used during the previous session. Primarily, this is 
     used during animal training."""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Resolves paths that can be derived from the root path.
         self.zaber_positions_path = self.persistent_data_path.joinpath("zaber_positions.yaml")
         self.mesoscope_positions_path = self.persistent_data_path.joinpath("mesoscope_positions.yaml")
@@ -162,7 +162,7 @@ class _VRPCDestinations:
     server to verify the integrity opf the transferred data, the VRPC concludes that the data was transferred intact and
     removes (purges) the local copy of raw_data."""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Resolves the server-side telomere.bin marker path using the root directory.
         self.telomere_path = self.server_raw_data_path.joinpath("telomere.bin")
 

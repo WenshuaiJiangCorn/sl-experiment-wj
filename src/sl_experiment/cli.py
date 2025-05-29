@@ -30,7 +30,7 @@ def calculate_crc(input_string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
     calculator = CRCCalculator()
     crc_checksum = calculator.string_checksum(input_string)
-    click.echo(f"The CRC32-XFER checksum for the input string '{input_string}' is: {crc_checksum}")
+    click.echo(f"The CRC32-XFER checksum for the input string '{input_string}' is: {crc_checksum}.")
 
 
 @click.command()
@@ -55,9 +55,6 @@ def maintain_acquisition_system() -> None:
     used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
     unlocking the wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap
     around the wheel surface (weekly to monthly).
-
-    The interface also contains Zaber motors (HeadBar and LickPort) bindings to facilitate testing the quality of
-    implanted cranial windows before running training sessions for new animals.
     """
     maintenance_logic()
 
@@ -134,6 +131,17 @@ def maintain_acquisition_system() -> None:
         "is paused. Set to 0 to disable enforcing reward consumption."
     ),
 )
+@click.option(
+    "-l",
+    "--load_previous_parameters",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        "Determines whether to load and use the same training parameters as used during the previous lick training "
+        "session of the target animal."
+    ),
+)
 def lick_training(
     user: str,
     animal: str,
@@ -144,6 +152,7 @@ def lick_training(
     maximum_volume: float,
     maximum_time: int,
     unconsumed_rewards: int,
+    load_previous_parameters: bool,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -161,6 +170,7 @@ def lick_training(
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
         maximum_unconsumed_rewards=unconsumed_rewards,
+        load_previous_parameters=load_previous_parameters,
     )
 
 
@@ -284,6 +294,17 @@ def lick_training(
         "still be rewarded. Set to 0 to disable allowing the animal to temporarily dip below running speed threshold."
     ),
 )
+@click.option(
+    "-l",
+    "--load_previous_parameters",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        "Determines whether to load and use the same training parameters as used during the previous lick training "
+        "session of the target animal."
+    ),
+)
 def run_training(
     user: str,
     project: str,
@@ -298,12 +319,13 @@ def run_training(
     maximum_time: int,
     unconsumed_rewards: int,
     maximum_idle_time: int,
+    load_previous_parameters: bool,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 
     Run training is the second phase of preparing the animal to run experiment runtimes in the lab, and is usually
     carried out over the five days following the lick training sessions. Primarily, this training is designed to teach
-    the anima how to run the wheel treadmill while being head-fixed and associate getting water rewards with running
+    the animal how to run the wheel treadmill while being head-fixed and associate getting water rewards with running
     on the treadmill. Over the course of training, the task requirements are adjusted to ensure the animal performs as
     many laps as possible during experiment sessions lasting ~60 minutes.
     """
@@ -323,6 +345,7 @@ def run_training(
         maximum_training_time=maximum_time,
         maximum_unconsumed_rewards=unconsumed_rewards,
         maximum_idle_time=maximum_idle_time,
+        load_previous_parameters=load_previous_parameters,
     )
 
 
@@ -371,16 +394,13 @@ def run_experiment(
 ) -> None:
     """Runs the requested experiment session for the specified animal and project combination.
 
-    Experiment runtimes are carried out after the lick and run training sessions. Unlike training runtimes, experiment
-    runtimes use the Virtual Reality (VR) system and rely on Unity game engine to resolve the experiment task logic
-    during runtime. Also, experiments use the Mesoscope to acquire the brain activity data, which is mostly handled by
-    the ScanImage software.
-
-    Unlike training CLIs, this CLI can be used to run a variety of experiments. Each experiment is configured via the
-    user-written configuration .yaml file, which should be stored inside the 'configuration' folder of the target
-    project. The experiments are discovered by name, allowing a single project to have multiple different experiments.
+    Experiment runtimes are carried out after the lick and run training sessions Unlike training session commands, this
+    command can be used to run different experiments. Each experiment runtime is configured via the user-defined
+    configuration .yaml file, which should be stored inside the 'configuration' folder of the target project. The
+    experiments are discovered by name, allowing a single project to have multiple different experiments. To create a
+    new experiment configuration, use the 'sl-create-experiment' CLI command.
     """
-    run_experiment(
+    experiment_logic(
         experimenter=user,
         project_name=project,
         experiment_name=experiment,
@@ -391,7 +411,37 @@ def run_experiment(
 
 @click.command()
 @click.option(
-    "-s",
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project to which the trained animal belongs.",
+)
+@click.option(
+    "-a",
+    "--animal",
+    type=str,
+    required=True,
+    help="The name of the animal undergoing the experiment session.",
+)
+def check_window(
+    project: str,
+    animal: str,
+) -> None:
+    """Runs the cranial window and surgery quality checking session for the specified animal and project combination.
+
+    Before the animals are fully inducted (included) into a project, the quality of the surgical intervention
+    (craniotomy and window implantation) is checked to ensure the animal will produce high-quality scientific data. As
+    part of this process, various parameters of the Mesoscope-VR data acquisition system are also calibrated to best
+    suit the animal. This command aggregates all steps necessary to verify and record the quality of the animal's window
+    and to generate customized Mesoscope-VR parameters for the animal.
+    """
+    window_checking_logic(project_name=project, animal_id=animal)
+
+
+@click.command()
+@click.option(
+    "-sp",
     "--session-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     required=True,
@@ -409,57 +459,20 @@ def preprocess_session(session_path: Path) -> None:
     Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
     storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
     """
+
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
+
     # Restores SessionData from the cache .yaml file.
-    session_data = SessionData.load(session_path=session_path, on_server=False)
+    session_data = SessionData.load(session_path=session_path)
     preprocess_session_data(session_data)  # Runs the preprocessing logic.
 
 
 @click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project for which to purge the redundant data.",
-)
-@click.option(
-    "-u",
-    "--remove_ubiquitin",
-    is_flag=True,
-    show_default=True,
-    default=False,
-    help="Determines whether to remove ubiquitin-marked mesoscope_frames directories from the ScanImagePC.",
-)
-@click.option(
-    "-t",
-    "--remove_telomere",
-    is_flag=True,
-    show_default=True,
-    default=False,
-    help=(
-        "Determines whether to remove raw_data directories from the VRPC if their counterparts on the "
-        "BioHPC server contain telomere markers."
-    ),
-)
-def purge_data(project: str, remove_ubiquitin: bool, remove_telomere: bool) -> None:
-    """Depending on configuration, removes all redundant data directories for ALL projects from the ScanImagePC,
-    VRPC, or both.
+def purge_data() -> None:
+    """Removes all redundant data directories for ALL projects from the ScanImagePC and the VRPC.
 
-    This command should be used at least weekly to remove no longer necessary data from the PCs used during data
-    acquisition. Unless this function is called, our preprocessing pipelines will NOT remove the data, eventually
-    leading to both PCs running out of storage space. Note, despite the command taking in a project name, it removes
-    redundant data for all projects stored in the same root folder as the target project.
+    Redundant data purging is now executed automatically as part of data preprocessing. This command is primarily
+    maintained as a fall-back option if automated data purging fails for any reason. Data purging should be carried out
+    at least weekly to remove no longer necessary data from the PCs used during data acquisition.
     """
-
-    # Loads the target project's configuration
-    project_configuration = ProjectConfiguration.load(project_name=project)
-
-    # Purges requested data
-    purge_redundant_data(
-        remove_ubiquitin=remove_ubiquitin,
-        remove_telomere=remove_telomere,
-        local_root_path=Path(project_configuration.local_root_directory),
-        server_root_path=Path(project_configuration.local_server_directory),
-        mesoscope_root_path=Path(project_configuration.local_mesoscope_directory),
-    )
+    purge_redundant_data()
