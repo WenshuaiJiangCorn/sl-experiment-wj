@@ -1134,7 +1134,9 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     # Instructs the job to verify the integrity of the session data on the server and to create the processed data
     # hierarchy for the session.
-    remote_session_directory = system_configuration.paths.server_raw_data_root.joinpath(session_data.project_name, session_data.animal_id, session_data.session_name)
+    remote_session_directory = system_configuration.paths.server_raw_data_root.joinpath(
+        session_data.project_name, session_data.animal_id, session_data.session_name
+    )
     job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory}")
 
     # Submits the job to be executed on the server.
@@ -1174,8 +1176,8 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
         session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
 
+    # Disconnects from the server
     server.close()
-    delay_timer.delay_noblock(delay=5, allow_sleep=True)  # Waits for th servr connection to close
 
 
 def preprocess_session_data(session_data: SessionData) -> None:

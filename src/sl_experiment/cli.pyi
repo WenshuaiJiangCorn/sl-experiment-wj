@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from sl_shared_assets import ProjectConfiguration as ProjectConfiguration
-
 from .mesoscope_vr import (
     CRCCalculator as CRCCalculator,
     experiment_logic as experiment_logic,
@@ -39,7 +37,7 @@ def lick_training(
     maximum_volume: float,
     maximum_time: int,
     unconsumed_rewards: int,
-    load_previous_parameters: bool,
+    restore_parameters: bool,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -62,7 +60,7 @@ def run_training(
     maximum_time: int,
     unconsumed_rewards: int,
     maximum_idle_time: int,
-    load_previous_parameters: bool,
+    restore_parameters: bool,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 
