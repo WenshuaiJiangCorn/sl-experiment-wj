@@ -132,8 +132,8 @@ def maintain_acquisition_system() -> None:
     ),
 )
 @click.option(
-    "-l",
-    "--load_previous_parameters",
+    "-r",
+    "--restore_parameters",
     is_flag=True,
     show_default=True,
     default=False,
@@ -152,7 +152,7 @@ def lick_training(
     maximum_volume: float,
     maximum_time: int,
     unconsumed_rewards: int,
-    load_previous_parameters: bool,
+    restore_parameters: bool,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -170,7 +170,7 @@ def lick_training(
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
         maximum_unconsumed_rewards=unconsumed_rewards,
-        load_previous_parameters=load_previous_parameters,
+        load_previous_parameters=restore_parameters,
     )
 
 
@@ -286,7 +286,7 @@ def lick_training(
 @click.option(
     "-mit",
     "--maximum_idle_time",
-    type=int,
+    type=float,
     show_default=True,
     default=0.3,
     help=(
@@ -295,8 +295,8 @@ def lick_training(
     ),
 )
 @click.option(
-    "-l",
-    "--load_previous_parameters",
+    "-r",
+    "--restore_parameters",
     is_flag=True,
     show_default=True,
     default=False,
@@ -319,7 +319,7 @@ def run_training(
     maximum_time: int,
     unconsumed_rewards: int,
     maximum_idle_time: int,
-    load_previous_parameters: bool,
+    restore_parameters: bool,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 
@@ -345,7 +345,7 @@ def run_training(
         maximum_training_time=maximum_time,
         maximum_unconsumed_rewards=unconsumed_rewards,
         maximum_idle_time=maximum_idle_time,
-        load_previous_parameters=load_previous_parameters,
+        load_previous_parameters=restore_parameters,
     )
 
 

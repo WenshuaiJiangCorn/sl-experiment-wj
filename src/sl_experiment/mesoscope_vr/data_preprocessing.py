@@ -1102,6 +1102,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     # Instantiates additional configuration and data classes that contain required information to execute server-side
     # verification
     system_configuration = get_system_configuration()
+    mesoscope_data = MesoscopeData(session_data)
 
     # The paths below map the same directories, but relative to different roots. 'remote' paths are relative to the
     # BioHPC server root, providing the paths to the target directories the server itself would use. 'local' paths point
@@ -1121,14 +1122,14 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     # Instantiates the Job object for the integrity verification job.
     job = Job(
-        job_name=f"{session_data.session_name} integrity verification.",
+        job_name=f"{session_data.session_name}_integrity_verification",
         output_log=remote_job_working_directory.joinpath(f"{session_data.session_name}_output.txt"),
         error_log=remote_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt"),
         working_directory=remote_job_working_directory,
         conda_environment="manage",
-        cpus_to_use=30,
-        ram_gb=50,
-        time_limit=120,
+        cpus_to_use=10,
+        ram_gb=10,
+        time_limit=20,
     )
 
     # Instructs the job to verify the integrity of the session data on the server and to create the processed data
@@ -1147,36 +1148,34 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         # Checks completion status every 10 seconds
         message = f"Waiting for the integrity verification job with ID {job.job_id} to complete..."
         console.echo(message=message, level=LogLevel.INFO)
-        delay_timer.delay_noblock(delay=10, allow_sleep=True)
+        delay_timer.delay_noblock(delay=5, allow_sleep=True)
 
-    # Checks the outcome of the job by loading the error log file and checking its contents.
-    stderr_file = local_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt")
-    stdout_file = local_job_working_directory.joinpath(f"{session_data.session_name}_output.txt")
-    with open(stderr_file, "r") as file:
-        # If the job encountered an error during runtime, notifies the user. Aborts the runtime early to keep the
-        # job log files and avoid marking the local raw-data folder (on the VRPC) for deletion.
-        if file.read().strip() != "":
-            message = (
-                f"Session {session_data.session_name} server-side data integrity: Compromised. The integrity "
-                f"verification job did not run successfully. Check the error.txt file for the job for details."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            return  # Not a runtime breaking error intentionally
-
-        # Otherwise, if the error log file is empty, this means that the job ran without issues and the data was not
-        # compromised.
+    # Checks the outcome of the job by evaluating whether verified.bin file exists
+    verified_path = Path(mesoscope_data.destinations.server_raw_data_path).joinpath("verified.bin")
+    if not verified_path.exists():
+        # If the file doe exist after verification, that means that the data was corrupted in transmission to the server
+        message = (
+            f"Session {session_data.session_name} server-side data integrity: Compromised. The integrity "
+            f"verification job did not run successfully. Check the job error.txt file stored inside /sun_data/temp "
+            f"processed data volume folder on the server for details."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+    else:
+        # Otherwise, if the file exists, this means that the job ran without issues and the data was not compromised.
         message = f"Session {session_data.session_name} server-side data integrity: Verified."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Cleans up log files, as they are no longer necessary
+        # Removes kob log fils from the server temporary directory to avoid unnecessary clutter
+        stderr_file = local_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt")
+        stdout_file = local_job_working_directory.joinpath(f"{session_data.session_name}_output.txt")
         stderr_file.unlink()
         stdout_file.unlink()
 
         # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
         session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
 
-        # Explicit return just to be sure
-        return
+    server.close()
+    delay_timer.delay_noblock(delay=5, allow_sleep=True)  # Waits for th servr connection to close
 
 
 def preprocess_session_data(session_data: SessionData) -> None:
