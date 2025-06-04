@@ -2597,7 +2597,7 @@ def window_checking_logic(
             "with coordinates displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to "
             "the file by using 'CTRL+S' combination."
         )
-        console.echo(message=message, level=LogLevel.ERROR)
+        console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
         # Reloads the mesoscope positions data each time to verify whether the user ahs edited the data.
@@ -2607,6 +2607,9 @@ def window_checking_logic(
 
     # Dumps the updated data into the persistent_data folder of the animal
     mesoscope_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
+
+    message = f"Mesoscope-VR and cranial window state snapshot: Generated."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Instructs the user to remove all objects that may interfere with moving the motors.
     message = (
