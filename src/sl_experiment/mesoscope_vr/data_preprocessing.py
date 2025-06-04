@@ -1257,6 +1257,9 @@ def preprocess_session_data(session_data: SessionData) -> None:
     # the NAS.
     _verify_remote_data_integrity(session_data=session_data)
 
+    # Purges all redundant data from the ScanImagePC and the VRPC
+    purge_redundant_data()
+
     message = f"Session {session_data.session_name} data preprocessing: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
