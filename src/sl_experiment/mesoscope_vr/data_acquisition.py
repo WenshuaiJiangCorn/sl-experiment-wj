@@ -2534,9 +2534,22 @@ def window_checking_logic(
     # plane and check the quality of surgery.
     message = (
         "Adjust all Zaber motor positions and position the mesoscope objective above the imaging field to asses the "
-        "animal surgery and cranial window implantation quality. This is the last manual checkpoint, after this "
-        "message the runtime control function will start generating the snapshot of the animal cranial window state "
-        "and Mesoscope-VR system parameters."
+        "animal surgery and cranial window implantation quality. Make sure you are satisfied with the imaging quality "
+        "before proceeding further."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Generates the mesoscope positions file precursor in the raw_data folder of the managed session and forces the
+    # user to update it with the current mesoscope objective positions.
+    mesoscope_positions = MesoscopePositions()
+    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+    message = f"Mesoscope positions precursor file: Generated."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    message = (
+        "Generate the cranial window screenshot and record the mesoscope objective positions in the precursor "
+        "mesoscope_positions file."
     )
     console.echo(message=message, level=LogLevel.WARNING)
     input("Enter anything to continue: ")
@@ -2574,13 +2587,6 @@ def window_checking_logic(
     message = f"Cranial window and dot-alignment screenshot: Saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Generates the mesoscope positions file precursor in the raw_data folder of the managed session and forces the
-    # user to update it with the current mesoscope objective positions.
-    mesoscope_positions = MesoscopePositions()
-    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
-    message = f"Mesoscope positions precursor file: Generated."
-    console.echo(message=message, level=LogLevel.INFO)
-
     # Forces the user to update the mesoscope positions file with current mesoscope data.
     mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
         file_path=Path(session_data.raw_data.mesoscope_positions_path)
@@ -2611,11 +2617,24 @@ def window_checking_logic(
     message = f"Mesoscope-VR and cranial window state snapshot: Generated."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
+    message = (
+        "Preparing to move Zaber motors to the mount position. REMOVE the mesoscope objective at this time. Do not "
+        "remove the animal until the motors are in the mount position."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Helps with removing the animal from the rig
+    zaber_motors.mount_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
     # Instructs the user to remove all objects that may interfere with moving the motors.
     message = (
-        "REMOVE the mesoscope objective and the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and "
-        "HARM the animal. This is the last manual checkpoint, once you progress past this point, the Microscope-VR "
-        "system will reset Zaber motor positions and start data preprocessing."
+        "REMOVE the animal from the VR rig. Failure to do so may HARM the animal. This is the last manual checkpoint, "
+        "once you progress past this point, the Microscope-VR system will reset Zaber motor positions and start data "
+        "preprocessing."
     )
     console.echo(message=message, level=LogLevel.WARNING)
     input("Enter anything to continue: ")
