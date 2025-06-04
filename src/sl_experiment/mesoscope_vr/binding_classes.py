@@ -329,8 +329,6 @@ class ZaberMotors:
         self._headbar.disconnect()
         self._wheel.disconnect()
         self._lickport.disconnect()
-        message = f"Zaber motor connection: Terminated"
-        console.echo(message, LogLevel.SUCCESS)
 
 
 class MicroControllerInterfaces:
@@ -1093,6 +1091,10 @@ class VideoSystems:
         self._face_camera.stop()
         self._left_camera.stop()
         self._right_camera.stop()
+
+        # Marks all cameras as stopped
+        self._face_camera_started = False
+        self._body_cameras_started = False
 
         message = "Video Systems: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)

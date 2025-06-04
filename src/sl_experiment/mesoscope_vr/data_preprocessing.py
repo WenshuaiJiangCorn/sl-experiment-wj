@@ -1127,8 +1127,8 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         error_log=remote_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt"),
         working_directory=remote_job_working_directory,
         conda_environment="manage",
-        cpus_to_use=10,
-        ram_gb=10,
+        cpus_to_use=20,
+        ram_gb=50,
         time_limit=20,
     )
 

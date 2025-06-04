@@ -2608,16 +2608,29 @@ def window_checking_logic(
     # Dumps the updated data into the persistent_data folder of the animal
     mesoscope_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
 
+    # Instructs the user to remove all objects that may interfere with moving the motors.
+    message = (
+        "REMOVE the mesoscope objective and the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and "
+        "HARM the animal. This is the last manual checkpoint, once you progress past this point, the Microscope-VR "
+        "system will reset Zaber motor positions and start data preprocessing."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Shuts down zaber bindings
+    zaber_motors.park_position()
+    zaber_motors.disconnect()
+
+    # Terminates the face camera
+    cameras.stop()
+
+    # Stops the data logger
+    logger.stop()
+
     # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline primarily just
     # copies the session raw_data folder to the NAS and BioHPC server.
     preprocess_session_data(session_data=session_data)
 
-    # Shuts down the face camera
-    cameras.stop()
-    message = f"Face camera: Terminated."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Terminates the runtime
-    cameras.stop()
+    # Ends the runtime
     message = f"Window checking runtime: Terminated."
     console.echo(message=message, level=LogLevel.SUCCESS)

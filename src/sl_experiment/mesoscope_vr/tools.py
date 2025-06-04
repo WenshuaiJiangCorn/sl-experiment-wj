@@ -73,11 +73,13 @@ class _VRPCPersistentData:
             self.session_descriptor_path = self.persistent_data_path.joinpath(
                 f"mesoscope_experiment_session_descriptor.yaml"
             )
-        else:
+        # Does not raise the error for window checking sessions, but also does not resolve the descriptor, as it is not
+        # used during window checking
+        elif self.session_type != "window checking":
             message = (
                 f"Unsupported session type '{self.session_type}' encountered when initializing additional path "
                 f"dataclasses for the Mesoscope-VR data acquisition system. Supported session types are "
-                f"'lick training', 'run training', and 'mesoscope experiment'."
+                f"'lick training', 'run training', 'window checking' and 'mesoscope experiment'."
             )
             console.error(message, error=ValueError)
 
