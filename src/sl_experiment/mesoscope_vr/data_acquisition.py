@@ -861,7 +861,6 @@ class _BehaviorTraining:
 
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
-        _lick_training: Tracks whether the class is used to run the lick or the run training session.
         descriptor: Stores the session descriptor instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
@@ -881,7 +880,6 @@ class _BehaviorTraining:
     ) -> None:
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
-        self._lick_training: bool = False  # Initializes to False, but the value depends on the training class state
 
         # Caches SessionDescriptor instance to class attribute.
         self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = session_descriptor
@@ -1043,27 +1041,6 @@ class _BehaviorTraining:
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Generates a snapshot of the Mesoscope-VR hardware state. In turn, this data is used to parse the .npz log
-        # files during processing. Note, lick training does not use the encoder and run training does not use the torque
-        # sensor.
-        if self._lick_training:
-            hardware_state = MesoscopeHardwareState(
-                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-            )
-        else:
-            hardware_state = MesoscopeHardwareState(
-                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
-                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-            )
-        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
-        message = "Hardware state snapshot: Generated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
         # Enables body cameras. Starts frame saving for all cameras
         self._cameras.start_body_cameras()
         self._cameras.save_face_camera_frames()
@@ -1213,6 +1190,9 @@ class _BehaviorTraining:
         The lick sensor monitoring is on to record animal licking data.
         """
 
+        message = "Lick training mesoscope-vr state: Applied."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Ensures VR screens are turned OFF
         self._microcontrollers.disable_vr_screens()
 
@@ -1228,8 +1208,18 @@ class _BehaviorTraining:
         # Initiates lick monitoring
         self._microcontrollers.enable_lick_monitoring()
 
-        # Sets the tracker
-        self._lick_training = True
+        # Generates a snapshot of the Mesoscope-VR hardware state. In turn, this data is used to parse the .npz log
+        # files during processing. Note, lick training does not use the encoder and run training does not use the torque
+        # sensor.
+        hardware_state = MesoscopeHardwareState(
+            torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+            lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+            valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+            valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+        )
+        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
+        message = "Hardware state snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
     def run_train_state(self) -> None:
         """Configures the Mesoscope-VR system for running the run training.
@@ -1238,6 +1228,9 @@ class _BehaviorTraining:
         enabled, and the torque sensor is disabled. The VR screens are switched off, cutting off light emission.
         The lick sensor monitoring is on to record animal licking data.
         """
+
+        message = "Run training mesoscope-vr state: Applied."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Ensures VR screens are turned OFF
         self._microcontrollers.disable_vr_screens()
@@ -1254,8 +1247,18 @@ class _BehaviorTraining:
         # Initiates lick monitoring
         self._microcontrollers.enable_lick_monitoring()
 
-        # Sets the tracker
-        self._lick_training = False
+        # Generates a snapshot of the Mesoscope-VR hardware state. In turn, this data is used to parse the .npz log
+        # files during processing. Note, lick training does not use the encoder and run training does not use the torque
+        # sensor.
+        hardware_state = MesoscopeHardwareState(
+            cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+            lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+            valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+            valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+        )
+        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
+        message = "Hardware state snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
     def deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.

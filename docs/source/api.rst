@@ -17,8 +17,8 @@ Command Line Interfaces
    :prog: sl-devices
    :nested: full
 
-.. click:: sl_experiment.cli:maintain_vr
-   :prog: sl-maintain-vr
+.. click:: sl_experiment.cli:maintain_acquisition_system
+   :prog: sl-maintain
    :nested: full
 
 .. click:: sl_experiment.cli:lick_training
@@ -33,6 +33,10 @@ Command Line Interfaces
    :prog: sl-experiment
    :nested: full
 
+.. click:: sl_experiment.cli:check_window
+   :prog: sl-check-window
+   :nested: full
+
 .. click:: sl_experiment.cli:preprocess_session
    :prog: sl-preprocess
    :nested: full
@@ -41,51 +45,16 @@ Command Line Interfaces
    :prog: sl-purge
    :nested: full
 
-Experiment Interfaces
-=====================
-.. automodule:: sl_experiment.experiment
+Mesoscope-VR Acquisition System
+===============================
+.. automodule:: sl_experiment.mesoscope_vr
    :members:
    :undoc-members:
    :show-inheritance:
 
-Ataraxis Binding Classes
-========================
-.. automodule:: sl_experiment.binding_classes
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Runtime Data Visualizers
-========================
-.. automodule:: sl_experiment.visualizers
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Zaber Interfaces
-================
-.. automodule:: sl_experiment.zaber_bindings
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-AXMC Module Interfaces
-======================
-.. automodule:: sl_experiment.module_interfaces
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Google Sheet Tools
-==================
-.. automodule:: sl_experiment.google_sheet_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Data Preprocessing Tools
-========================
-.. automodule:: sl_experiment.data_preprocessing
+Shared Acquisition Tools And Assets
+===================================
+.. automodule:: sl_experiment.shared_components
    :members:
    :undoc-members:
    :show-inheritance:

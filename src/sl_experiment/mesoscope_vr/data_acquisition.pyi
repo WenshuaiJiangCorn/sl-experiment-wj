@@ -224,7 +224,6 @@ class _BehaviorTraining:
 
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
-        _lick_training: Tracks whether the class is used to run the lick or the run training session.
         descriptor: Stores the session descriptor instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
@@ -238,7 +237,6 @@ class _BehaviorTraining:
     """
 
     _started: bool
-    _lick_training: bool
     descriptor: LickTrainingDescriptor | RunTrainingDescriptor
     _session_data: SessionData
     _mesoscope_data: MesoscopeData
