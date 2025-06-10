@@ -24,6 +24,7 @@ from sl_shared_assets import (
     Server,
     SessionData,
     SurgeryData,
+    ProcessingTracker,
     ProjectConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
@@ -1109,13 +1110,18 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     # to the same directories as 'remote' paths do, but relative to the VRPC root. These directories are mounted on the
     # VRPC filesystem via the SMB protocol.
     remote_processed_directory = system_configuration.paths.server_processed_data_root
-    local_processed_directory = system_configuration.paths.server_working_directory
+    local_job_working_directory = system_configuration.paths.server_working_directory.joinpath("temp")
+    remote_job_working_directory = remote_processed_directory.joinpath("temp")  # Shared temporary directory
 
-    # Uses the paths resolved above to additionally resolve the path to the temporary working directory for the job.
-    # And the paths to the server access credentials file.
-    local_job_working_directory = local_processed_directory.joinpath("temp")
-    remote_job_working_directory = remote_processed_directory.joinpath("temp")
+    # Resolves the path to the server access credentials file.
     server_credentials = system_configuration.paths.server_credentials_path
+
+    # Resolves the path to the verification tracker .yaml file on the server and the path to a local copy. The remote
+    # tracker is 'pulled' to the specified local path to determine the outcome of the verification.
+    remote_tracker_path = Path(mesoscope_data.destinations.server_raw_data_path).joinpath(
+        "integrity_verification_tracker.yaml"
+    )
+    local_tracker_path = local_job_working_directory.joinpath("tracker.yaml")
 
     # Establishes bidirectional communication with the server via the SSH protocol.
     server = Server(credentials_path=server_credentials)
@@ -1152,26 +1158,28 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         console.echo(message=message, level=LogLevel.INFO)
         delay_timer.delay_noblock(delay=5, allow_sleep=True)
 
-    # Checks the outcome of the job by evaluating whether verified.bin file exists
-    verified_path = Path(mesoscope_data.destinations.server_raw_data_path).joinpath("verified.bin")
-    if not verified_path.exists():
-        # If the file doe exist after verification, that means that the data was corrupted in transmission to the server
+    # Checks the outcome of the job by evaluating the processing status stored inside the verification tracker file. To
+    # do so, first pulls the tracker file from the remote server to the local machine.
+    server.pull_file(remote_file_path=remote_tracker_path, local_file_path=local_tracker_path)
+    tracker = ProcessingTracker(local_tracker_path)
+
+    # The tracker should indicate that the job is 'complete' if runtime finishes successfully.
+    if not tracker.is_complete:
         message = (
             f"Session {session_data.session_name} server-side data integrity: Compromised. The integrity "
-            f"verification job did not run successfully. Check the job error.txt file stored inside /sun_data/temp "
-            f"processed data volume folder on the server for details."
+            f"verification job did not run successfully."
         )
         console.echo(message=message, level=LogLevel.ERROR)
     else:
-        # Otherwise, if the file exists, this means that the job ran without issues and the data was not compromised.
         message = f"Session {session_data.session_name} server-side data integrity: Verified."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Removes kob log fils from the server temporary directory to avoid unnecessary clutter
-        stderr_file = local_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt")
-        stdout_file = local_job_working_directory.joinpath(f"{session_data.session_name}_output.txt")
-        stderr_file.unlink()
-        stdout_file.unlink()
+        # Removes job log files from the server temporary directory to avoid unnecessary clutter. For this, uses the
+        # 'remove()' method exposed by the Server class to remove the files via SFTP protocol.
+        stderr_file = remote_job_working_directory.joinpath(f"{session_data.session_name}_errors.txt")
+        stdout_file = remote_job_working_directory.joinpath(f"{session_data.session_name}_output.txt")
+        server.remove(remote_path=stderr_file, is_dir=False)
+        server.remove(remote_path=stdout_file, is_dir=False)
 
         # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
         session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
