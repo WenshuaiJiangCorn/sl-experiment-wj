@@ -399,6 +399,10 @@ class _MesoscopeExperiment:
         message = "Mesoscope frame acquisition: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
+        # 0-state is used to mark the start and end of the experiment runtime
+        self._change_vr_state(new_state=0)
+        self.change_experiment_state(new_state=0)
+
         # The setup procedure is complete.
         self._started = True
 
@@ -453,6 +457,10 @@ class _MesoscopeExperiment:
 
         # Stops all microcontroller interfaces
         self._microcontrollers.stop()
+
+        # 0-state is used to mark the start and end of the experiment runtime
+        self._change_vr_state(new_state=0)
+        self.change_experiment_state(new_state=0)
 
         # Stops the data logger instance
         self._logger.stop()
