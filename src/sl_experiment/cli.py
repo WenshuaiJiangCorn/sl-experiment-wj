@@ -139,7 +139,8 @@ def maintain_acquisition_system() -> None:
     default=False,
     help=(
         "Determines whether to load and use the same training parameters as used during the previous lick training "
-        "session of the target animal."
+        "session of the target animal. Note, this only overrides the maximum and minimum reward delays, all other "
+        "parameters are not affected by this flag."
     ),
 )
 def lick_training(
@@ -302,7 +303,8 @@ def lick_training(
     default=False,
     help=(
         "Determines whether to load and use the same training parameters as used during the previous lick training "
-        "session of the target animal."
+        "session of the target animal. Note, this only overrides the initial speed and duration thresholds, all other "
+        "parameters are not affected by this flag."
     ),
 )
 def run_training(

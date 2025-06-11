@@ -10,7 +10,6 @@ import shutil as sh
 from typing import Any
 from pathlib import Path
 from datetime import datetime
-import tempfile
 from functools import partial
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -359,7 +358,12 @@ def _generate_ops(
     # frame5 = time1_plane0_channel2
 
     # Extracts the data about all ROIs
-    si_rois: list[dict[str, Any]] = metadata["RoiGroups"]["imagingRoiGroup"]["rois"]
+    si_rois: list[dict[str, Any]] | dict[str, Any] = metadata["RoiGroups"]["imagingRoiGroup"]["rois"]
+
+    # If there was only a single ROI in the mesoscan, si_rois is a single dictionary. This makes it a list for the
+    # code below to work as expected
+    if not isinstance(si_rois, list):
+        si_rois = [si_rois]
 
     # Extracts the ROI dimensions for each ROI. Original code says 'for each z-plane; but nplanes is not used anywhere
     # in these computations:

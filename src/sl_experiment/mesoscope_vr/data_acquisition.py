@@ -27,7 +27,7 @@ from sl_shared_assets import (
 )
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
-from ataraxis_time.time_helpers import get_timestamp
+from ataraxis_time.time_helpers import convert_time, get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
 from .tools import MesoscopeData, KeyboardListener, get_system_configuration
@@ -271,10 +271,10 @@ class _MesoscopeExperiment:
             )
             # Gives user time to mount the animal and requires confirmation before proceeding further.
             message = (
-                "If necessary, adjust all Zaber motor positions and position the mesoscope objective above the imaging "
-                "field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
-                "y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
-                "z={previous_positions.mesoscope_tilt}, fast_z={previous_positions.mesoscope_fast_z}, "
+                f"If necessary, adjust all Zaber motor positions and position the mesoscope objective above the "
+                f"imaging field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
+                f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
+                f"z={previous_positions.mesoscope_tilt}, fast_z={previous_positions.mesoscope_fast_z}, "
                 f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}. Do NOT start the "
                 f"Mesoscope or Unity game engine at this time. This is done at a later manual checkpoint."
             )
@@ -1379,9 +1379,6 @@ def lick_training_logic(
         )
         maximum_reward_delay = previous_descriptor.maximum_reward_delay_s
         minimum_reward_delay = previous_descriptor.minimum_reward_delay
-        maximum_training_time = previous_descriptor.maximum_training_time_m
-        maximum_water_volume = previous_descriptor.maximum_water_volume_ml
-        maximum_unconsumed_rewards = previous_descriptor.maximum_unconsumed_rewards
 
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
@@ -1678,15 +1675,6 @@ def run_training_logic(
         # consecutive run training session begins where the previous one has ended.
         initial_speed_threshold = previous_descriptor.final_run_speed_threshold_cm_s
         initial_duration_threshold = previous_descriptor.final_run_duration_threshold_s
-
-        # Restores other parameters to the same fields of the previous descriptor
-        increase_threshold = previous_descriptor.increase_threshold_ml
-        speed_increase_step = previous_descriptor.run_speed_increase_step_cm_s
-        duration_increase_step = previous_descriptor.run_duration_increase_step_s
-        maximum_training_time = previous_descriptor.maximum_training_time_m
-        maximum_water_volume = previous_descriptor.maximum_water_volume_ml
-        maximum_unconsumed_rewards = previous_descriptor.maximum_unconsumed_rewards
-        maximum_idle_time = previous_descriptor.maximum_idle_time_s
 
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
@@ -2264,6 +2252,11 @@ def maintenance_logic() -> None:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
+        # Precomputes correct auditory tone duration from Mesoscope-VR configuration
+        tone_duration = convert_time(
+            from_units="ms", to_units="us", time=system_configuration.microcontrollers.auditory_tone_duration_ms
+        )
+
         while True:
             command = input()  # Silent input to avoid visual spam.
 
@@ -2299,7 +2292,7 @@ def maintenance_logic() -> None:
                     pulse_duration=pulse_duration,
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.send_pulse()
 
@@ -2313,7 +2306,7 @@ def maintenance_logic() -> None:
                     pulse_duration=pulse_duration,  # Hardcoded to 5 uL for consistent behavior
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(200),  # Hardcoded to 200 pulses for consistent behavior
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.calibrate()
 
@@ -2324,7 +2317,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(15000),  # 15 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.calibrate()
 
@@ -2335,7 +2328,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(30000),  # 30 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.calibrate()
 
@@ -2346,7 +2339,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(45000),  # 45 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.calibrate()
 
@@ -2357,7 +2350,7 @@ def maintenance_logic() -> None:
                     pulse_duration=np.uint32(60000),  # 60 ms in us
                     calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons
                     calibration_count=np.uint16(system_configuration.microcontrollers.valve_calibration_pulse_count),
-                    tone_duration=np.uint32(system_configuration.microcontrollers.auditory_tone_duration_ms),
+                    tone_duration=np.uint32(tone_duration),
                 )
                 valve.calibrate()
 
