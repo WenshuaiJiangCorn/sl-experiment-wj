@@ -10,6 +10,7 @@ import shutil as sh
 from typing import Any
 from pathlib import Path
 from datetime import datetime
+import tempfile
 from functools import partial
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -1110,18 +1111,10 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     # to the same directories as 'remote' paths do, but relative to the VRPC root. These directories are mounted on the
     # VRPC filesystem via the SMB protocol.
     remote_processed_directory = system_configuration.paths.server_processed_data_root
-    local_job_working_directory = system_configuration.paths.server_working_directory.joinpath("temp")
     remote_job_working_directory = remote_processed_directory.joinpath("temp")  # Shared temporary directory
 
     # Resolves the path to the server access credentials file.
     server_credentials = system_configuration.paths.server_credentials_path
-
-    # Resolves the path to the verification tracker .yaml file on the server and the path to a local copy. The remote
-    # tracker is 'pulled' to the specified local path to determine the outcome of the verification.
-    remote_tracker_path = Path(mesoscope_data.destinations.server_raw_data_path).joinpath(
-        "integrity_verification_tracker.yaml"
-    )
-    local_tracker_path = local_job_working_directory.joinpath("tracker.yaml")
 
     # Establishes bidirectional communication with the server via the SSH protocol.
     server = Server(credentials_path=server_credentials)
@@ -1158,10 +1151,15 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         console.echo(message=message, level=LogLevel.INFO)
         delay_timer.delay_noblock(delay=5, allow_sleep=True)
 
-    # Checks the outcome of the job by evaluating the processing status stored inside the verification tracker file. To
-    # do so, first pulls the tracker file from the remote server to the local machine.
-    server.pull_file(remote_file_path=remote_tracker_path, local_file_path=local_tracker_path)
-    tracker = ProcessingTracker(local_tracker_path)
+    # Resolves the path to the verification tracker .yaml file on the server and the path to a local copy. The remote
+    # tracker is 'pulled' to the specified local path to determine the outcome of the verification.
+    remote_tracker_path = remote_session_directory.joinpath("raw_data", "integrity_verification_tracker.yaml")
+
+    # Checks the outcome of the job by evaluating the processing status stored inside the verification tracker file.
+    # To do so, first pulls the tracker file from the remote server to the local machine.
+    tracker_file = session_data.raw_data.raw_data_path.joinpath("tracker.yaml")  # Dumps the file into local raw_data
+    server.pull_file(remote_file_path=remote_tracker_path, local_file_path=tracker_file)
+    tracker = ProcessingTracker(tracker_file)
 
     # The tracker should indicate that the job is 'complete' if runtime finishes successfully.
     if not tracker.is_complete:
