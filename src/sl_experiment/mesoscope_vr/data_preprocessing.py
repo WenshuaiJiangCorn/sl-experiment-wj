@@ -362,7 +362,7 @@ def _generate_ops(
 
     # If there was only a single ROI in the mesoscan, si_rois is a single dictionary. This makes it a list for the
     # code below to work as expected
-    if not isinstance(si_rois, list):
+    if isinstance(si_rois, dict):
         si_rois = [si_rois]
 
     # Extracts the ROI dimensions for each ROI. Original code says 'for each z-plane; but nplanes is not used anywhere
