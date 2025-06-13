@@ -33,7 +33,7 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .tools import MesoscopeData, KeyboardListener, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
-from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface
+from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, write_version_data
 from .data_preprocessing import preprocess_session_data
 
 
@@ -1358,6 +1358,9 @@ def lick_training_logic(
     session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type="lick training")
     mesoscope_data = MesoscopeData(session_data=session_data)
 
+    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
+    write_version_data(session_data)
+
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
     # preprocessing
@@ -1650,6 +1653,9 @@ def run_training_logic(
     # hierarchy as part of this initialization process
     session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type="run training")
     mesoscope_data = MesoscopeData(session_data=session_data)
+
+    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
+    write_version_data(session_data)
 
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
@@ -2036,6 +2042,9 @@ def experiment_logic(
         session_type="mesoscope experiment",
         experiment_name=experiment_name,
     )
+
+    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
+    write_version_data(session_data)
 
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
@@ -2447,6 +2456,9 @@ def window_checking_logic(
         session_type="window checking",
     )
     mesoscope_data = MesoscopeData(session_data=session_data)
+
+    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
+    write_version_data(session_data)
 
     # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
     # through the init checks. The class is later re-instantiated during session data preprocessing
