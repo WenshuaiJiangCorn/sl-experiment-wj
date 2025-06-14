@@ -133,6 +133,10 @@ class ZaberMotors:
             This method moves all Zaber axes in-parallel to optimize runtime speed. This relies on the Mesoscope-VR
             system to be assembled in a way where it is safe to move all motors at the same time.
         """
+
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
+
         # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
         if self._previous_positions is None:
             # Mounting position for the headbar and the wheel essentially mimics the parking position for the
@@ -161,6 +165,9 @@ class ZaberMotors:
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
 
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
+
     def prepare_motors(self) -> None:
         """Unparks and homes all motors.
 
@@ -173,14 +180,8 @@ class ZaberMotors:
             This method moves all motor axes in-parallel to optimize runtime speed.
         """
 
-        # Unparks all motors.
-        self._headbar_z.unpark()
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._wheel_x.unpark()
-        self._lickport_z.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
 
         # Homes all motors in-parallel.
         self._headbar_z.home()
@@ -194,6 +195,9 @@ class ZaberMotors:
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
 
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
+
     def park_position(self) -> None:
         """Moves all motors to their parking positions and parks (locks) them preventing future movements.
 
@@ -204,6 +208,9 @@ class ZaberMotors:
             The motors are moved to the parking positions stored in the non-volatile memory of each motor controller.
             This method moves all motor axes in-parallel to optimize runtime speed.
         """
+
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
 
         # Moves all Zaber motors to their parking positions
         self._headbar_z.move(amount=self._headbar_z.park_position, absolute=True, native=True)
@@ -216,6 +223,9 @@ class ZaberMotors:
 
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
+
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
 
     def maintenance_position(self) -> None:
         """Moves all motors to the Mesoscope-VR system maintenance position.
@@ -230,6 +240,10 @@ class ZaberMotors:
             Formerly, the only maintenance step was the calibration of the water-valve, so some low-level functions
             still reference it as 'valve-position' and 'calibrate-position'.
         """
+
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
+
         # Moves all motors to their maintenance positions
         self._headbar_z.move(amount=self._headbar_z.valve_position, absolute=True, native=True)
         self._headbar_pitch.move(amount=self._headbar_pitch.valve_position, absolute=True, native=True)
@@ -242,6 +256,9 @@ class ZaberMotors:
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
 
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
+
     def mount_position(self) -> None:
         """Moves all motors to the animal mounting position.
 
@@ -251,6 +268,9 @@ class ZaberMotors:
         Notes:
             This method moves all MOTOR axes in-parallel to optimize runtime speed.
         """
+
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
 
         # Moves all lickport motors to the mount position
         self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
@@ -275,6 +295,9 @@ class ZaberMotors:
 
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
+
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
 
     def generate_position_snapshot(self) -> ZaberPositions:
         """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
@@ -329,6 +352,27 @@ class ZaberMotors:
         self._headbar.disconnect()
         self._wheel.disconnect()
         self._lickport.disconnect()
+
+    def park_motors(self):
+        """Parks all managed motor groups, preventing them from being moved via this library or Zaber GUI until
+        they are unparked via the unpark_motors() command."""
+        self._headbar_pitch.park()
+        self._headbar_roll.park()
+        self._headbar_z.park()
+        self._wheel_x.park()
+        self._lickport_x.park()
+        self._lickport_y.park()
+        self._lickport_z.park()
+
+    def unpark_motors(self):
+        """Unparks all managed motor groups, allowing them to be moved via this library or the Zaber GUI."""
+        self._headbar_pitch.unpark()
+        self._headbar_roll.unpark()
+        self._headbar_z.unpark()
+        self._wheel_x.unpark()
+        self._lickport_x.unpark()
+        self._lickport_y.unpark()
+        self._lickport_z.unpark()
 
 
 class MicroControllerInterfaces:
