@@ -264,7 +264,6 @@ class KeyboardListener:
         self._keyboard_process = Process(target=self._run_keyboard_listener, daemon=True)
         self._keyboard_process.start()
         self._started = True
-        self._previous_pause_flag = False
 
     def __del__(self) -> None:
         """Ensures all class resources are released before the instance is destroyed.
@@ -351,12 +350,11 @@ class KeyboardListener:
             # Runtime pause command: ESC + p
             # Note, repeated uses of this command toggle the system between paused and unpaused states.
             if "'p'" in self._currently_pressed:
-                if self._previous_pause_flag:
+                pause_flag = bool(self._data_array.read_data(index=5, convert_output=True))
+                if pause_flag:
                     self._data_array.write_data(index=5, data=np.int32(0))
-                    self._previous_pause_flag = False
                 else:
                     self._data_array.write_data(index=5, data=np.int32(1))
-                    self._previous_pause_flag = True
 
     def _on_release(self, key: Any) -> None:
         """Removes no longer pressed keys from the storage set.

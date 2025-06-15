@@ -115,7 +115,6 @@ class KeyboardListener:
     _currently_pressed: set[str]
     _keyboard_process: Incomplete
     _started: bool
-    _previous_pause_flag: bool
     def __init__(self) -> None: ...
     def __del__(self) -> None:
         """Ensures all class resources are released before the instance is destroyed.
