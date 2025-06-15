@@ -1,5 +1,6 @@
 """This package stores data acquisition and preprocessing assets shared by multiple data acquisition systems."""
 
+from .shared_tools import write_version_data
 from .module_interfaces import (
     TTLInterface,
     LickInterface,
@@ -10,7 +11,6 @@ from .module_interfaces import (
     EncoderInterface,
 )
 from .google_sheet_tools import WaterSheet, SurgerySheet
-from .shared_tools import write_version_data
 
 __all__ = [
     "EncoderInterface",

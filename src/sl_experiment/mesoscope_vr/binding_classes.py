@@ -380,7 +380,7 @@ class ZaberMotors:
         self._wheel.disconnect()
         self._lickport.disconnect()
 
-    def park_motors(self):
+    def park_motors(self) -> None:
         """Parks all managed motor groups, preventing them from being moved via this library or Zaber GUI until
         they are unparked via the unpark_motors() command."""
         self._headbar_pitch.park()
@@ -391,7 +391,7 @@ class ZaberMotors:
         self._lickport_y.park()
         self._lickport_z.park()
 
-    def unpark_motors(self):
+    def unpark_motors(self) -> None:
         """Unparks all managed motor groups, allowing them to be moved via this library or the Zaber GUI."""
         self._headbar_pitch.unpark()
         self._headbar_roll.unpark()

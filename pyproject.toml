@@ -69,6 +69,7 @@ dependencies = [
     "pynput>=1,<2",
     "appdirs>=1,<2",
     "pytz>=2025,<2026",
+    "importlib_metadata>=8,<9",
     "sl-shared-assets==1.2.0rc1",
 ]
 
@@ -99,6 +100,7 @@ condarun = [
     "pyarrow>=19,<20",
     "pynput>=1,<2",
     "appdirs>=1,<2",
+    "importlib_metadata>=8,<9",
     "pytz>=2025,<2026",
 ]
 
@@ -106,7 +108,6 @@ condarun = [
 conda = [
     # Documentation
     "sphinx>=8,<9",
-    "importlib_metadata>=8,<9",
     "sphinx-rtd-theme>=3,<4",
     "sphinx-click>=6,<7",
     "sphinx-autodoc-typehints>=3,<4",

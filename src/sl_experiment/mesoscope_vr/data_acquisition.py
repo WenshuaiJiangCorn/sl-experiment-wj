@@ -492,10 +492,8 @@ class _MesoscopeExperiment:
                 self._session_data.raw_data.mesoscope_positions_path,
             )
             # Loads the previous position data into memory
-            previous_mesoscope_positions: MesoscopePositions = (
-                MesoscopePositions.from_yaml(  # type: ignore
-                    file_path=self._session_data.raw_data.mesoscope_positions_path
-                )
+            previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+                file_path=self._session_data.raw_data.mesoscope_positions_path
             )
         else:
             # 'Default' precursor de-novo creation. We have a checker (see below) to ensure the user modifies the
@@ -598,9 +596,8 @@ class _MesoscopeExperiment:
         # Forces the user to update the mesoscope positions file with current mesoscope data if the mesoscope positions
         # file is a precursor or the user has indicated that the positions need to be updated.
         if force_mesoscope_positions_update:
-
             # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file.
-            mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+            mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                 file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
             )
 
@@ -615,7 +612,6 @@ class _MesoscopeExperiment:
                 and mesoscope_positions.mesoscope_fast_z == previous_mesoscope_positions.mesoscope_fast_z
                 and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
                 and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
-
             ):
                 message = (
                     "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
@@ -628,7 +624,7 @@ class _MesoscopeExperiment:
                 input("Enter anything to continue: ")
 
                 # Reloads the positions file each time to ensure positions have been modified.
-                mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+                mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                     file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
                 )
 
@@ -1616,7 +1612,6 @@ def lick_training_logic(
 
                     # Blocks in-place until the user either unpauses or aborts the training.
                     while listener.pause_runtime:
-
                         visualizer.update()  # Continuously updates the visualizer
 
                         # If the user requests for the paused runtime to be aborted, terminates the runtime.
@@ -2078,7 +2073,6 @@ def run_training_logic(
                 # Blocks in-place until the user either unpauses or aborts the training.
                 abort_stage: bool = False
                 while listener.pause_runtime:
-
                     visualizer.update()  # Continuously updates the visualizer
 
                     # If the user requests for the paused runtime to be aborted, terminates the runtime.
@@ -2327,7 +2321,6 @@ def experiment_logic(
                         # Blocks in-place until the user either unpauses or aborts the current experiment stage.
                         abort_stage: bool = False
                         while listener.pause_runtime:
-
                             visualizer.update()  # Continuously updates the visualizer
 
                             # If the user requests for the paused stage to be aborted, terminates the runtime.
@@ -2475,7 +2468,7 @@ def maintenance_logic() -> None:
         console.echo(message=message, level=LogLevel.INFO)
 
         # Precomputes correct auditory tone duration from Mesoscope-VR configuration
-        tone_duration = convert_time(
+        tone_duration: float = convert_time(  # type: ignore
             from_units="ms", to_units="us", time=system_configuration.microcontrollers.auditory_tone_duration_ms
         )
 
