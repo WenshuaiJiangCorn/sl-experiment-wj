@@ -485,16 +485,27 @@ class _MesoscopeExperiment:
         # coordinates with the positions loaded from the persistent storage file. This way, if the user used the same
         # coordinates as last time, they do not need to update the mesoscope coordinates when manually editing the
         # descriptor.
+        force_mesoscope_positions_update: bool = False
         if Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
             sh.copy(
                 self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
                 self._session_data.raw_data.mesoscope_positions_path,
             )
+            # Loads the previous position data into memory
+            previous_mesoscope_positions: MesoscopePositions = (
+                MesoscopePositions.from_yaml(  # type: ignore
+                    file_path=self._session_data.raw_data.mesoscope_positions_path
+                )
+            )
         else:
             # 'Default' precursor de-novo creation. We have a checker (see below) to ensure the user modifies the
             # precursor.
-            mesoscope_positions = MesoscopePositions()
-            mesoscope_positions.to_yaml(file_path=Path(self._session_data.raw_data.mesoscope_positions_path))
+            previous_mesoscope_positions = MesoscopePositions()
+            previous_mesoscope_positions.to_yaml(file_path=Path(self._session_data.raw_data.mesoscope_positions_path))
+
+            # If this runtime generates the precursor file, it automatically forces the user to update the default
+            # precursor values.
+            force_mesoscope_positions_update = True
 
         message = "Mesoscope objective position snapshot: Created."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -511,11 +522,15 @@ class _MesoscopeExperiment:
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Moves the LickPort to the mounting position to assist removing the animal from the rig. Since
-        # 'generate_position_snapshot()' function replaces the local copy of ZaberPositions stored inside the
-        # ZaberMotors class, this will correctly 'restore' motors other than LickPort to their current positions,
-        # resulting in no movement of any motor other than LickPort.
-        self._zaber_motors.mount_position()
+        message = f"Retracting the lick-port away from the animal..."
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
+        # animal).
+        self._zaber_motors.unmount_position()
+
+        message = "Motor Positioning: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -558,36 +573,64 @@ class _MesoscopeExperiment:
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
 
-        # Forces the user to update the mesoscope positions file with current mesoscope data. This is only triggered if
-        # the mesoscope positions file is a precursor. Otherwise, this check will not be triggered. This is intentional,
-        # as reusing the same mesoscope positions over days is desirable and, likely, the positions will not change
-        # day to day. In that case, the code above will automatically re-save the same positions as used for the
-        # previous session, making user intervention unnecessary.
-        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
-        )
-
-        # Partial check. It is unlikely that x, y, and z are all set to zero during a real runtime. The purpose of
-        # this check is not to ensure that every coordinate is updated. It is to ensure the file was updated at all.
-        while (
-            mesoscope_positions.mesoscope_x == 0.0
-            and mesoscope_positions.mesoscope_y == 0.0
-            and mesoscope_positions.mesoscope_z == 0.0
-        ):
+        # If this runtime was able to reuse the mesoscope objective position data from a previous session, asks the
+        # user whether they have updated the mesoscope positions. If not, then there is no need to update the data
+        # inside the .YAML file.
+        if not force_mesoscope_positions_update:
             message = (
-                "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data directory "
-                "has been updated to include the mesoscope objective positions used during runtime. Manually edit the "
-                "mesoscope_positions.yaml file and replace the default text under the all available position fields "
-                "with coordinates displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to "
-                "the file by using 'CTRL+S' combination."
+                f"Do you want to update the mesoscope objective position data stored inside the "
+                f"mesoscope_positions.yaml file loaded from the previous session? If you moved the mesoscope objective "
+                f"or changed the fast_z, tip or tilt ScanImage parameters, answer 'yes'. IMPORTANT! If you did not "
+                f"update any mesoscope positions, answer 'no'."
             )
-            console.echo(message=message, level=LogLevel.ERROR)
-            input("Enter anything to continue: ")
+            console.echo(message=message, level=LogLevel.INFO)
+            while True:
+                answer = input("Enter 'yes' or 'no': ")
 
-            # Reloads the positions file each time to ensure positions have been modified.
+                if answer.lower() == "yes":
+                    force_mesoscope_positions_update = True
+                    break
+
+                elif answer.lower() == "no":
+                    force_mesoscope_positions_update = False
+                    break
+
+        # Forces the user to update the mesoscope positions file with current mesoscope data if the mesoscope positions
+        # file is a precursor or the user has indicated that the positions need to be updated.
+        if force_mesoscope_positions_update:
+
+            # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file.
             mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
                 file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
             )
+
+            # Ensures that the data cached into memory (precursor or previous session data) is at least partially
+            # not matching the data currently stored in the file. In other words, ensures that the user has updated the
+            # positions data.
+            while (
+                mesoscope_positions.mesoscope_x == previous_mesoscope_positions.mesoscope_x
+                and mesoscope_positions.mesoscope_y == previous_mesoscope_positions.mesoscope_y
+                and mesoscope_positions.mesoscope_z == previous_mesoscope_positions.mesoscope_z
+                and mesoscope_positions.mesoscope_roll == previous_mesoscope_positions.mesoscope_roll
+                and mesoscope_positions.mesoscope_fast_z == previous_mesoscope_positions.mesoscope_fast_z
+                and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
+                and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
+
+            ):
+                message = (
+                    "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
+                    "directory has been updated to include the mesoscope objective positions used during runtime. "
+                    "Manually edit the mesoscope_positions.yaml file to update the position fields with coordinates "
+                    "displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to the file by "
+                    "using 'CTRL+S' combination."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                input("Enter anything to continue: ")
+
+                # Reloads the positions file each time to ensure positions have been modified.
+                mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
+                    file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
+                )
 
         # Instructs the user to remove the mesoscope objective and the animal from the VR rig.
         message = (
@@ -674,6 +717,45 @@ class _MesoscopeExperiment:
 
         # Configures the state tracker to reflect RUN state
         self._change_vr_state(2)
+
+    def idle(self) -> None:
+        """Switches the Mesoscope-VR system to the idle state.
+
+        In the idle state, the break is engaged to prevent the animal from moving the wheel and the screens are turned
+        off. Both torque and encoder monitoring is disabled. Note, idle state is designed to be used exclusively by the
+        sl-experiment library. Specifically, this state is used when the user requests the runtime to be paused for
+        any reason.
+
+        Notes:
+            Idle Mesoscope-VR state is hardcoded as '0'.
+        """
+
+        # If the VR system is already in the idle state, returns without doing anything.
+        if self._vr_state == 0:
+            return
+
+        # Ensures VR screens are turned OFF to prevent unwanted stimulation due to any active interference with Unity
+        # during the idle period.
+        self._microcontrollers.disable_vr_screens()
+
+        # Engages the break to prevent the mouse from moving the wheel during the idle period.
+        self._microcontrollers.enable_break()
+
+        # Disables torque and encoder monitoring to avoid injecting motion noise while the system is restarting
+        self._microcontrollers.disable_encoder_monitoring()
+        self._microcontrollers.disable_torque_monitoring()
+
+        # Sets the VR state to 0. This is used to indicate the start and end periods of the runtime and also to mark
+        # user-requested runtime stage restarts (resets).
+        self._change_vr_state(0)
+
+    def deliver_reward(self, reward_size: float = 5.0) -> None:
+        """Uses the solenoid valve to deliver the requested volume of water in microliters.
+
+        This method is used by the experiment runtime logic to allow the experimenter to manually deliver water to the
+        animal.
+        """
+        self._microcontrollers.deliver_reward(volume=reward_size)
 
     def _get_cue_sequence(self) -> NDArray[np.uint8]:
         """Requests Unity game engine to transmit the sequence of virtual reality track wall cues for the current task.
@@ -1122,11 +1204,15 @@ class _BehaviorTraining:
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Moves the LickPort to the mounting position to assist removing the animal from the rig. Since
-        # 'generate_position_snapshot()' function replaces the local copy of ZaberPositions stored inside the
-        # ZaberMotors class, this will correctly 'restore' motors other than LickPort to their current positions,
-        # resulting in no movement of any motor other than LickPort.
-        self._zaber_motors.mount_position()
+        message = f"Retracting the lick-port away from the animal..."
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
+        # animal).
+        self._zaber_motors.unmount_position()
+
+        message = "Motor Positioning: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user that the data acquisition is complete.
         console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -1473,7 +1559,8 @@ def lick_training_logic(
 
     message = (
         f"Initiating lick training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
-        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal."
+        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press 'ESC' + 'p' to pause or resume the "
+        f"paused runtime."
     )
     console.echo(message=message, level=LogLevel.INFO)
 
@@ -1518,6 +1605,30 @@ def lick_training_logic(
                 # If the listener detects a reward delivery signal, delivers the reward to the animal
                 if listener.reward_signal:
                     runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+                # If the listener detects a pause command, enters a holding loop.
+                if listener.pause_runtime:
+                    message = (
+                        "Lick training runtime: paused due to user request. To resume the paused runtime, use the "
+                        "'ESC + p' combination again. To abort the training, use the 'ESC + q' combination."
+                    )
+                    console.echo(message=message, level=LogLevel.WARNING)
+
+                    # Blocks in-place until the user either unpauses or aborts the training.
+                    while listener.pause_runtime:
+
+                        visualizer.update()  # Continuously updates the visualizer
+
+                        # If the user requests for the paused runtime to be aborted, terminates the runtime.
+                        if listener.exit_signal:
+                            terminate = True  # Sets the terminate flag
+                            message = "Lick training runtime: aborted due to user request."
+                            console.echo(message=message, level=LogLevel.ERROR)
+                            break  # Escapes the pause 'while' loop
+
+                    # Escapes the outer (reward delay) 'while' loop
+                    if terminate:
+                        break
 
             # If the user sent the abort command, terminates the training early
             if terminate:
@@ -1784,7 +1895,8 @@ def run_training_logic(
     message = (
         f"Initiating run training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
         f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Use 'ESC' + Up / Down arrows to modify the "
-        f"running speed threshold. Use 'ESC' + Left / Right arrows to modify the running duration threshold."
+        f"running speed threshold. Use 'ESC' + Left / Right arrows to modify the running duration threshold. Press "
+        f"'ESC' + 'p' to pause or resume the paused runtime."
     )
     console.echo(message=message, level=LogLevel.INFO)
 
@@ -1809,12 +1921,16 @@ def run_training_logic(
     speed_threshold: np.float64 = np.float64(0)
     duration_threshold: np.float64 = np.float64(0)
 
+    # If the runtime is paused, this is used to extend the training runtime to account for the time spent in the
+    # paused state.
+    additional_time = 0
+
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
     try:
         runtime_timer.reset()
         speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
-        while runtime_timer.elapsed < training_time:
+        while runtime_timer.elapsed < (training_time + additional_time):
             # Updates the total volume of water dispensed during runtime at each loop iteration.
             dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
 
@@ -1910,13 +2026,14 @@ def run_training_logic(
                 epoch_timer_engaged = False
 
             # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
-            # track of elapsed training time.
-            if runtime_timer.elapsed > previous_time:
-                previous_time = runtime_timer.elapsed  # Updates previous time
+            # track of elapsed training time. Accounts for any additional time spent in the 'paused' state.
+            elapsed_time = runtime_timer.elapsed - additional_time
+            if elapsed_time > previous_time:
+                previous_time = elapsed_time  # Updates previous time
 
                 # Updates the time display without advancing the progress bar
-                elapsed_minutes = int(runtime_timer.elapsed // 60)
-                elapsed_seconds = int(runtime_timer.elapsed % 60)
+                elapsed_minutes = int(elapsed_time // 60)
+                elapsed_seconds = int(elapsed_time % 60)
                 progress_bar.set_postfix_str(
                     f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
                 )
@@ -1948,6 +2065,36 @@ def run_training_logic(
                 )
                 console.echo(message=message, level=LogLevel.ERROR)
                 break
+
+            # If the listener detects a pause command, enters a holding loop.
+            if listener.pause_runtime:
+                pause_start = runtime_timer.elapsed
+                message = (
+                    "Run training runtime: paused due to user request. To resume the paused runtime, use the "
+                    "'ESC + p' combination again. To abort the training, use the 'ESC + q' combination."
+                )
+                console.echo(message=message, level=LogLevel.WARNING)
+
+                # Blocks in-place until the user either unpauses or aborts the training.
+                abort_stage: bool = False
+                while listener.pause_runtime:
+
+                    visualizer.update()  # Continuously updates the visualizer
+
+                    # If the user requests for the paused runtime to be aborted, terminates the runtime.
+                    if listener.exit_signal:
+                        abort_stage = True
+                        message = f"Run training runtime: aborted due to user request."
+                        console.echo(message=message, level=LogLevel.ERROR)
+                        break  # Escapes the pause 'while' loop
+
+                # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
+                # increases the training time to counteract the duration of the 'paused' state.
+                additional_time = runtime_timer.elapsed - pause_start
+
+                # Escapes the outer (experiment state) 'while loop
+                if abort_stage:
+                    break
 
         # Close the progress bar
         progress_bar.close()
@@ -2110,6 +2257,13 @@ def experiment_logic(
     # Initializes the keyboard listener to support aborting test runtimes.
     listener = KeyboardListener()
 
+    message = (
+        f"Initiating Mesoscope experiment. Press 'ESC' + 'q' to immediately abort the current experiment stage at any "
+        f"time and advance to the next stage. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press "
+        f"'ESC' + 'p' to pause or resume the paused runtime."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
     try:
@@ -2133,21 +2287,72 @@ def experiment_logic(
             ) as pbar:
                 previous_seconds = 0
 
-                while runtime_timer.elapsed < state.state_duration_s:
+                # If the runtime is paused, this is used to extend the experiment state duration to account for the time
+                # spent in the paused state.
+                additional_time = 0
+
+                while runtime_timer.elapsed < (state.state_duration_s + additional_time):
                     visualizer.update()  # Continuously updates the visualizer
 
                     # Updates the progress bar every second. While the current implementation is technically not safe,
                     # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
-                    # delta to ever exceed 1 second.
-                    if runtime_timer.elapsed != previous_seconds:
+                    # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
+                    if (runtime_timer.elapsed - additional_time) > previous_seconds:
                         pbar.update(1)
                         previous_seconds = runtime_timer.elapsed
 
                     # If the user sent the abort command, terminates the runtime early with an error message.
                     if listener.exit_signal:
-                        message = "Experiment runtime: aborted due to user request."
+                        message = f"Experiment state {state.experiment_state_code}: aborted due to user request."
                         console.echo(message=message, level=LogLevel.ERROR)
                         break
+
+                    # If the listener detects a reward delivery signal, delivers the reward to the animal
+                    if listener.reward_signal:
+                        runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+                    # If the listener detects a pause command, enters a holding loop.
+                    if listener.pause_runtime:
+                        pause_start = runtime_timer.elapsed
+                        message = (
+                            "Experiment runtime: paused due to user request. To resume the paused runtime, use the "
+                            "'ESC + p' combination again. To abort the paused experiment state, use the 'ESC + q' "
+                            "combination."
+                        )
+                        console.echo(message=message, level=LogLevel.WARNING)
+
+                        # Switches the runtime control system to the 'idle' state.
+                        runtime.idle()
+
+                        # Blocks in-place until the user either unpauses or aborts the current experiment stage.
+                        abort_stage: bool = False
+                        while listener.pause_runtime:
+
+                            visualizer.update()  # Continuously updates the visualizer
+
+                            # If the user requests for the paused stage to be aborted, terminates the runtime.
+                            if listener.exit_signal:
+                                abort_stage = True
+                                message = (
+                                    f"Experiment state {state.experiment_state_code}: aborted due to user request."
+                                )
+                                console.echo(message=message, level=LogLevel.ERROR)
+                                break  # Escapes the pause 'while' loop
+
+                        # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
+                        # increases the experiment stage duration to counteract the duration of the 'paused' state.
+                        additional_time = runtime_timer.elapsed - pause_start
+
+                        # Escapes the outer (experiment state) 'while loop
+                        if abort_stage:
+                            break
+                        else:
+                            # Otherwise, if the user has unpaused the runtime, restores the system to the appropriate
+                            # state.
+                            if state.system_state_code == 1:
+                                runtime.rest()
+                            elif state.system_state_code == 2:
+                                runtime.run()
 
     except Exception as e:
         message = (
@@ -2529,29 +2734,12 @@ def window_checking_logic(
     message = "Motor Positioning: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Gives user time to mount the animal and requires confirmation before proceeding further.
-    message = (
-        "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig and install the "
-        "mesoscope objetive. DO NOT adjust any motors manually at this time, as all changes to all motors will be "
-        "reset by moving them to the imaging position. Keep the mesoscope objective away from the animal's head."
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
-    input("Enter anything to continue: ")
-
-    # Primarily, this sets the LickPort to the default parking position. The HeadBar and Wheel should not move, as they
-    # are already 'restored'. However, if the user did move them manually, they too will be restored to default
-    # positions.
-    zaber_motors.restore_position()
-
-    message = "Motor Positioning: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
     # This section is where most manual manipulations take place, as the user needs to move the objective to the imaging
     # plane and check the quality of surgery.
     message = (
-        "Adjust all Zaber motor positions and position the mesoscope objective above the imaging field to asses the "
-        "animal surgery and cranial window implantation quality. Make sure you are satisfied with the imaging quality "
-        "before proceeding further."
+        "Position the mesoscope objective above the imaging field to asses the animal surgery and cranial window "
+        "implantation quality. Exercise caution when moving HeadBar Roll and Pitch axes motors. Make sure you are "
+        "satisfied with the imaging quality before proceeding further."
     )
     console.echo(message=message, level=LogLevel.WARNING)
     input("Enter anything to continue: ")
@@ -2561,7 +2749,7 @@ def window_checking_logic(
     mesoscope_positions = MesoscopePositions()
     mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
     message = f"Mesoscope positions precursor file: Generated."
-    console.echo(message=message, level=LogLevel.INFO)
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     message = (
         "Generate the cranial window screenshot and record the mesoscope objective positions in the precursor "
@@ -2611,13 +2799,17 @@ def window_checking_logic(
         mesoscope_positions.mesoscope_x == 0.0
         and mesoscope_positions.mesoscope_y == 0.0
         and mesoscope_positions.mesoscope_z == 0.0
+        and mesoscope_positions.mesoscope_roll == 0.0
+        and mesoscope_positions.mesoscope_fast_z == 0.0
+        and mesoscope_positions.mesoscope_tip == 0.0
+        and mesoscope_positions.mesoscope_tilt == 0.0
     ):
         message = (
             "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data directory "
             "has been updated to include the mesoscope objective positions used during runtime. Manually edit the "
-            "mesoscope_positions.yaml file and replace the default text under the all available position fields "
-            "with coordinates displayed in ScanImage software and ThorLabs pad. Make sure to save the changes to "
-            "the file by using 'CTRL+S' combination."
+            "mesoscope_positions.yaml file and replace the default text under the necessary mesoscope axis position "
+            "fields with coordinates displayed in the ScanImage software or the ThorLabs pad. Make sure to save the "
+            "changes to the file by using 'CTRL+S' combination."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -2633,24 +2825,21 @@ def window_checking_logic(
     message = f"Mesoscope-VR and cranial window state snapshot: Generated."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    message = (
-        "Preparing to move Zaber motors to the mount position. REMOVE the mesoscope objective at this time. Do not "
-        "remove the animal until the motors are in the mount position."
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
-    input("Enter anything to continue: ")
+    message = f"Retracting the lick-port away from the animal..."
+    console.echo(message=message, level=LogLevel.INFO)
 
-    # Helps with removing the animal from the rig
-    zaber_motors.mount_position()
+    # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
+    # animal).
+    zaber_motors.unmount_position()
 
     message = "Motor Positioning: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Instructs the user to remove all objects that may interfere with moving the motors.
     message = (
-        "REMOVE the animal from the VR rig. Failure to do so may HARM the animal. This is the last manual checkpoint, "
-        "once you progress past this point, the Microscope-VR system will reset Zaber motor positions and start data "
-        "preprocessing."
+        "REMOVE the animal and the mesoscope objective from the VR rig. Failure to do so may HARM the animal and "
+        "DAMAGE the mesoscope. This is the last manual checkpoint, once you progress past this point, the "
+        "Microscope-VR system will reset Zaber motor positions and start data preprocessing."
     )
     console.echo(message=message, level=LogLevel.WARNING)
     input("Enter anything to continue: ")

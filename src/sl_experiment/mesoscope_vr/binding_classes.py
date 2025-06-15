@@ -299,6 +299,33 @@ class ZaberMotors:
         # Prevents further interaction with the motors without manually disabling the parking lock.
         self.park_motors()
 
+    def unmount_position(self) -> None:
+        """Moves the lick-port back to the mount position in all axes while keeping all other motors in their current
+        positions.
+
+        This command facilitates removing (unmounting) the animal from the VR rig while being safe to execute when the
+        mesoscope objective and other mesoscope-VR elements are positioned for imaging.
+
+        Notes:
+            Technically, calling the mount_position() method after generating a new ZaberMotors snapshot will behave
+            identically to this command. However, to improve runtime safety and the clarity of the class API, it is
+            highly encouraged to use this method to unmount the animal.
+        """
+
+        # Disables the safety motor lock before moving the motors.
+        self.unpark_motors()
+
+        # Moves the lick-port back to the mount position, while keeping all other motors in their current positions.
+        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
+        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
+        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
+
+        # Waits for all motors to finish moving before returning to caller.
+        self.wait_until_idle()
+
+        # Prevents further interaction with the motors without manually disabling the parking lock.
+        self.park_motors()
+
     def generate_position_snapshot(self) -> ZaberPositions:
         """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
         instance, and returns it to caller.

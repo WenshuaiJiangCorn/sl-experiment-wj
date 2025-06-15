@@ -250,11 +250,13 @@ class KeyboardListener:
         _keyboard_process: The Listener instance used to monitor keyboard strokes. The listener runs in a remote
             process.
         _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
+        _previous_pause_flag: Keeps track of the 'pause runtime' flag value between key listening cycles. This is used
+            to make repeated 'ESC + p' (pause combination) presses to flip the pause flag between 0 and 1.
     """
 
     def __init__(self) -> None:
         self._data_array = SharedMemoryArray.create_array(
-            name="keyboard_listener", prototype=np.zeros(shape=5, dtype=np.int32), exist_ok=True
+            name="keyboard_listener", prototype=np.zeros(shape=6, dtype=np.int32), exist_ok=True
         )
         self._currently_pressed: set[str] = set()
 
@@ -262,6 +264,7 @@ class KeyboardListener:
         self._keyboard_process = Process(target=self._run_keyboard_listener, daemon=True)
         self._keyboard_process.start()
         self._started = True
+        self._previous_pause_flag = False
 
     def __del__(self) -> None:
         """Ensures all class resources are released before the instance is destroyed.
@@ -345,6 +348,16 @@ class KeyboardListener:
                 previous_value += 1
                 self._data_array.write_data(index=4, data=previous_value)
 
+            # Runtime pause command: ESC + p
+            # Note, repeated uses of this command toggle the system between paused and unpaused states.
+            if "'p'" in self._currently_pressed:
+                if self._previous_pause_flag:
+                    self._data_array.write_data(index=5, data=np.int32(0))
+                    self._previous_pause_flag = False
+                else:
+                    self._data_array.write_data(index=5, data=np.int32(1))
+                    self._previous_pause_flag = True
+
     def _on_release(self, key: Any) -> None:
         """Removes no longer pressed keys from the storage set.
 
@@ -392,3 +405,13 @@ class KeyboardListener:
         This is used during run training to manually update the running epoch duration threshold.
         """
         return int(self._data_array.read_data(index=4, convert_output=True))
+
+    @property
+    def pause_runtime(self) -> bool:
+        """Returns True if the listener has detected the runtime pause keys combination (ESC + p) being pressed.
+
+        This indicates that the user has requested the acquisition system to pause the current runtime. When the system
+        receives this signal, it suspends the ongoing runtime and switches to the 'idle' state until the user unpauses
+        the system by using the "Esc + p' combination again
+        """
+        return bool(self._data_array.read_data(index=5, convert_output=True))
