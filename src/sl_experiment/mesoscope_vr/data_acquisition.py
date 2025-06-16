@@ -603,7 +603,7 @@ class _MesoscopeExperiment:
 
             # Ensures that the data cached into memory (precursor or previous session data) is at least partially
             # not matching the data currently stored in the file. In other words, ensures that the user has updated the
-            # positions data.
+            # position data.
             while (
                 mesoscope_positions.mesoscope_x == previous_mesoscope_positions.mesoscope_x
                 and mesoscope_positions.mesoscope_y == previous_mesoscope_positions.mesoscope_y
@@ -1901,7 +1901,7 @@ def run_training_logic(
         total=round(maximum_water_volume, ndigits=3),
         desc="Delivered water volume",
         unit="ml",
-        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} [{elapsed}<{remaining}]",
+        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f}",
     )
 
     # Tracks the data necessary to update the training progress bar

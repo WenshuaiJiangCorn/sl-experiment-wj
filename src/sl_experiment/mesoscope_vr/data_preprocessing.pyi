@@ -162,8 +162,8 @@ def _pull_mesoscope_data(
 
     This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
     before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
-    contains only the frames acquired during the current session runtime, the MotionEstimator.me and
-    zstack.mat used for motion registration.
+    contains only the frames acquired during the current session runtime and the MotionEstimator.me file used for
+    motion registration.
 
     Notes:
         It is safe to call this function for sessions that did not acquire mesoscope frames. It is designed to

@@ -517,8 +517,8 @@ def _pull_mesoscope_data(
 
     This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
     before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
-    contains only the frames acquired during the current session runtime, the MotionEstimator.me and
-    zstack.mat used for motion registration.
+    contains only the frames acquired during the current session runtime and the MotionEstimator.me file used for
+    motion registration.
 
     Notes:
         It is safe to call this function for sessions that did not acquire mesoscope frames. It is designed to
@@ -583,22 +583,12 @@ def _pull_mesoscope_data(
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
 
-        if "zstack.mat" not in file_names:
-            message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
-                f"required zstack.mat file."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            error = True
-
-        # Prevents pulling an empty folder. At a minimum, we expect 2 motion estimation files and one TIFF stack
-        # file
-        if len(files) < 3:
+        # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file
+        if len(files) < 2:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
                 f"'mesoscope_frames' ScanImage PC for the session {session_name} does not contain the minimum expected "
-                f"number of files (3). This indicates that no frames were acquired during runtime or that the frames "
+                f"number of files (2). This indicates that no frames were acquired during runtime or that the frames "
                 f"were saved at a different location."
             )
             console.echo(message=message, level=LogLevel.ERROR)
@@ -800,11 +790,6 @@ def _preprocess_mesoscope_directory(
         src=image_directory.joinpath("MotionEstimator.me"),
         dst=output_directory.joinpath("MotionEstimator.me"),
     )
-    sh.move(
-        src=image_directory.joinpath("zstack.mat"),
-        dst=output_directory.joinpath("zstack.mat"),
-    )
-
     # If configured, the processing function ensures that
     if remove_sources:
         _delete_directory(image_directory)
