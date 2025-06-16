@@ -1901,7 +1901,7 @@ def run_training_logic(
         total=round(maximum_water_volume, ndigits=3),
         desc="Delivered water volume",
         unit="ml",
-        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f}",
+        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
     )
 
     # Tracks the data necessary to update the training progress bar
