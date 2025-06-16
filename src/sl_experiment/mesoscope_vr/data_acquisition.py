@@ -157,6 +157,18 @@ class _MesoscopeExperiment:
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
 
+        # Extra step to force the user to initialize the Unity game engine. Initializing unity sometimes interferes with
+        # other sl-experiment components, mostly the USB cameras.
+        message = (
+            "This runtime is designed to use Unity game engine to interface with the virtual task environment. Make "
+            "sure that the experiment's Unity project is loaded and configured before proceeding further. Loading the "
+            "Unity project while this runtime is ongoing may interfere with some hardware modules, causing the runtime "
+            "to crash with no possibility of recovery. DO NOT arm the Unity environment until instructed to do so by "
+            "this runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
+
     def start(self) -> None:
         """Initializes and configures all assets used during the experiment.
 
@@ -2084,7 +2096,7 @@ def run_training_logic(
 
                 # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
                 # increases the training time to counteract the duration of the 'paused' state.
-                additional_time += (runtime_timer.elapsed - pause_start)
+                additional_time += runtime_timer.elapsed - pause_start
 
                 # Escapes the outer (experiment state) 'while loop'
                 if abort_stage:
@@ -2252,9 +2264,9 @@ def experiment_logic(
     listener = KeyboardListener()
 
     message = (
-        f"Initiating Mesoscope experiment. Press 'ESC' + 'q' to immediately abort the current experiment stage at any "
-        f"time and advance to the next stage. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press "
-        f"'ESC' + 'p' to pause or resume the paused runtime."
+        f"Initiating Mesoscope experiment. Press 'ESC' + 'q' to immediately abort the experiment runtime at any time. "
+        f"Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press 'ESC' + 'p' to pause or resume the paused "
+        f"runtime."
     )
     console.echo(message=message, level=LogLevel.INFO)
 
@@ -2293,11 +2305,11 @@ def experiment_logic(
                     # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
                     if (runtime_timer.elapsed - additional_time) > previous_seconds:
                         pbar.update(1)
-                        previous_seconds = runtime_timer.elapsed
+                        previous_seconds = runtime_timer.elapsed - additional_time
 
                     # If the user sent the abort command, terminates the runtime early with an error message.
                     if listener.exit_signal:
-                        message = f"Experiment state {state.experiment_state_code}: aborted due to user request."
+                        message = f"Experiment runtime: aborted due to user request."
                         console.echo(message=message, level=LogLevel.ERROR)
                         break
 
@@ -2310,7 +2322,7 @@ def experiment_logic(
                         pause_start = runtime_timer.elapsed
                         message = (
                             "Experiment runtime: paused due to user request. To resume the paused runtime, use the "
-                            "'ESC + p' combination again. To abort the paused experiment state, use the 'ESC + q' "
+                            "'ESC + p' combination again. To abort the paused experiment runtime, use the 'ESC + q' "
                             "combination."
                         )
                         console.echo(message=message, level=LogLevel.WARNING)
@@ -2326,9 +2338,7 @@ def experiment_logic(
                             # If the user requests for the paused stage to be aborted, terminates the runtime.
                             if listener.exit_signal:
                                 abort_stage = True
-                                message = (
-                                    f"Experiment state {state.experiment_state_code}: aborted due to user request."
-                                )
+                                message = f"Experiment runtime: aborted due to user request."
                                 console.echo(message=message, level=LogLevel.ERROR)
                                 break  # Escapes the pause 'while' loop
 
