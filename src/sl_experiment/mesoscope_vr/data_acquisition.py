@@ -1901,7 +1901,7 @@ def run_training_logic(
         total=round(maximum_water_volume, ndigits=3),
         desc="Delivered water volume",
         unit="ml",
-        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} [{elapsed}<{remaining}, {rate_fmt}]",
+        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} [{elapsed}<{remaining}]",
     )
 
     # Tracks the data necessary to update the training progress bar
@@ -2084,9 +2084,9 @@ def run_training_logic(
 
                 # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
                 # increases the training time to counteract the duration of the 'paused' state.
-                additional_time = runtime_timer.elapsed - pause_start
+                additional_time += (runtime_timer.elapsed - pause_start)
 
-                # Escapes the outer (experiment state) 'while loop
+                # Escapes the outer (experiment state) 'while loop'
                 if abort_stage:
                     break
 
@@ -2334,7 +2334,7 @@ def experiment_logic(
 
                         # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
                         # increases the experiment stage duration to counteract the duration of the 'paused' state.
-                        additional_time = runtime_timer.elapsed - pause_start
+                        additional_time += runtime_timer.elapsed - pause_start
 
                         # Escapes the outer (experiment state) 'while loop
                         if abort_stage:
