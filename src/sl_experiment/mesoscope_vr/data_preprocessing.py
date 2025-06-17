@@ -936,9 +936,9 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
         # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
         # surgery, based on the window checking outcome
-        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 2:  # type: ignore
-            # Forces the user to provide a quality rating between 0 and 2 inclusive.
-            quality = input("Enter the surgery quality level between 0 and 2 inclusive: ")
+        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 3:  # type: ignore
+            # Forces the user to provide a quality rating between 0 and 3 inclusive.
+            quality = input("Enter the surgery quality level between 0 and 3 inclusive: ")
     else:
         message = (
             f"Unable to extract the water restriction data from the session descriptor file for session "
