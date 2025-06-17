@@ -101,8 +101,8 @@ class ZaberMotors:
         self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
         self._lickport.connect()
         self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
-        self._lickport_x: ZaberAxis = self._lickport.get_device(1).axis
-        self._lickport_y: ZaberAxis = self._lickport.get_device(2).axis
+        self._lickport_y: ZaberAxis = self._lickport.get_device(1).axis
+        self._lickport_x: ZaberAxis = self._lickport.get_device(2).axis
 
         # If the previous positions path points to an existing .yaml file, loads the data from the file into
         # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
