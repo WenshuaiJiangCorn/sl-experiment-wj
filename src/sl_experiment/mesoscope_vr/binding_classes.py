@@ -370,11 +370,6 @@ class ZaberMotors:
 
         This method should be called after the motors are parked (moved to their final parking position) to release
         the connection resources. If this method is not called, the runtime will NOT be able to terminate.
-
-        Notes:
-            Calling this method will execute the motor parking sequence, which involves moving the motors to their
-            parking position. Make sure there are no animals mounted on the rig and that the Mesoscope objective is
-            removed from the rig before executing this command.
         """
         self._headbar.disconnect()
         self._wheel.disconnect()

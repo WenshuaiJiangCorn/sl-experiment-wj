@@ -236,44 +236,64 @@ class _MesoscopeExperiment:
         # previous session is still running its data preprocessing pipeline and needs as many free cores as possible.
         self._cameras.start_face_camera()
 
-        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
-        # proceed with motor movements.
+        # Determines whether to carry out the Zaber motor positioning sequence.
         message = (
-            "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the VR "
-            "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-            "the mesoscope and / or HARM the animal."
+            f"Do you want to carry out the Zaber motor preparation sequence for this animal? Most runtimes require "
+            f"this step to work as expected. Only enter 'no' if you are restarting a runtime that has already carried "
+            f"out the motor positioning, but failed at a later stage."
         )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        console.echo(message=message, level=LogLevel.INFO)
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
 
-        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
-        # with each other, so it is safe to move both assemblies at the same time.
-        self._zaber_motors.prepare_motors()
+            if answer.lower() == "yes":
+                move_zaber = True
+                break
 
-        # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
-        # session's position or are set to the default mounting position stored in non-volatile memory. The LickPort is
-        # moved to a position optimized for putting the animal on the VR rig.
-        self._zaber_motors.mount_position()
+            elif answer.lower() == "no":
+                move_zaber = False
+                break
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        if move_zaber:
+            # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is
+            # safe to proceed with motor movements.
+            message = (
+                "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the "
+                "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may "
+                "DAMAGE the mesoscope and / or HARM the animal."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
-            "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig and install the "
-            "mesoscope objetive. DO NOT adjust any motors manually at this time, as all changes to all motors will be "
-            "reset by moving them to the imaging position. Keep the mesoscope objective away from the animal's head."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+            # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not
+            # intersect with each other, so it is safe to move both assemblies at the same time.
+            self._zaber_motors.prepare_motors()
 
-        # Primarily, this restores the LickPort to the previous session's position or default parking position. The
-        # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
-        # manually, they too will be restored to default positions.
-        self._zaber_motors.restore_position()
+            # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
+            # session's position or are set to the default mounting position stored in non-volatile memory. The
+            # LickPort is moved to a position optimized for putting the animal on the VR rig.
+            self._zaber_motors.mount_position()
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
+
+            # Gives user time to mount the animal and requires confirmation before proceeding further.
+            message = (
+                "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig and install "
+                "the mesoscope objetive. DO NOT adjust any motors manually at this time, as all changes to all motors "
+                "will be reset by moving them to the imaging position. Keep the mesoscope objective away from the "
+                "animal's head."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
+            # Primarily, this restores the LickPort to the previous session's position or default parking position. The
+            # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
+            # manually, they too will be restored to default positions.
+            self._zaber_motors.restore_position()
+
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
         # If previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
         # augment the message to the user.
@@ -286,7 +306,7 @@ class _MesoscopeExperiment:
                 f"If necessary, adjust all Zaber motor positions and position the mesoscope objective above the "
                 f"imaging field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
                 f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
-                f"z={previous_positions.mesoscope_tilt}, fast_z={previous_positions.mesoscope_fast_z}, "
+                f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
                 f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}. Do NOT start the "
                 f"Mesoscope or Unity game engine at this time. This is done at a later manual checkpoint."
             )
@@ -365,12 +385,12 @@ class _MesoscopeExperiment:
         self._cameras.save_face_camera_frames()
         self._cameras.save_body_camera_frames()
 
-        # Starts all microcontroller interfaces
-        self._microcontrollers.start()
-
         # Establishes a direct communication with Unity over MQTT. This is in addition to some ModuleInterfaces using
         # their own communication channels.
         self._unity.connect()
+
+        # Starts all microcontroller interfaces
+        self._microcontrollers.start()
 
         # This checkpoint is moved here to avoid potential issues introduced by resetting the microcontrollers while
         # the mesoscope is monitoring for trigger cues. The rest procedure sometimes generates a TTL 'blip', which may
@@ -381,6 +401,18 @@ class _MesoscopeExperiment:
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
+
+        # Starts monitoring the sensors used during all VR states. Currently, this is the lick sensor state and
+        # the mesoscope frame ttl module state.
+        self._microcontrollers.enable_mesoscope_frame_monitoring()
+        self._microcontrollers.enable_lick_monitoring()
+
+        # Sets the rest of the subsystems to use the IDLE state.
+        self.idle()
+
+        # Starts mesoscope frame acquisition. This also verifies that the mesoscope responds to triggers and
+        # actually starts acquiring frames using the _mesoscope_frame interface above.
+        self._start_mesoscope()
 
         # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
         # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
@@ -396,22 +428,7 @@ class _MesoscopeExperiment:
         message = "Unity virtual task: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Starts monitoring the sensors used during all VR states. Currently, this is the lick sensor state and
-        # the mesoscope frame ttl module state.
-        self._microcontrollers.enable_mesoscope_frame_monitoring()
-        self._microcontrollers.enable_lick_monitoring()
-
-        # Sets the rest of the subsystems to use the REST state.
-        self.rest()
-
-        # Starts mesoscope frame acquisition. This also verifies that the mesoscope responds to triggers and
-        # actually starts acquiring frames using the _mesoscope_frame interface above.
-        self._start_mesoscope()
-
-        message = "Mesoscope frame acquisition: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # 0-state is used to mark the start and end of the experiment runtime
+        # Marks the beginning of the experiment runtime by logging 0-0 state message.
         self._change_vr_state(new_state=0)
         self.change_experiment_state(new_state=0)
 
@@ -439,9 +456,9 @@ class _MesoscopeExperiment:
         # Resets the _started tracker
         self._started = False
 
-        # Switches the system into the rest state. Since REST state has most modules set to stop-friendly states,
+        # Switches the system into the IDLE state. Since IDLE state has most modules set to stop-friendly states,
         # this is used as a shortcut to prepare the VR system for shutdown.
-        self.rest()
+        self.idle()
 
         # Stops mesoscope frame acquisition.
         self._microcontrollers.stop_mesoscope()
@@ -532,15 +549,35 @@ class _MesoscopeExperiment:
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = f"Retracting the lick-port away from the animal..."
+        # Determines whether to carry out the Zaber motor shutdown sequence.
+        message = (
+            f"Do you want to carry out the Zaber motor shutdown sequence? This should be done for most runtimes. The "
+            f"only reason to skip the shutdown sequence is if you are shutting down the current runtime to immediately "
+            f"restart (rerun) it for the same animal. In this case, skipping the shutdown (and setup) of Zaber motors "
+            f"allows to keep the animal mounted in the VR rig."
+        )
         console.echo(message=message, level=LogLevel.INFO)
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
+
+            if answer.lower() == "yes":
+                move_zaber = True
+                break
+
+            elif answer.lower() == "no":
+                move_zaber = False
+                break
 
         # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
         # animal).
-        self._zaber_motors.unmount_position()
+        if move_zaber:
+            message = f"Retracting the lick-port away from the animal..."
+            console.echo(message=message, level=LogLevel.INFO)
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            self._zaber_motors.unmount_position()
+
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -549,8 +586,7 @@ class _MesoscopeExperiment:
         # before processing so that the notes are properly transferred to the NAS and server.
         message = (
             f"Open the session descriptor file stored in session's raw_data folder and update it with the notes taken "
-            f"during runtime. Also, update the mesoscope_positions.yaml file with the mesoscope objective position "
-            f"data used during runtime."
+            f"during runtime."
         )
         console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
@@ -590,8 +626,8 @@ class _MesoscopeExperiment:
             message = (
                 f"Do you want to update the mesoscope objective position data stored inside the "
                 f"mesoscope_positions.yaml file loaded from the previous session? If you moved the mesoscope objective "
-                f"or changed the fast_z, tip or tilt ScanImage parameters, answer 'yes'. IMPORTANT! If you did not "
-                f"update any mesoscope positions, answer 'no'."
+                f"or changed the fast_z, tip or tilt ScanImage parameters, answer 'yes'. If you did not update any "
+                f"mesoscope positions, answer 'no'."
             )
             console.echo(message=message, level=LogLevel.INFO)
             while True:
@@ -640,17 +676,21 @@ class _MesoscopeExperiment:
                     file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
                 )
 
-        # Instructs the user to remove the mesoscope objective and the animal from the VR rig.
-        message = (
-            "Uninstall the mesoscope objective and REMOVE the animal from the VR rig. Failure to do so may DAMAGE the "
-            "mesoscope objective and HARM the animal. This is the last manual checkpoint, once you progress past this "
-            "point, the Microscope-VR system will reset Zaber motor positions and start data preprocessing."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        # Optionally moves the motors to their parking positions
+        if move_zaber:
+            message = (
+                "Uninstall the mesoscope objective and REMOVE the animal from the VR rig. Failure to do so may DAMAGE "
+                "the mesoscope objective and HARM the animal. This is the last manual checkpoint, once you progress "
+                "past this point, the Microscope-VR system will reset Zaber motor positions and start data "
+                "preprocessing."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        # Parks and disconnects from all Zaber motors.
-        self._zaber_motors.park_position()
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, sbut does lock (park) all motors before
+        # disconnecting.
         self._zaber_motors.disconnect()
 
         message = "Zaber motors: Reset."
@@ -864,14 +904,33 @@ class _MesoscopeExperiment:
                 # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
                 # acquisition.
                 if self._microcontrollers.mesoscope_frame_count:
-                    return
+                    message = "Mesoscope frame acquisition: Started."
+                    console.echo(message=message, level=LogLevel.SUCCESS)
+
+                    message = "Verifying the acquisition stability by acquiring 200 frames over the next 20 seconds..."
+                    console.echo(message=message, level=LogLevel.INFO)
+
+                    timeout_timer.reset()
+                    stability_check = True
+                    while self._microcontrollers.mesoscope_frame_count < 200:
+
+                        # At ~10 Hz, this should be over in 20 seconds. If the frames are not acquired in 30 seconds,
+                        # indicates a runtime error.
+                        if timeout_timer.elapsed > 30:
+                            stability_check = False
+                            break
+
+                    # If the stability check is passed, returns to caller. Otherwise, raises an error.
+                    if stability_check:
+                        return
 
             # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
             message = (
                 f"The MesoscopeExperiment has requested the mesoscope to start acquiring frames and received no frame "
-                f"acquisition trigger for 2 seconds. It is likely that the mesoscope has not been armed for frame "
-                f"acquisition or that the mesoscope trigger or frame timestamp connection is not functional. Make sure "
-                f"the Mesoscope is configured for data acquisition before continuing."
+                f"acquisition trigger for 2 seconds or failed to acquire 200 frames over 30 second. It is likely that "
+                f"the mesoscope has not been armed for frame acquisition or that the mesoscope trigger or frame "
+                f"timestamp connection is not functional. Make sure the Mesoscope is configured for data acquisition "
+                f"before continuing and retry the mesoscope activation."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
@@ -1078,6 +1137,25 @@ class _BehaviorTraining:
         # we want to minimize the number of active processes. This is helpful if this method is called while the
         # previous session is still running its data preprocessing pipeline and needs as many free cores as possible.
         self._cameras.start_face_camera()
+
+        # TODO Implement this here
+        # Determines whether to carry out the Zaber motor positioning sequence.
+        message = (
+            f"Do you want to carry out the Zaber motor preparation sequence for this animal? Most runtimes require "
+            f"this step to work as expected. Only enter 'no' if you are restarting a runtime that has already carried "
+            f"out the motor positioning, but failed at a later stage."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
+
+            if answer.lower() == "yes":
+                move_zaber = True
+                break
+
+            elif answer.lower() == "no":
+                move_zaber = False
+                break
 
         # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
         # proceed with motor movements.

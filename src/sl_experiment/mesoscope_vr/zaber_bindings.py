@@ -761,21 +761,7 @@ class ZaberAxis:
         if self.is_busy:
             self._motor.stop(wait_until_idle=True)
 
-        # If the motor is parked, unparks the motor before executing further commands. The motor cannot be parked if it
-        # is busy.
-        elif self.is_parked:
-            self.unpark()
-
-        # If the motor is not homed, homes the motor before moving it in the park position.
-        if not self.is_homed:
-            self._ensure_call_padding()
-            self._motor.home(wait_until_idle=True)
-            self._reset_pad_timer()
-
-        # Moves the motor to the pre-specified parking position before shutting down
-        self._ensure_call_padding()
-        self._motor.move_absolute(position=self._park_position, wait_until_idle=True)
-        self.park()  # Parks the motor once it moves to the park position
+        self.park()  # Parks the motor before shutdown
         self._shutdown_flag = True  # Sets the shutdown flag to True to indicate that the motor has been shut down
 
 

@@ -1598,7 +1598,7 @@ class TorqueInterface(ModuleInterface):
 
     def initialize_remote_assets(self) -> None:
         """Not used."""
-        pass
+        return
 
     def terminate_remote_assets(self) -> None:
         """Not used."""
