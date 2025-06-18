@@ -689,7 +689,7 @@ class _MesoscopeExperiment:
 
             self._zaber_motors.park_position()
 
-        # Disconnects from Zaber motor. This does not change motor positions, sbut does lock (park) all motors before
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
         # disconnecting.
         self._zaber_motors.disconnect()
 
