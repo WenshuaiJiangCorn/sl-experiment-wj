@@ -913,7 +913,6 @@ class _MesoscopeExperiment:
                     timeout_timer.reset()
                     stability_check = True
                     while self._microcontrollers.mesoscope_frame_count < 200:
-
                         # At ~10 Hz, this should be over in 20 seconds. If the frames are not acquired in 30 seconds,
                         # indicates a runtime error.
                         if timeout_timer.elapsed > 30:
