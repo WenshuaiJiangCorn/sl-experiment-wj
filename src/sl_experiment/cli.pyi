@@ -71,7 +71,7 @@ def run_training(
     many laps as possible during experiment sessions lasting ~60 minutes.
     """
 
-def run_experiment(user: str, project: str, experiment: str, animal: str, animal_weight: float) -> None:
+def run_experiment(user: str, project: str, experiment: str, animal: str, animal_weight: float, guided: bool) -> None:
     """Runs the requested experiment session for the specified animal and project combination.
 
     Experiment runtimes are carried out after the lick and run training sessions Unlike training session commands, this

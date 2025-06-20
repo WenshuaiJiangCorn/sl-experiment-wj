@@ -69,7 +69,7 @@ dependencies = [
     "appdirs>=1,<2",
     "pytz>=2025,<2026",
     "importlib_metadata>=8,<9",
-    "sl-shared-assets==1.2.0rc1",
+    "sl-shared-assets==1.2.0rc2",
 ]
 
 [project.urls]

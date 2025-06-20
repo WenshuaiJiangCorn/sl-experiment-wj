@@ -102,8 +102,8 @@ class _MesoscopeExperiment:
         """Initializes and configures all assets used during the experiment.
 
         This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. It also requests the cue sequence from Unity game engine and starts mesoscope frame
-        acquisition process.
+        system processes. It also requests the cue sequence from Unity game engine. Critically, it does NOT start the
+        mesoscope frame acquisition. That requires calling the start_mesoscope() class method.
 
         Notes:
             This method will not run unless the host PC has access to the necessary number of logical CPU cores
@@ -230,6 +230,8 @@ class _MesoscopeExperiment:
             new_state: The integer byte-code for the new experiment state. The code will be serialized as an uint8
                 value, so only values between 0 and 255 inclusive are supported.
         """
+    def _set_lick_guidance(self, must_lick: bool):
+        """Sets the Unity task to optionally require the animal to lick in the reward zone to receive water."""
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
         """Returns the tracker SharedMemoryArrays for (in this order) the LickInterface, ValveInterface, and
@@ -467,7 +469,7 @@ def run_training_logic(
     """
 
 def experiment_logic(
-    experimenter: str, project_name: str, experiment_name: str, animal_id: str, animal_weight: float
+    experimenter: str, project_name: str, experiment_name: str, animal_id: str, animal_weight: float, guided: bool
 ) -> None:
     """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
@@ -497,6 +499,9 @@ def experiment_logic(
         experiment_name: The name or ID of the experiment to be conducted.
         animal_id: The numeric ID of the animal participating in the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
+        guided: Determines whether the experiment should run in the guided mode. In the guided mode, the animal only
+            needs to enter the reward zone to receive water. In non-guided mode, the animal also has to lick while
+            inside the reward zone.
     """
 
 def maintenance_logic() -> None:

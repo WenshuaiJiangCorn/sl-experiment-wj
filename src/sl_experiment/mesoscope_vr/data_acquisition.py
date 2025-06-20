@@ -161,8 +161,8 @@ class _MesoscopeExperiment:
         """Initializes and configures all assets used during the experiment.
 
         This internal method establishes the communication with the microcontrollers, data logger cores, and video
-        system processes. It also requests the cue sequence from Unity game engine and starts mesoscope frame
-        acquisition process.
+        system processes. It also requests the cue sequence from Unity game engine. Critically, it does NOT start the
+        mesoscope frame acquisition. That requires calling the start_mesoscope() class method.
 
         Notes:
             This method will not run unless the host PC has access to the necessary number of logical CPU cores
@@ -418,6 +418,15 @@ class _MesoscopeExperiment:
         self._logger.input_queue.put(package)
 
         message = "Unity virtual task: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Determines whether the animal must lick to receive water rewards.
+        self._set_lick_guidance(must_lick=not self.descriptor.is_guided)
+
+        if self.descriptor.is_guided:
+            message = "Guided mode: Enabled."
+        else:
+            message = "Guided mode: Disabled."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # The setup procedure is complete.
@@ -983,6 +992,13 @@ class _MesoscopeExperiment:
             serialized_data=np.array([2, new_state], dtype=np.uint8),
         )
         self._logger.input_queue.put(log_package)
+
+    def _set_lick_guidance(self, must_lick: bool) -> None:
+        """Sets the Unity task to optionally require the animal to lick in the reward zone to receive water."""
+        if must_lick:
+            self._unity.send_data(topic="MustLick/True/")
+        else:
+            self._unity.send_data(topic="MustLick/False/")
 
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:
@@ -1692,33 +1708,11 @@ def lick_training_logic(
     # Initializes the runtime control UI
     ui = RuntimeControlUI()
 
-    # Final checkpoint
-    message = (
-        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
-        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
-    )
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
-    # manually reposition all Zaber motors.
-    while ui.pause_runtime:
-        if ui.reward_signal:
-            runtime.deliver_reward(reward_size=ui.reward_volume)
-
-        if ui.open_valve:
-            runtime.toggle_valve(True)
-
-        if ui.close_valve:
-            runtime.toggle_valve(False)
-
-    # Ensures the valve is closed before continuing
-    runtime.toggle_valve(False)
+    # Configures all system components to support lick training
+    runtime.lick_train_state()
 
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
-
-    # Configures all system components to support lick training
-    runtime.lick_train_state()
 
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
@@ -2086,33 +2080,11 @@ def run_training_logic(
     # paused state.
     additional_time = 0
 
-    # Final checkpoint
-    message = (
-        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
-        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
-    )
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
-    # manually reposition all Zaber motors.
-    while ui.pause_runtime:
-        if ui.reward_signal:
-            runtime.deliver_reward(reward_size=ui.reward_volume)
-
-        if ui.open_valve:
-            runtime.toggle_valve(True)
-
-        if ui.close_valve:
-            runtime.toggle_valve(False)
-
-    # Ensures the valve is closed before continuing
-    runtime.toggle_valve(False)
+    # Configures all system components to support run training
+    runtime.run_train_state()
 
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
-
-    # Configures all system components to support run training
-    runtime.run_train_state()
 
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
@@ -2339,6 +2311,7 @@ def experiment_logic(
     experiment_name: str,
     animal_id: str,
     animal_weight: float,
+    guided: bool,
 ) -> None:
     """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
@@ -2368,6 +2341,9 @@ def experiment_logic(
         experiment_name: The name or ID of the experiment to be conducted.
         animal_id: The numeric ID of the animal participating in the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
+        guided: Determines whether the experiment should run in the guided mode. In the guided mode, the animal only
+            needs to enter the reward zone to receive water. In non-guided mode, the animal also has to lick while
+            inside the reward zone.
     """
     message = f"Initializing {experiment_name} experiment runtime..."
     console.echo(message=message, level=LogLevel.INFO)
@@ -2434,7 +2410,10 @@ def experiment_logic(
 
     # Generates the session descriptor class
     descriptor = MesoscopeExperimentDescriptor(
-        experimenter=experimenter, mouse_weight_g=animal_weight, dispensed_water_volume_ml=0.0
+        experimenter=experimenter,
+        mouse_weight_g=animal_weight,
+        dispensed_water_volume_ml=0.0,
+        is_guided=guided,
     )
 
     # Initializes the main runtime interface class.
