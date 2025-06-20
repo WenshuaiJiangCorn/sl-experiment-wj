@@ -48,6 +48,3 @@ typehints_use_signature_return = False
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = 'sphinx_rtd_theme'  # Directs sphinx to use RTD theme
-
-# Mocks pynput import as real pynput import interferes with the documentation process on Linux systems.
-autodoc_mock_imports = ["pynput"]

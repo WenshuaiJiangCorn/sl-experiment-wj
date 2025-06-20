@@ -511,7 +511,7 @@ def _pull_mesoscope_data(
     session_data: SessionData,
     num_threads: int = 30,
     remove_sources: bool = True,
-    verify_transfer_integrity: bool = True,
+    verify_transfer_integrity: bool = False,
 ) -> None:
     """Pulls the data acquired by the Mesoscope from the ScanImagePC to the VRPC.
 
@@ -1220,7 +1220,7 @@ def preprocess_session_data(session_data: SessionData) -> None:
         session_data=session_data,
         num_threads=31,
         remove_sources=True,
-        verify_transfer_integrity=True,
+        verify_transfer_integrity=False,
     )
 
     # Compresses all mesoscope-acquired frames and extracts their metadata

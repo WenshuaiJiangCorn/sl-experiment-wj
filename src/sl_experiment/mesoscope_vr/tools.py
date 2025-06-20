@@ -251,6 +251,9 @@ class RuntimeControlUI:
         This class is specialized to work with the Qt5 framework. In the future, it may be refactored to support the Qt6
         framework.
 
+        The UI starts the runtime in the 'paused' state to allow the user to check the valve and all other runtime
+        components before formally starting the runtime.
+
     Attributes:
         _data_array: A SharedMemoryArray used to store the data recorded by the remote UI process.
         _ui_process: The Process instance running the Qt5 UI.
@@ -424,7 +427,7 @@ class _ControlUIWindow(QMainWindow):
 
         # Defines internal attributes.
         self._data_array: SharedMemoryArray = data_array
-        self._is_paused: bool = False
+        self._is_paused: bool = True
         self._speed_modifier: int = 0
         self._duration_modifier: int = 0
 
@@ -432,7 +435,7 @@ class _ControlUIWindow(QMainWindow):
         self.setWindowTitle("Mesoscope-VR Control Panel")
 
         # Uses fixed size
-        self.setFixedSize(450, 600)
+        self.setFixedSize(450, 500)
 
         # Sets up the interactive UI
         self._setup_ui()
@@ -466,11 +469,12 @@ class _ControlUIWindow(QMainWindow):
         self.exit_btn.setObjectName("exitButton")
 
         # Runtime Pause / Unpause (resume) button
-        self.pause_btn = QPushButton("⏸️ Pause Runtime")
+        self._data_array.write_data(index=5, data=np.int32(1))  # Ensures all runtimes start in a paused state
+        self.pause_btn = QPushButton("▶️ Resume Runtime")
         self.pause_btn.setToolTip("Pauses or resumes the runtime.")
         # noinspection PyUnresolvedReferences
         self.pause_btn.clicked.connect(self._toggle_pause)
-        self.pause_btn.setObjectName("pauseButton")
+        self.pause_btn.setObjectName("resumeButton")
 
         # Configures the buttons to expand when UI is resized, but use a fixed height of 35 points
         for btn in [self.exit_btn, self.pause_btn]:
@@ -479,13 +483,13 @@ class _ControlUIWindow(QMainWindow):
             runtime_control_layout.addWidget(btn)
 
         # Adds runtime status tracker to the same box
-        self.runtime_status_label = QLabel("Runtime Status: 🟢 Running")
+        self.runtime_status_label = QLabel("Runtime Status: ⏸️ Paused")
         self.runtime_status_label.setAlignment(Qt.AlignCenter)
         runtime_status_font = QFont()
         runtime_status_font.setPointSize(35)
         runtime_status_font.setBold(True)
         self.runtime_status_label.setFont(runtime_status_font)
-        self.runtime_status_label.setStyleSheet("QLabel { color: #27ae60; font-weight: bold; }")
+        self.runtime_status_label.setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }")
         runtime_control_layout.addWidget(self.runtime_status_label)
 
         # Adds the runtime control box to the UI widget
@@ -580,7 +584,7 @@ class _ControlUIWindow(QMainWindow):
         speed_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
         speed_layout.addWidget(speed_status_label)
         self.speed_spinbox = QDoubleSpinBox()
-        self.speed_spinbox.setRange(-200, 200)  # Factoring in the step of 0.05, this allows -20 to +20 cm/s
+        self.speed_spinbox.setRange(-1000, 1000)  # Factoring in the step of 0.01, this allows -20 to +20 cm/s
         self.speed_spinbox.setValue(self._speed_modifier)  # Default value
         self.speed_spinbox.setDecimals(0)  # Integer precision
         self.speed_spinbox.setToolTip("Sets the running speed threshold modifier value.")
@@ -599,7 +603,7 @@ class _ControlUIWindow(QMainWindow):
         duration_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
         duration_layout.addWidget(duration_status_label)
         self.duration_spinbox = QDoubleSpinBox()
-        self.duration_spinbox.setRange(-200, 200)  # Factoring in the step of 0.05, this allows -20 to +20 s
+        self.duration_spinbox.setRange(-1000, 1000)  # Factoring in the step of 0.01, this allows -20 to +20 s
         self.duration_spinbox.setValue(self._duration_modifier)  # Default value
         self.duration_spinbox.setDecimals(0)  # Integer precision
         self.duration_spinbox.setToolTip("Sets the running duration threshold modifier value.")
@@ -939,11 +943,22 @@ class _ControlUIWindow(QMainWindow):
 
     def _exit_runtime(self) -> None:
         """Signals the runtime to gracefully terminate."""
+        previous_status = self.runtime_status_label.text()
+        style = self.runtime_status_label.styleSheet()
         self._data_array.write_data(index=1, data=np.int32(1))
         self.runtime_status_label.setText("✖ Exit signal sent")
         self.runtime_status_label.setStyleSheet("QLabel { color: #e74c3c; font-weight: bold; }")
         self.exit_btn.setText("✖ Exit Requested")
         self.exit_btn.setEnabled(False)
+
+        # Resets the button after 2 seconds
+        QTimer.singleShot(2000, lambda: self.exit_btn.setText("✖ Terminate Runtime"))
+        QTimer.singleShot(2000, lambda: self.exit_btn.setStyleSheet("QLabel { color: #c0392b; font-weight: bold; }"))
+        QTimer.singleShot(2000, lambda: self.exit_btn.setEnabled(True))
+
+        # Restores the status back to the previous state
+        QTimer.singleShot(2000, lambda: self.runtime_status_label.setText(previous_status))
+        QTimer.singleShot(2000, lambda: self.runtime_status_label.setStyleSheet(style))
 
     def _deliver_reward(self) -> None:
         """Triggers the Mesoscope-VR system to deliver a single water reward to the animal.
@@ -1003,10 +1018,10 @@ class _ControlUIWindow(QMainWindow):
 
     def _update_speed_modifier(self) -> None:
         """Updates the speed modifier in the data array in response to user modifying the GUI field value."""
-        self._speed_modifier = self.speed_spinbox.value()
+        self._speed_modifier = int(self.speed_spinbox.value())
         self._data_array.write_data(index=3, data=np.int32(self._speed_modifier))
 
     def _update_duration_modifier(self) -> None:
         """Updates the duration modifier in the data array in response to user modifying the GUI field value."""
-        self._duration_modifier = self.duration_spinbox.value()
+        self._duration_modifier = int(self.duration_spinbox.value())
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))

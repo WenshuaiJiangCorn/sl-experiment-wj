@@ -157,18 +157,6 @@ class _MesoscopeExperiment:
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
 
-        # Extra step to force the user to initialize the Unity game engine. Initializing unity sometimes interferes with
-        # other sl-experiment components, mostly the USB cameras.
-        message = (
-            "This runtime is designed to use Unity game engine to interface with the virtual task environment. Make "
-            "sure that the experiment's Unity project is loaded and configured before proceeding further. Loading the "
-            "Unity project while this runtime is ongoing may interfere with some hardware modules, causing the runtime "
-            "to crash with no possibility of recovery. DO NOT arm the Unity environment until instructed to do so by "
-            "this runtime."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
     def start(self) -> None:
         """Initializes and configures all assets used during the experiment.
 
@@ -255,12 +243,20 @@ class _MesoscopeExperiment:
                 break
 
         if move_zaber:
+            # Since it is now possible to shut down Zaber motors without fixing HeadBarRoll position, requests the user
+            # to verify this manually
+            message = (
+                "Check that the HeadBarRoll motor has a positive angle. The motor will collide with the stopper during "
+                "homing, if it has a negative angle."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
             # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is
             # safe to proceed with motor movements.
             message = (
                 "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the "
-                "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may "
-                "DAMAGE the mesoscope and / or HARM the animal."
+                "VR screens, and make sure the animal is NOT mounted on the rig."
             )
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
@@ -279,10 +275,8 @@ class _MesoscopeExperiment:
 
             # Gives user time to mount the animal and requires confirmation before proceeding further.
             message = (
-                "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig and install "
-                "the mesoscope objetive. DO NOT adjust any motors manually at this time, as all changes to all motors "
-                "will be reset by moving them to the imaging position. Keep the mesoscope objective away from the "
-                "animal's head."
+                "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig. DO NOT "
+                "adjust any motors manually at this time. Do NOT install the mesoscope objective."
             )
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
@@ -303,20 +297,22 @@ class _MesoscopeExperiment:
             )
             # Gives user time to mount the animal and requires confirmation before proceeding further.
             message = (
-                f"If necessary, adjust all Zaber motor positions and position the mesoscope objective above the "
-                f"imaging field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
+                f"If necessary, adjust all Zaber motor positions, install the mesoscope objective, and position it "
+                f"above the imaging field. Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
                 f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
                 f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
-                f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}. Do NOT start the "
-                f"Mesoscope or Unity game engine at this time. This is done at a later manual checkpoint."
+                f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}."
             )
         else:
             message = (
-                "If necessary, adjust all Zaber motor positions and position the mesoscope objective above the imaging "
-                "field. Do NOT start the Mesoscope or Unity game engine at this time. This is done at a later manual "
-                "checkpoint."
+                "If necessary, adjust all Zaber motor positions, install the mesoscope objective, and position it "
+                f"above the imaging field."
             )
-        console.echo(message=message, level=LogLevel.WARNING)
+        console.echo(message=message, level=LogLevel.SUCCESS)
+        input("Enter anything to continue: ")
+
+        message = "Generate the screenshot of the red-dot alignment and the cranial window."
+        console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
 
         # Forces the user to create the dot-alignment and cranial window screenshot on the ScanImage PC before
@@ -396,8 +392,8 @@ class _MesoscopeExperiment:
         # the mesoscope is monitoring for trigger cues. The rest procedure sometimes generates a TTL 'blip', which may
         # inadvertently interfere with mesoscope frame acquisition triggers.
         message = (
-            f"Run all mesoscope and Unity preparation procedures before continuing. This is the last manual "
-            f"checkpoint, after this message the runtime control function will begin the experiment."
+            f"Run all mesoscope and Unity preparation procedures. Specifically, 'arm' the Unity game engine and switch "
+            f"the ScanImage into the 'loop' mode with external triggers set to enabled."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -409,10 +405,6 @@ class _MesoscopeExperiment:
 
         # Sets the rest of the subsystems to use the IDLE state.
         self.idle()
-
-        # Starts mesoscope frame acquisition. This also verifies that the mesoscope responds to triggers and
-        # actually starts acquiring frames using the _mesoscope_frame interface above.
-        self._start_mesoscope()
 
         # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
         # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
@@ -428,15 +420,8 @@ class _MesoscopeExperiment:
         message = "Unity virtual task: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Marks the beginning of the experiment runtime by logging 0-0 state message.
-        self._change_vr_state(new_state=0)
-        self.change_experiment_state(new_state=0)
-
         # The setup procedure is complete.
         self._started = True
-
-        message = "Experiment: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self) -> None:
         """Stops and terminates all Mesoscope-VR components and ends the experiment runtime.
@@ -488,7 +473,7 @@ class _MesoscopeExperiment:
         self._microcontrollers.stop()
 
         # 0-state is used to mark the start and end of the experiment runtime
-        self._change_vr_state(new_state=0)
+        self.change_vr_state(new_state=0)
         self.change_experiment_state(new_state=0)
 
         # Stops the data logger instance
@@ -625,9 +610,7 @@ class _MesoscopeExperiment:
         if not force_mesoscope_positions_update:
             message = (
                 f"Do you want to update the mesoscope objective position data stored inside the "
-                f"mesoscope_positions.yaml file loaded from the previous session? If you moved the mesoscope objective "
-                f"or changed the fast_z, tip or tilt ScanImage parameters, answer 'yes'. If you did not update any "
-                f"mesoscope positions, answer 'no'."
+                f"mesoscope_positions.yaml file loaded from the previous session?"
             )
             console.echo(message=message, level=LogLevel.INFO)
             while True:
@@ -678,12 +661,7 @@ class _MesoscopeExperiment:
 
         # Optionally moves the motors to their parking positions
         if move_zaber:
-            message = (
-                "Uninstall the mesoscope objective and REMOVE the animal from the VR rig. Failure to do so may DAMAGE "
-                "the mesoscope objective and HARM the animal. This is the last manual checkpoint, once you progress "
-                "past this point, the Microscope-VR system will reset Zaber motor positions and start data "
-                "preprocessing."
-            )
+            message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
 
@@ -732,7 +710,7 @@ class _MesoscopeExperiment:
         self._microcontrollers.enable_torque_monitoring()
 
         # Configures the state tracker to reflect the REST state
-        self._change_vr_state(1)
+        self.change_vr_state(1)
 
     def run(self) -> None:
         """Switches the Mesoscope-VR system to the run state.
@@ -764,7 +742,7 @@ class _MesoscopeExperiment:
         self._microcontrollers.disable_break()
 
         # Configures the state tracker to reflect RUN state
-        self._change_vr_state(2)
+        self.change_vr_state(2)
 
     def idle(self) -> None:
         """Switches the Mesoscope-VR system to the idle state.
@@ -795,7 +773,7 @@ class _MesoscopeExperiment:
 
         # Sets the VR state to 0. This is used to indicate the start and end periods of the runtime and also to mark
         # user-requested runtime stage restarts (resets).
-        self._change_vr_state(0)
+        self.change_vr_state(0)
 
     def deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
@@ -804,6 +782,18 @@ class _MesoscopeExperiment:
         animal.
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
+
+    def toggle_valve(self, state: bool) -> None:
+        """Configures the valve to match the input state.
+
+        Args:
+            state: The state to set the valve to. Setting this to True opens the valve, setting this to False closes
+                the valve.
+        """
+        if state:
+            self._microcontrollers.open_valve()
+        else:
+            self._microcontrollers.close_valve()
 
     def _get_cue_sequence(self) -> NDArray[np.uint8]:
         """Requests Unity game engine to transmit the sequence of virtual reality track wall cues for the current task.
@@ -872,7 +862,7 @@ class _MesoscopeExperiment:
         console.error(message=message, error=RuntimeError)
         raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
-    def _start_mesoscope(self) -> None:
+    def start_mesoscope(self) -> None:
         """Sends the frame acquisition start TTL pulse to the mesoscope and waits for the frame acquisition to begin.
 
         This method is used internally to start the mesoscope frame acquisition as part of the experiment startup
@@ -938,7 +928,7 @@ class _MesoscopeExperiment:
         console.error(message=message, error=RuntimeError)
         raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
-    def _change_vr_state(self, new_state: int) -> None:
+    def change_vr_state(self, new_state: int) -> None:
         """Updates and logs the new Mesoscope-VR state.
 
         This method is used internally to timestamp and log VR state (stage) changes, such as transitioning between
@@ -1155,52 +1145,58 @@ class _BehaviorTraining:
                 move_zaber = False
                 break
 
-        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
-        # proceed with motor movements.
-        message = (
-            "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the VR "
-            "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-            "the mesoscope and / or HARM the animal."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        # If requested, adjusts the Zaber motor
+        if move_zaber:
+            # Since it is now possible to shut down Zaber motors without fixing HeadBarRoll position, requests the user
+            # to verify this manually
+            message = (
+                "Check that the HeadBarRoll motor has a positive angle. The motor will collide with the stopper during "
+                "homing, if it has a negative angle."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
-        # with each other, so it is safe to move both assemblies at the same time.
-        self._zaber_motors.prepare_motors()
+            # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is
+            # safe to proceed with motor movements.
+            message = (
+                "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the "
+                "VR screens, and make sure the animal is NOT mounted on the rig."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
-        # session's position or are set to the default mounting position stored in non-volatile memory. The LickPort is
-        # moved to a position optimized for putting the animal on the VR rig.
-        self._zaber_motors.mount_position()
+            # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not
+            # intersect with each other, so it is safe to move both assemblies at the same time.
+            self._zaber_motors.prepare_motors()
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
+            # session's position or are set to the default mounting position stored in non-volatile memory. The LickPort
+            # is moved to a position optimized for putting the animal on the VR rig.
+            self._zaber_motors.mount_position()
 
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
-            "Preparing to move the motors into the training position. Mount the animal onto the VR rig, but DO NOT "
-            "adjust any motors manually at this time, as all changes to all motors will be reset by moving them to the "
-            "training position."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Primarily, this restores the LickPort to the previous session's position or default parking position. The
-        # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
-        # manually, they too will be restored to default positions.
-        self._zaber_motors.restore_position()
+            # Gives user time to mount the animal and requires confirmation before proceeding further.
+            message = (
+                "Preparing to move the motors into the training position. Mount the animal onto the VR rig, but DO NOT "
+                "adjust any motors manually at this time."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            # Primarily, this restores the LickPort to the previous session's position or default parking position. The
+            # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
+            # manually, they too will be restored to default positions.
+            self._zaber_motors.restore_position()
 
-        # Instructs the user to adjust all motors and, when ready, starts the training process.
-        message = (
-            "If necessary, adjust all Zaber motor positions. This is the last manual checkpoint, after this message "
-            "the runtime control function will begin the training."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
+
+            # Instructs the user to adjust all motors and, when ready, starts the training process.
+            message = "If necessary, adjust all Zaber motor positions."
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            input("Enter anything to continue: ")
 
         # Generates a snapshot of all zaber motor positions. This serves as an early checkpoint in case the runtime has
         # to be aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart
@@ -1288,15 +1284,35 @@ class _BehaviorTraining:
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = f"Retracting the lick-port away from the animal..."
+        # Determines whether to carry out the Zaber motor shutdown sequence.
+        message = (
+            f"Do you want to carry out the Zaber motor shutdown sequence? This should be done for most runtimes. The "
+            f"only reason to skip the shutdown sequence is if you are shutting down the current runtime to immediately "
+            f"restart (rerun) it for the same animal. In this case, skipping the shutdown (and setup) of Zaber motors "
+            f"allows to keep the animal mounted in the VR rig."
+        )
         console.echo(message=message, level=LogLevel.INFO)
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
+
+            if answer.lower() == "yes":
+                move_zaber = True
+                break
+
+            elif answer.lower() == "no":
+                move_zaber = False
+                break
 
         # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
         # animal).
-        self._zaber_motors.unmount_position()
+        if move_zaber:
+            message = f"Retracting the lick-port away from the animal..."
+            console.echo(message=message, level=LogLevel.INFO)
 
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            self._zaber_motors.unmount_position()
+
+            message = "Motor Positioning: Complete."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user that the data acquisition is complete.
         console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -1338,17 +1354,20 @@ class _BehaviorTraining:
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
 
-        # Instructs the user to remove the animal from the VR rig.
-        message = (
-            "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal. "
-            "This is the last manual checkpoint, once you progress past this point, the Microscope-VR system will "
-            "reset Zaber motor positions and start data preprocessing."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        # Optionally moves the motors to their parking positions
+        if move_zaber:
+            # Instructs the user to remove the animal from the VR rig.
+            message = (
+                "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
 
-        # Parks and disconnects from all Zaber motors.
-        self._zaber_motors.park_position()
+            # Parks and disconnects from all Zaber motors.
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
+        # disconnecting.
         self._zaber_motors.disconnect()
 
         message = "Zaber motors: Reset."
@@ -1359,12 +1378,6 @@ class _BehaviorTraining:
 
         message = "Behavior training runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def mount_animal(self) -> None:
-        pass
-
-    def unmount_animal(self) -> None:
-        pass
 
     def lick_train_state(self) -> None:
         """Configures the Mesoscope-VR system for running the lick training.
@@ -1450,6 +1463,18 @@ class _BehaviorTraining:
         This method is used by the training runtimes to reward the animal with water as part of the training process.
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
+
+    def toggle_valve(self, state: bool) -> None:
+        """Configures the valve to match the input state.
+
+        Args:
+            state: The state to set the valve to. Setting this to True opens the valve, setting this to False closes
+                the valve.
+        """
+        if state:
+            self._microcontrollers.open_valve()
+        else:
+            self._microcontrollers.close_valve()
 
     def simulate_reward(self) -> None:
         """Uses the buzzer controlled by the valve module to deliver an audible tone without delivering any water.
@@ -1635,23 +1660,41 @@ def lick_training_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
-    # Initializes the runtime control UI
-    ui = RuntimeControlUI()
-
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
     visualizer = BehaviorVisualizer(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
     )
 
+    # Initializes the runtime control UI
+    ui = RuntimeControlUI()
+
+    # Final checkpoint
+    message = (
+        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
+        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
+    # manually reposition all Zaber motors.
+    while ui.pause_runtime:
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)
+
+        if ui.open_valve:
+            runtime.toggle_valve(True)
+
+        if ui.close_valve:
+            runtime.toggle_valve(False)
+
+    # Ensures the valve is closed before continuing
+    runtime.toggle_valve(False)
+
+    message = f"Initiating lick training procedure..."
+    console.echo(message=message, level=LogLevel.INFO)
+
     # Configures all system components to support lick training
     runtime.lick_train_state()
-
-    message = (
-        f"Initiating lick training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
-        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press 'ESC' + 'p' to pause or resume the "
-        f"paused runtime."
-    )
-    console.echo(message=message, level=LogLevel.INFO)
 
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
@@ -1661,105 +1704,114 @@ def lick_training_logic(
         # If the maximum unconsumed reward count is below 1, disables the feature by setting the number to match the
         # number of rewards to be delivered.
         maximum_unconsumed_rewards = len(reward_delays)
+
     unconsumed_count = 0
     previous_licks = 0
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
-    try:
-        delay_timer.reset()
-        for delay in tqdm(
-            reward_delays,
-            desc="Delivered water rewards",
-            unit="reward",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
-        ):
-            # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done
-            # during the delay has to go here
-            while delay_timer.elapsed < delay:
-                # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
-                # interest and appear visually smooth to human observers.
-                visualizer.update()
+    delay_timer.reset()
+    for delay in tqdm(
+        reward_delays,
+        desc="Delivered water rewards",
+        unit="reward",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
+    ):
+        # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done
+        # during the delay has to go here
+        while delay_timer.elapsed < delay:
+            # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
+            # interest and appear visually smooth to human observers.
+            visualizer.update()
 
-                # If the animal licks during the delay period, this is interpreted as the animal consuming the previous
-                # and any other leftover rewards.
-                if previous_licks < visualizer.lick_count:
-                    previous_licks = visualizer.lick_count
-                    unconsumed_count = 0
+            # If the animal licks during the delay period, this is interpreted as the animal consuming the previous
+            # and any other leftover rewards.
+            if previous_licks < visualizer.lick_count:
+                previous_licks = visualizer.lick_count
+                unconsumed_count = 0
 
-                # If the listener detects the default abort sequence, terminates the runtime.
-                if listener.exit_signal:
-                    terminate = True  # Sets the terminate flag
-                    break  # Breaks the while loop
+            # If the listener detects the default abort sequence, terminates the runtime.
+            if ui.exit_signal:
+                message = "Lick training runtime abort signal: received. Are you sure you want to abort the runtime?"
+                console.echo(message=message, level=LogLevel.WARNING)
+                while True:
+                    answer = input("Enter 'yes' or 'no': ")
 
-                # If the listener detects a reward delivery signal, delivers the reward to the animal
-                if listener.reward_signal:
-                    runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+                    if answer.lower() == "yes":
+                        terminate = True  # Sets the terminate flag
+                        break  # Breaks the while loop
 
-                # If the listener detects a pause command, enters a holding loop.
-                if listener.pause_runtime:
-                    message = (
-                        "Lick training runtime: paused due to user request. To resume the paused runtime, use the "
-                        "'ESC + p' combination again. To abort the training, use the 'ESC + q' combination."
-                    )
-                    console.echo(message=message, level=LogLevel.WARNING)
-
-                    # Blocks in-place until the user either unpauses or aborts the training.
-                    while listener.pause_runtime:
-                        visualizer.update()  # Continuously updates the visualizer
-
-                        # If the user requests for the paused runtime to be aborted, terminates the runtime.
-                        if listener.exit_signal:
-                            terminate = True  # Sets the terminate flag
-                            message = "Lick training runtime: aborted due to user request."
-                            console.echo(message=message, level=LogLevel.ERROR)
-                            break  # Escapes the pause 'while' loop
-
-                    # Escapes the outer (reward delay) 'while' loop
-                    if terminate:
+                    elif answer.lower() == "no":
+                        # Returns to running the runtime
                         break
 
-            # If the user sent the abort command, terminates the training early
-            if terminate:
-                message = (
-                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
-                    "procedure."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                break  # Breaks the for loop
+            # If the listener detects a reward delivery signal, delivers the reward to the animal
+            if ui.reward_signal:
+                runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
 
-            # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the
-            # next reward delay, unless unconsumed reward guard kicks in.
-            if unconsumed_count < maximum_unconsumed_rewards:
-                # If the animal did not accumulate the critical number of unconsumed rewards, delivers the reward.
-                runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+            # If the listener detects a pause command, enters a holding loop.
+            if ui.pause_runtime:
+                message = "Lick training runtime: paused due to user request."
+                console.echo(message=message, level=LogLevel.WARNING)
 
-                # Increments the unconsumed reward count each time a reward is delivered
-                unconsumed_count += 1
+                # Blocks in-place until the user either unpauses or aborts the training.
+                while ui.pause_runtime:
+                    visualizer.update()  # Continuously updates the visualizer
 
-            # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
-            # rewards.
-            else:
-                runtime.simulate_reward()
+                    # If the user requests for the paused runtime to be aborted, terminates the runtime.
+                    if ui.exit_signal:
+                        message = (
+                            "Lick training runtime abort signal: received. Are you sure you want to abort the runtime?"
+                        )
+                        console.echo(message=message, level=LogLevel.WARNING)
+                        while True:
+                            answer = input("Enter 'yes' or 'no': ")
 
-            delay_timer.reset()
+                            if answer.lower() == "yes":
+                                terminate = True  # Sets the terminate flag
+                                break  # Breaks the while loop
 
-        # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
-        delay_timer.delay_noblock(minimum_reward_delay * 1000000)  # Converts to microseconds before delaying
+                            elif answer.lower() == "no":
+                                # Returns to running the runtime
+                                break
+                        break  # Escapes the pause 'while' loop
 
-    except Exception as e:
-        message = (
-            f"Training runtime has encountered an error and had to be terminated early. Attempting to gracefully "
-            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
-            f"{str(e)}"
-        )
-        console.echo(message=message, level=LogLevel.ERROR)
+                # Escapes the outer (reward delay) 'while' loop
+                if terminate:
+                    break
+
+        # If the user sent the abort command, terminates the training early
+        if terminate:
+            message = (
+                "Lick training abort signal detected. Aborting the lick training with a graceful shutdown procedure."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            break  # Breaks the for loop
+
+        # Once the delay is up, triggers the solenoid valve to deliver water to the animal and starts timing the
+        # next reward delay, unless unconsumed reward guard kicks in.
+        if unconsumed_count < maximum_unconsumed_rewards:
+            # If the animal did not accumulate the critical number of unconsumed rewards, delivers the reward.
+            runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+
+            # Increments the unconsumed reward count each time a reward is delivered
+            unconsumed_count += 1
+
+        # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
+        # rewards.
+        else:
+            runtime.simulate_reward()
+
+        delay_timer.reset()
+
+    # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
+    delay_timer.delay_noblock(minimum_reward_delay * 1000000)  # Converts to microseconds before delaying
 
     # Shutdown sequence:
     message = f"Training runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Terminates the listener
-    listener.shutdown()
+    # Terminates the UI
+    ui.shutdown()
 
     # Closes the visualizer, as the runtime is now over
     visualizer.close()
@@ -1974,18 +2026,10 @@ def run_training_logic(
     # Updates the threshold lines to use the initial speed and duration values
     visualizer.update_speed_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
 
-    # Configures all system components to support run training
-    runtime.run_train_state()
+    # Initializes the runtime control UI
+    ui = RuntimeControlUI()
 
-    # Initializes the listener instance used to enable keyboard-driven training runtime control.
-    listener = KeyboardListener()
-
-    message = (
-        f"Initiating run training procedure. Press 'ESC' + 'q' to immediately abort the training at any "
-        f"time. Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Use 'ESC' + Up / Down arrows to modify the "
-        f"running speed threshold. Use 'ESC' + Left / Right arrows to modify the running duration threshold. Press "
-        f"'ESC' + 'p' to pause or resume the paused runtime."
-    )
+    message = f"Initiating run training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
 
     # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
@@ -2013,186 +2057,225 @@ def run_training_logic(
     # paused state.
     additional_time = 0
 
+    # Final checkpoint
+    message = (
+        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
+        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
+    # manually reposition all Zaber motors.
+    while ui.pause_runtime:
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)
+
+        if ui.open_valve:
+            runtime.toggle_valve(True)
+
+        if ui.close_valve:
+            runtime.toggle_valve(False)
+
+    # Ensures the valve is closed before continuing
+    runtime.toggle_valve(False)
+
+    message = f"Initiating lick training procedure..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Configures all system components to support run training
+    runtime.run_train_state()
+
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
-    try:
-        runtime_timer.reset()
-        speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
-        while runtime_timer.elapsed < (training_time + additional_time):
-            # Updates the total volume of water dispensed during runtime at each loop iteration.
-            dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
+    runtime_timer.reset()
+    speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
+    while runtime_timer.elapsed < (training_time + additional_time):
+        # Updates the total volume of water dispensed during runtime at each loop iteration.
+        dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
 
-            # Determines how many times the speed and duration thresholds have been increased based on the difference
-            # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
-            # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
-            # harder to keep receiving water.
-            increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
+        # Determines how many times the speed and duration thresholds have been increased based on the difference
+        # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
+        # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
+        # harder to keep receiving water.
+        increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
 
-            # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
-            # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
-            speed_threshold = np.clip(
-                a=initial_speed + (increase_steps * speed_step) + (listener.speed_modifier * 0.01),
-                a_min=0.1,  # Minimum value
-                a_max=maximum_speed,  # Maximum value
-            )
-            duration_threshold = np.clip(
-                a=initial_duration + (increase_steps * duration_step) + (listener.duration_modifier * 10),
-                a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
-                a_max=maximum_duration,  # Maximum value
-            )
+        # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
+        # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
+        speed_threshold = np.clip(
+            a=initial_speed + (increase_steps * speed_step) + (ui.speed_modifier * 0.01),
+            a_min=0.1,  # Minimum value
+            a_max=maximum_speed,  # Maximum value
+        )
+        duration_threshold = np.clip(
+            a=initial_duration + (increase_steps * duration_step) + (ui.duration_modifier * 10),
+            a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
+            a_max=maximum_duration,  # Maximum value
+        )
 
-            # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
-            # previous threshold trackers with new data.
-            if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-                visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
-                previous_speed_threshold = speed_threshold
-                previous_duration_threshold = duration_threshold
+        # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
+        # previous threshold trackers with new data.
+        if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
+            visualizer.update_speed_thresholds(speed_threshold, duration_threshold)
+            previous_speed_threshold = speed_threshold
+            previous_duration_threshold = duration_threshold
 
-            # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to
-            # calculate the running speed of the animal over 100 millisecond windows. This accesses the result of this
-            # computation and uses it to determine whether the animal is performing above the threshold.
-            current_speed = visualizer.running_speed
+        # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to
+        # calculate the running speed of the animal over 100 millisecond windows. This accesses the result of this
+        # computation and uses it to determine whether the animal is performing above the threshold.
+        current_speed = visualizer.running_speed
 
-            # If the animal licks during the period that separates two rewards, this is interpreted as the animal
-            # consuming the previous and any other leftover rewards.
-            if previous_licks < visualizer.lick_count:
-                previous_licks = visualizer.lick_count
-                unconsumed_count = 0
+        # If the animal licks during the period that separates two rewards, this is interpreted as the animal
+        # consuming the previous and any other leftover rewards.
+        if previous_licks < visualizer.lick_count:
+            previous_licks = visualizer.lick_count
+            unconsumed_count = 0
 
-            # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
-            # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
-            # not yet maintained the required duration, the loop will keep cycling and accumulating the timer count.
-            # This is done until the animal either reaches the required duration or drops below the speed threshold.
-            if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
-                # Only issues the rewards if the unconsumed reward counter is below the threshold.
-                if unconsumed_count < maximum_unconsumed_rewards:
-                    runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
-
-                    # 5 uL == 0.005 ml
-                    # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
-                    # purposefully does not track 'manual' water rewards.
-                    progress_bar.update(0.005)
-
-                    # Increments the unconsumed reward count each time a reward is delivered
-                    unconsumed_count += 1
-
-                # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
-                # rewards.
-                else:
-                    runtime.simulate_reward()
-
-                # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
-                # timer, this guards against animals that carry on running without consuming water rewards.
-                speed_timer.reset()
-
-                # If the epoch timer was active for the current epoch, resets the timer
-                epoch_timer_engaged = False
-
-            # If the current speed is below the speed threshold, acts depending on whether the runtime is configured to
-            # allow dipping below the threshold
-            elif current_speed < speed_threshold:
-                # If the user did not allow dipping below the speed threshold, resets the run duration timer.
-                if maximum_idle_time == 0:
-                    speed_timer.reset()
-
-                # If the user has enabled brief dips below the speed threshold, starts the epoch timer to ensure the
-                # animal recovers the speed in the allotted time.
-                elif not epoch_timer_engaged:
-                    epoch_timer.reset()
-                    epoch_timer_engaged = True
-
-                # If epoch timer is enabled, checks whether the animal has failed to recover its running speed in time.
-                # If so, resets the run duration timer.
-                elif epoch_timer.elapsed >= maximum_idle_time:
-                    speed_timer.reset()
-                    epoch_timer_engaged = False
-
-            # If the animal is maintaining the required speed and the epoch timer was activated by the animal dipping
-            # below the speed threshold, deactivates the timer. This is essential for ensuring the 'step discount'
-            # time is applied to each case of speed dipping below the speed threshold, rather than the entire run epoch.
-            elif epoch_timer_engaged and current_speed >= speed_threshold and speed_timer.elapsed < duration_threshold:
-                epoch_timer_engaged = False
-
-            # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
-            # track of elapsed training time. Accounts for any additional time spent in the 'paused' state.
-            elapsed_time = runtime_timer.elapsed - additional_time
-            if elapsed_time > previous_time:
-                previous_time = elapsed_time  # Updates previous time
-
-                # Updates the time display without advancing the progress bar
-                elapsed_minutes = int(elapsed_time // 60)
-                elapsed_seconds = int(elapsed_time % 60)
-                progress_bar.set_postfix_str(
-                    f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
-                )
-
-                # Refreshes the display to show updated time without changing progress
-                progress_bar.refresh()
-
-            # Updates the visualizer plot
-            visualizer.update()
-
-            # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
-            # training early with a success message.
-            if dispensed_water_volume >= maximum_volume:
-                message = (
-                    f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
-                    f"the training process."
-                )
-                console.echo(message=message, level=LogLevel.SUCCESS)
-                break
-
-            # If the listener detects a reward delivery signal, delivers the reward to the animal.
-            if listener.reward_signal:
+        # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
+        # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
+        # not yet maintained the required duration, the loop will keep cycling and accumulating the timer count.
+        # This is done until the animal either reaches the required duration or drops below the speed threshold.
+        if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
+            # Only issues the rewards if the unconsumed reward counter is below the threshold.
+            if unconsumed_count < maximum_unconsumed_rewards:
                 runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
 
-            # If the user sent the abort command, terminates the training early with an error message.
-            if listener.exit_signal:
-                message = (
-                    "Run training abort signal detected. Aborting the training with a graceful shutdown procedure."
-                )
+                # 5 uL == 0.005 ml
+                # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
+                # purposefully does not track 'manual' water rewards.
+                progress_bar.update(0.005)
+
+                # Increments the unconsumed reward count each time a reward is delivered
+                unconsumed_count += 1
+
+            # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
+            # rewards.
+            else:
+                runtime.simulate_reward()
+
+            # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
+            # timer, this guards against animals that carry on running without consuming water rewards.
+            speed_timer.reset()
+
+            # If the epoch timer was active for the current epoch, resets the timer
+            epoch_timer_engaged = False
+
+        # If the current speed is below the speed threshold, acts depending on whether the runtime is configured to
+        # allow dipping below the threshold
+        elif current_speed < speed_threshold:
+            # If the user did not allow dipping below the speed threshold, resets the run duration timer.
+            if maximum_idle_time == 0:
+                speed_timer.reset()
+
+            # If the user has enabled brief dips below the speed threshold, starts the epoch timer to ensure the
+            # animal recovers the speed in the allotted time.
+            elif not epoch_timer_engaged:
+                epoch_timer.reset()
+                epoch_timer_engaged = True
+
+            # If epoch timer is enabled, checks whether the animal has failed to recover its running speed in time.
+            # If so, resets the run duration timer.
+            elif epoch_timer.elapsed >= maximum_idle_time:
+                speed_timer.reset()
+                epoch_timer_engaged = False
+
+        # If the animal is maintaining the required speed and the epoch timer was activated by the animal dipping
+        # below the speed threshold, deactivates the timer. This is essential for ensuring the 'step discount'
+        # time is applied to each case of speed dipping below the speed threshold, rather than the entire run epoch.
+        elif epoch_timer_engaged and current_speed >= speed_threshold and speed_timer.elapsed < duration_threshold:
+            epoch_timer_engaged = False
+
+        # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
+        # track of elapsed training time. Accounts for any additional time spent in the 'paused' state.
+        elapsed_time = runtime_timer.elapsed - additional_time
+        if elapsed_time > previous_time:
+            previous_time = elapsed_time  # Updates previous time
+
+            # Updates the time display without advancing the progress bar
+            elapsed_minutes = int(elapsed_time // 60)
+            elapsed_seconds = int(elapsed_time % 60)
+            progress_bar.set_postfix_str(
+                f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
+            )
+
+            # Refreshes the display to show updated time without changing progress
+            progress_bar.refresh()
+
+        # Updates the visualizer plot
+        visualizer.update()
+
+        # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
+        # training early with a success message.
+        if dispensed_water_volume >= maximum_volume:
+            message = (
+                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
+                f"the training process."
+            )
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            break
+
+        # If the listener detects a reward delivery signal, delivers the reward to the animal.
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+
+        # If the user sent the abort command, terminates the training early with an error message.
+        if ui.exit_signal:
+            terminate = False
+            message = "Run training runtime abort signal: received. Are you sure you want to abort the runtime?"
+            console.echo(message=message, level=LogLevel.WARNING)
+            while True:
+                answer = input("Enter 'yes' or 'no': ")
+
+                if answer.lower() == "yes":
+                    terminate = True  # Sets the terminate flag
+                    break  # Breaks the while loop
+
+                elif answer.lower() == "no":
+                    # Returns to running the runtime
+                    break
+
+            if terminate:
+                message = "Aborting the training with a graceful shutdown procedure."
                 console.echo(message=message, level=LogLevel.ERROR)
                 break
 
-            # If the listener detects a pause command, enters a holding loop.
-            if listener.pause_runtime:
-                pause_start = runtime_timer.elapsed
-                message = (
-                    "Run training runtime: paused due to user request. To resume the paused runtime, use the "
-                    "'ESC + p' combination again. To abort the training, use the 'ESC + q' combination."
-                )
-                console.echo(message=message, level=LogLevel.WARNING)
+        # If the listener detects a pause command, enters a holding loop.
+        if ui.pause_runtime:
+            pause_start = runtime_timer.elapsed
+            message = "Run training runtime: paused due to user request."
+            console.echo(message=message, level=LogLevel.WARNING)
 
-                # Blocks in-place until the user either unpauses or aborts the training.
-                abort_stage: bool = False
-                while listener.pause_runtime:
-                    visualizer.update()  # Continuously updates the visualizer
+            # Blocks in-place until the user either unpauses or aborts the training.
+            abort_stage: bool = False
+            while ui.pause_runtime:
+                visualizer.update()  # Continuously updates the visualizer
 
-                    # If the user requests for the paused runtime to be aborted, terminates the runtime.
-                    if listener.exit_signal:
-                        abort_stage = True
-                        message = f"Run training runtime: aborted due to user request."
-                        console.echo(message=message, level=LogLevel.ERROR)
-                        break  # Escapes the pause 'while' loop
+                # If the user requests for the paused runtime to be aborted, terminates the runtime.
+                if ui.exit_signal:
+                    message = "Run training runtime abort signal: received. Are you sure you want to abort the runtime?"
+                    console.echo(message=message, level=LogLevel.WARNING)
+                    while True:
+                        answer = input("Enter 'yes' or 'no': ")
 
-                # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
-                # increases the training time to counteract the duration of the 'paused' state.
-                additional_time += runtime_timer.elapsed - pause_start
+                        if answer.lower() == "yes":
+                            abort_stage = True
+                            break  # Breaks the while loop
 
-                # Escapes the outer (experiment state) 'while loop'
-                if abort_stage:
-                    break
+                        elif answer.lower() == "no":
+                            # Returns to running the runtime
+                            break
 
-        # Close the progress bar
-        progress_bar.close()
+            # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
+            # increases the training time to counteract the duration of the 'paused' state.
+            additional_time += runtime_timer.elapsed - pause_start
 
-    except Exception as e:
-        message = (
-            f"Training runtime has encountered an error and had to be terminated early. Attempting to gracefully "
-            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
-            f"{str(e)}"
-        )
-        console.echo(message=message, level=LogLevel.ERROR)
+            # Escapes the outer (experiment state) 'while loop'
+            if abort_stage:
+                message = f"Run training runtime: aborted due to user request."
+                console.echo(message=message, level=LogLevel.ERROR)
+                break
+
+    # Close the progress bar
+    progress_bar.close()
 
     # Shutdown sequence:
     message = f"Training runtime: Complete."
@@ -2205,8 +2288,8 @@ def run_training_logic(
         runtime.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
         runtime.descriptor.final_run_duration_threshold_s = float(duration_threshold / 1000)  # Converts from s to ms
 
-    # Terminates the listener
-    listener.shutdown()
+    # Terminates the ui
+    ui.shutdown()
 
     # Closes the visualizer, as the runtime is now over
     visualizer.close()
@@ -2341,114 +2424,159 @@ def experiment_logic(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
     )
 
-    # Initializes the keyboard listener to support aborting test runtimes.
-    listener = KeyboardListener()
+    # Initializes the runtime control UI
+    ui = RuntimeControlUI()
 
+    # Final checkpoint
     message = (
-        f"Initiating Mesoscope experiment. Press 'ESC' + 'q' to immediately abort the experiment runtime at any time. "
-        f"Press 'ESC' + 'r' to deliver 5 uL of water to the animal. Press 'ESC' + 'p' to pause or resume the paused "
-        f"runtime."
+        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
+        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
     )
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
+    # manually reposition all Zaber motors.
+    while ui.pause_runtime:
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)
+
+        if ui.open_valve:
+            runtime.toggle_valve(True)
+
+        if ui.close_valve:
+            runtime.toggle_valve(False)
+
+    # Ensures the valve is closed before continuing
+    runtime.toggle_valve(False)
+
+    message = f"Initiating Mesoscope experiment..."
     console.echo(message=message, level=LogLevel.INFO)
+
+    # To avoid photobleaching during potentially lengthy preparation stage, only start the Mesoscope once the
+    # experimenter unpauses the runtime.
+    runtime.start_mesoscope()
+    runtime.change_vr_state(new_state=0)
+    runtime.change_experiment_state(new_state=0)
 
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
-    try:
-        for state in experiment_config.experiment_states.values():
-            runtime_timer.reset()  # Resets the timer
+    for state in experiment_config.experiment_states.values():
+        runtime_timer.reset()  # Resets the timer
 
-            # Sets the Experiment state
-            runtime.change_experiment_state(state.experiment_state_code)
+        # Sets the Experiment state
+        runtime.change_experiment_state(state.experiment_state_code)
 
-            # Resolves and sets the Mesoscope-VR system state
-            if state.system_state_code == 1:
-                runtime.rest()
-            elif state.system_state_code == 2:
-                runtime.run()
+        # Resolves and sets the Mesoscope-VR system state
+        if state.system_state_code == 1:
+            runtime.rest()
+        elif state.system_state_code == 2:
+            runtime.run()
 
-            # Creates a tqdm progress bar for the current experiment state
-            with tqdm(
-                total=state.state_duration_s,
-                desc=f"Executing experiment state {state.experiment_state_code}",
-                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
-            ) as pbar:
-                previous_seconds = 0
+        # Creates a tqdm progress bar for the current experiment state
+        with tqdm(
+            total=state.state_duration_s,
+            desc=f"Executing experiment state {state.experiment_state_code}",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
+        ) as pbar:
+            previous_seconds = 0
 
-                # If the runtime is paused, this is used to extend the experiment state duration to account for the time
-                # spent in the paused state.
-                additional_time = 0
+            # If the runtime is paused, this is used to extend the experiment state duration to account for the time
+            # spent in the paused state.
+            additional_time = 0
 
-                while runtime_timer.elapsed < (state.state_duration_s + additional_time):
-                    visualizer.update()  # Continuously updates the visualizer
+            while runtime_timer.elapsed < (state.state_duration_s + additional_time):
+                visualizer.update()  # Continuously updates the visualizer
 
-                    # Updates the progress bar every second. While the current implementation is technically not safe,
-                    # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
-                    # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
-                    if (runtime_timer.elapsed - additional_time) > previous_seconds:
-                        pbar.update(1)
-                        previous_seconds = runtime_timer.elapsed - additional_time
+                # Updates the progress bar every second. While the current implementation is technically not safe,
+                # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
+                # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
+                if (runtime_timer.elapsed - additional_time) > previous_seconds:
+                    pbar.update(1)
+                    previous_seconds = runtime_timer.elapsed - additional_time
 
-                    # If the user sent the abort command, terminates the runtime early with an error message.
-                    if listener.exit_signal:
+                # If the user sent the abort command, terminates the runtime early with an error message.
+                if ui.exit_signal:
+                    terminate = False
+                    message = "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
+                    console.echo(message=message, level=LogLevel.WARNING)
+                    while True:
+                        answer = input("Enter 'yes' or 'no': ")
+
+                        if answer.lower() == "yes":
+                            terminate = True  # Sets the terminate flag
+                            break  # Breaks the while loop
+
+                        elif answer.lower() == "no":
+                            # Returns to running the runtime
+                            break
+
+                    if terminate:
                         message = f"Experiment runtime: aborted due to user request."
                         console.echo(message=message, level=LogLevel.ERROR)
                         break
 
-                    # If the listener detects a reward delivery signal, delivers the reward to the animal
-                    if listener.reward_signal:
-                        runtime.deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+                # If the listener detects a reward delivery signal, delivers the reward to the animal
+                if ui.reward_signal:
+                    runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
 
-                    # If the listener detects a pause command, enters a holding loop.
-                    if listener.pause_runtime:
-                        pause_start = runtime_timer.elapsed
-                        message = (
-                            "Experiment runtime: paused due to user request. To resume the paused runtime, use the "
-                            "'ESC + p' combination again. To abort the paused experiment runtime, use the 'ESC + q' "
-                            "combination."
-                        )
-                        console.echo(message=message, level=LogLevel.WARNING)
+                # If the listener detects a pause command, enters a holding loop.
+                if ui.pause_runtime:
+                    pause_start = runtime_timer.elapsed
+                    message = "Experiment runtime: paused due to user request."
+                    console.echo(message=message, level=LogLevel.WARNING)
 
-                        # Switches the runtime control system to the 'idle' state.
-                        runtime.idle()
+                    # Switches the runtime control system to the 'idle' state.
+                    runtime.idle()
 
-                        # Blocks in-place until the user either unpauses or aborts the current experiment stage.
-                        abort_stage: bool = False
-                        while listener.pause_runtime:
-                            visualizer.update()  # Continuously updates the visualizer
+                    # Blocks in-place until the user either unpauses or aborts the current experiment stage.
+                    abort_stage: bool = False
+                    while ui.pause_runtime:
+                        visualizer.update()  # Continuously updates the visualizer
 
-                            # If the user requests for the paused stage to be aborted, terminates the runtime.
-                            if listener.exit_signal:
-                                abort_stage = True
+                        # If the user requests for the paused stage to be aborted, terminates the runtime.
+                        if ui.exit_signal:
+                            abort_stage = False
+                            message = (
+                                "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
+                            )
+                            console.echo(message=message, level=LogLevel.WARNING)
+                            while True:
+                                answer = input("Enter 'yes' or 'no': ")
+
+                                if answer.lower() == "yes":
+                                    abort_stage = True  # Sets the terminate flag
+                                    break  # Breaks the while loop
+
+                                elif answer.lower() == "no":
+                                    # Returns to running the runtime
+                                    break
+
+                            if abort_stage:
                                 message = f"Experiment runtime: aborted due to user request."
                                 console.echo(message=message, level=LogLevel.ERROR)
                                 break  # Escapes the pause 'while' loop
 
-                        # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
-                        # increases the experiment stage duration to counteract the duration of the 'paused' state.
-                        additional_time += runtime_timer.elapsed - pause_start
+                    # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
+                    # increases the experiment stage duration to counteract the duration of the 'paused' state.
+                    additional_time += runtime_timer.elapsed - pause_start
 
-                        # Escapes the outer (experiment state) 'while loop
-                        if abort_stage:
-                            break
-                        else:
-                            # Otherwise, if the user has unpaused the runtime, restores the system to the appropriate
-                            # state.
-                            if state.system_state_code == 1:
-                                runtime.rest()
-                            elif state.system_state_code == 2:
-                                runtime.run()
-
-    except Exception as e:
-        message = (
-            f"Experiment runtime has encountered an error and had to be terminated early. Attempting to gracefully "
-            f"shutdown all assets and preserve as much of the data as possible. The encountered error message: "
-            f"{str(e)}"
-        )
-        console.echo(message=message, level=LogLevel.ERROR)
+                    # Escapes the outer (experiment state) 'while loop
+                    if abort_stage:
+                        break
+                    else:
+                        # Otherwise, if the user has unpaused the runtime, restores the system to the appropriate
+                        # state.
+                        if state.system_state_code == 1:
+                            runtime.rest()
+                        elif state.system_state_code == 2:
+                            runtime.run()
 
     # Shutdown sequence:
     message = f"Experiment runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Shuts down the UI
+    ui.shutdown()
 
     # Closes the visualizer, as the runtime is now over
     visualizer.close()

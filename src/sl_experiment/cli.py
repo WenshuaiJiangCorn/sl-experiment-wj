@@ -270,7 +270,7 @@ def lick_training(
     "--maximum_time",
     type=int,
     show_default=True,
-    default=20,
+    default=40,
     help="The maximum time to run the training, in minutes.",
 )
 @click.option(
