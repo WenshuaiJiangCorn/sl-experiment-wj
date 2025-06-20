@@ -30,7 +30,7 @@ from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 from ataraxis_time.time_helpers import convert_time, get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from .tools import MesoscopeData, KeyboardListener, get_system_configuration
+from .tools import MesoscopeData, RuntimeControlUI, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
 from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, write_version_data
@@ -1137,7 +1137,6 @@ class _BehaviorTraining:
         # previous session is still running its data preprocessing pipeline and needs as many free cores as possible.
         self._cameras.start_face_camera()
 
-        # TODO Implement this here
         # Determines whether to carry out the Zaber motor positioning sequence.
         message = (
             f"Do you want to carry out the Zaber motor preparation sequence for this animal? Most runtimes require "
@@ -1360,6 +1359,12 @@ class _BehaviorTraining:
 
         message = "Behavior training runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+    def mount_animal(self) -> None:
+        pass
+
+    def unmount_animal(self) -> None:
+        pass
 
     def lick_train_state(self) -> None:
         """Configures the Mesoscope-VR system for running the lick training.
@@ -1630,6 +1635,9 @@ def lick_training_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
+    # Initializes the runtime control UI
+    ui = RuntimeControlUI()
+
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
     visualizer = BehaviorVisualizer(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
@@ -1637,10 +1645,6 @@ def lick_training_logic(
 
     # Configures all system components to support lick training
     runtime.lick_train_state()
-
-    # Initializes the listener instance used to detect training abort signals and manual reward trigger signals sent
-    # via the keyboard.
-    listener = KeyboardListener()
 
     message = (
         f"Initiating lick training procedure. Press 'ESC' + 'q' to immediately abort the training at any "

@@ -3,23 +3,17 @@ includes various dataclasses specific to the Mesoscope-VR systems and utility fu
 The contents of this module are not intended to be used outside the mesoscope_vr package."""
 
 import sys
-import time
-from typing import Any
 from pathlib import Path
 from dataclasses import field, dataclass
 from multiprocessing import Process
 
 import numpy as np
-from pynput import keyboard
-from PyQt5.QtGui import QFont, QIcon, QPalette, QCloseEvent
-from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal
-from ataraxis_time import PrecisionTimer
+from PyQt5.QtGui import QFont, QCloseEvent
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QFrame,
     QLabel,
     QWidget,
     QGroupBox,
-    QGridLayout,
     QHBoxLayout,
     QMainWindow,
     QPushButton,
@@ -245,204 +239,17 @@ class MesoscopeData:
         )
 
 
-class KeyboardListener:
-    """Monitors the keyboard input for various runtime control signals and changes internal attributes to communicate
-    detected signals to outside callers.
+class RuntimeControlUI:
+    """Provides a real-time Graphical User Interface (GUI) that allows interactively controlling certain Mesoscope-VR
+    runtime parameters.
 
-    This class is used during most Mesoscope-VR runtimes to allow the user to manually control various aspects of the
-    Mesoscope-VR system and data acquisition runtime. For example, it is used to abort a data acquisition session early
-    by gracefully stopping all Mesoscope-VR assets and running data preprocessing on the collected data.
+    The UI itself runs in a parallel process and communicates with an instance of this class via the SharedMemoryArray
+    instance. This optimizes the UI's responsiveness without overburdening the main thread that runs the task logic and
+    the animal performance visualization.
 
     Notes:
-        This keyboard monitor will pick up keyboard strokes directed at other applications during runtime. While our
-        unique key combinations are likely not used elsewhere, exercise caution when using other applications while this
-        monitor class is active.
-
-        The monitor runs in a separate process (on a separate core) and sends the data to the main process via
-        shared memory arrays. This prevents the listener from competing for resources with the runtime logic and the
-        visualizer class.
-
-    Attributes:
-        _data_array: A SharedMemoryArray used to store the data recorded by the remote listener process.
-        _currently_pressed: Stores the keys that are currently being pressed.
-        _keyboard_process: The Listener instance used to monitor keyboard strokes. The listener runs in a remote
-            process.
-        _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
-        _previous_pause_flag: Keeps track of the 'pause runtime' flag value between key listening cycles. This is used
-            to make repeated 'ESC + p' (pause combination) presses to flip the pause flag between 0 and 1.
-    """
-
-    def __init__(self) -> None:
-        self._data_array = SharedMemoryArray.create_array(
-            name="keyboard_listener", prototype=np.zeros(shape=6, dtype=np.int32), exist_ok=True
-        )
-        self._currently_pressed: set[str] = set()
-
-        # Starts the listener process
-        self._keyboard_process = Process(target=self._run_keyboard_listener, daemon=True)
-        self._keyboard_process.start()
-        self._started = True
-
-    def __del__(self) -> None:
-        """Ensures all class resources are released before the instance is destroyed.
-
-        This is a fallback method, using shutdown() should be standard.
-        """
-        if self._started:
-            self.shutdown()
-
-    def shutdown(self) -> None:
-        """This method should be called at the end of runtime to properly release all resources and terminate the
-        remote process."""
-        if self._keyboard_process.is_alive():
-            self._data_array.write_data(index=0, data=np.int32(1))  # Termination signal
-            self._keyboard_process.terminate()
-            self._keyboard_process.join(timeout=1.0)
-        self._data_array.disconnect()
-        self._data_array.destroy()
-        self._started = False
-
-    def _run_keyboard_listener(self) -> None:
-        """The main function that runs in the parallel process to monitor keyboard inputs."""
-
-        # Sets up listeners for both press and release
-        self._listener: keyboard.Listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
-        self._listener.daemon = True
-        self._listener.start()
-
-        # Connects to the shared memory array from the remote process
-        self._data_array.connect()
-
-        # Initializes the timer used to delay the process. This reduces the CPU load
-        delay_timer = PrecisionTimer("ms")
-
-        # Keeps the process alive until it receives the shutdown command via the SharedMemoryArray instance
-        while self._data_array.read_data(index=0, convert_output=True) == 0:
-            delay_timer.delay_noblock(delay=10, allow_sleep=True)  # 10 ms delay
-
-        # If the loop above is escaped, this indicates that the listener process has been terminated. Disconnects from
-        # the shared memory array and exits
-        self._data_array.disconnect()
-
-    def _on_press(self, key: Any) -> None:
-        """Adds newly pressed keys to the storage set and determines whether the pressed key combination matches one of
-        the expected combinations.
-
-        This method is used as the 'on_press' callback for the Listener instance.
-        """
-        # Updates the set with current data
-        self._currently_pressed.add(str(key))
-
-        # Checks if ESC is pressed (required for all combinations)
-        if "Key.esc" in self._currently_pressed:
-            # Exit combination: ESC + q
-            if "'q'" in self._currently_pressed:
-                self._data_array.write_data(index=1, data=np.int32(1))
-
-            # Reward combination: ESC + r
-            if "'r'" in self._currently_pressed:
-                self._data_array.write_data(index=2, data=np.int32(1))
-
-            # Running speed threshold control: ESC + Up/Down arrows
-            if "Key.up" in self._currently_pressed:
-                previous_value = self._data_array.read_data(index=3, convert_output=False)
-                previous_value += 1
-                self._data_array.write_data(index=3, data=previous_value)
-
-            if "Key.down" in self._currently_pressed:
-                previous_value = self._data_array.read_data(index=3, convert_output=False)
-                previous_value -= 1
-                self._data_array.write_data(index=3, data=previous_value)
-
-            # Running duration threshold control: ESC + Left/Right arrows
-            if "Key.right" in self._currently_pressed:
-                previous_value = self._data_array.read_data(index=4, convert_output=False)
-                previous_value -= 1
-                self._data_array.write_data(index=4, data=previous_value)
-
-            if "Key.left" in self._currently_pressed:
-                previous_value = self._data_array.read_data(index=4, convert_output=False)
-                previous_value += 1
-                self._data_array.write_data(index=4, data=previous_value)
-
-            # Runtime pause command: ESC + p
-            # Note, repeated uses of this command toggle the system between paused and unpaused states.
-            if "'p'" in self._currently_pressed:
-                pause_flag = bool(self._data_array.read_data(index=5, convert_output=True))
-                if pause_flag:
-                    self._data_array.write_data(index=5, data=np.int32(0))
-                else:
-                    self._data_array.write_data(index=5, data=np.int32(1))
-
-    def _on_release(self, key: Any) -> None:
-        """Removes no longer pressed keys from the storage set.
-
-        This method is used as the 'on_release' callback for the Listener instance.
-        """
-        # Removes no longer pressed keys from the set
-        key_str = str(key)
-        if key_str in self._currently_pressed:
-            self._currently_pressed.remove(key_str)
-
-    @property
-    def exit_signal(self) -> bool:
-        """Returns True if the listener has detected the runtime abort keys combination (ESC + q) being pressed.
-
-        This indicates that the user has requested the runtime to gracefully abort.
-        """
-        return bool(self._data_array.read_data(index=1, convert_output=True))
-
-    @property
-    def reward_signal(self) -> bool:
-        """Returns True if the listener has detected the water reward delivery keys combination (ESC + r) being
-        pressed.
-
-        This indicates that the user has requested the system to deliver a water reward to the animal.
-
-        Notes:
-            Each time this property is accessed, the flag is reset to 0.
-        """
-        reward_flag = bool(self._data_array.read_data(index=2, convert_output=True))
-        self._data_array.write_data(index=2, data=np.int32(0))
-        return reward_flag
-
-    @property
-    def speed_modifier(self) -> int:
-        """Returns the current user-defined modifier to apply to the running speed threshold.
-
-        This is used during run training to manually update the running speed threshold.
-        """
-        return int(self._data_array.read_data(index=3, convert_output=True))
-
-    @property
-    def duration_modifier(self) -> int:
-        """Returns the current user-defined modifier to apply to the running epoch duration threshold.
-
-        This is used during run training to manually update the running epoch duration threshold.
-        """
-        return int(self._data_array.read_data(index=4, convert_output=True))
-
-    @property
-    def pause_runtime(self) -> bool:
-        """Returns True if the listener has detected the runtime pause keys combination (ESC + p) being pressed.
-
-        This indicates that the user has requested the acquisition system to pause the current runtime. When the system
-        receives this signal, it suspends the ongoing runtime and switches to the 'idle' state until the user unpauses
-        the system by using the "Esc + p' combination again
-        """
-        return bool(self._data_array.read_data(index=5, convert_output=True))
-
-
-class QtControlUI:
-    """A Qt5-based UI that replaces KeyboardListener with the same API.
-
-    Provides a modern, responsive graphical interface for runtime control signals
-    and changes internal attributes to communicate detected signals to outside callers,
-    maintaining the same interface as KeyboardListener.
-
-    The UI runs in a separate process and communicates via shared memory arrays,
-    just like the original KeyboardListener. Qt5 runs in the main thread of the
-    separate process, avoiding threading restrictions.
+        This class is specialized to work with the Qt5 framework. In the future, it may be refactored to support the Qt6
+        framework.
 
     Attributes:
         _data_array: A SharedMemoryArray used to store the data recorded by the remote UI process.
@@ -452,7 +259,7 @@ class QtControlUI:
 
     def __init__(self) -> None:
         self._data_array = SharedMemoryArray.create_array(
-            name="qt5_control_ui", prototype=np.zeros(shape=10, dtype=np.int32), exist_ok=True
+            name="qt5_control_ui", prototype=np.zeros(shape=12, dtype=np.int32), exist_ok=True
         )
 
         # Starts the UI process
@@ -602,6 +409,40 @@ class QtControlUI:
         """
         return int(self._data_array.read_data(index=8, convert_output=True))
 
+    @property
+    def dialog_option(self) -> int:
+        """Checks whether the user has updated any of the terminal dialog option trackers and, if so, fetches and
+        returns the chosen option.
+
+        This property is used to query the user's response to the messages and propositions shown in the terminal during
+        runtime. Like other flag accessors, it sets the value(s) of all accessed flags to 0 after they are read.
+
+        Returns:
+            An integer representing the option chosen by the user: 0 (no decision made), 1 (deny), 2 (continue),
+            or 3 (abort).
+        """
+
+        # Queries all flag values
+        continue_flag = bool(self._data_array.read_data(index=9, convert_output=True))
+        deny_flag = bool(self._data_array.read_data(index=10, convert_output=True))
+        abort_flag = bool(self._data_array.read_data(index=11, convert_output=True))
+
+        # Resets the flag values for next query
+        self._data_array.write_data(index=9, data=np.int32(0))
+        self._data_array.write_data(index=10, data=np.int32(0))
+        self._data_array.write_data(index=11, data=np.int32(0))
+
+        # Hierarchically determines what to return
+        if abort_flag:
+            return 3  # Abort is the priority (value 2)
+        elif deny_flag:
+            return 1  # Deny is the second priority (value 0)
+        elif continue_flag:
+            return 2  # Continue is the third priority (value 1)
+        else:
+            # Otherwise, returns 0 to indicate that tbe user has not yet made a decision
+            return 0
+
 
 class _ControlUIWindow(QMainWindow):
     """Generates, renders, and maintains the main Mesoscope-VR acquisition system Graphical User Interface Qt5
@@ -624,9 +465,8 @@ class _ControlUIWindow(QMainWindow):
         # Configures the window title
         self.setWindowTitle("Mesoscope-VR Control Panel")
 
-        # Uses scalable sizing instead of fixed size
-        self.setMinimumSize(400, 600)
-        self.resize(500, 700)  # Initial size, but resizable
+        # Uses fixed size
+        self.setFixedSize(450, 600)
 
         # Sets up the interactive UI
         self._setup_ui()
@@ -696,18 +536,21 @@ class _ControlUIWindow(QMainWindow):
         # Valve open
         self.valve_open_btn = QPushButton("🔓 Open")
         self.valve_open_btn.setToolTip("Opens the solenoid valve.")
+        # noinspection PyUnresolvedReferences
         self.valve_open_btn.clicked.connect(self._open_valve)
         self.valve_open_btn.setObjectName("valveOpenButton")
 
         # Valve close
         self.valve_close_btn = QPushButton("🔒 Close")
         self.valve_close_btn.setToolTip("Closes the solenoid valve.")
+        # noinspection PyUnresolvedReferences
         self.valve_close_btn.clicked.connect(self._close_valve)
         self.valve_close_btn.setObjectName("valveCloseButton")
 
         # Reward button
         self.reward_btn = QPushButton("● Reward")
         self.reward_btn.setToolTip("Delivers 5 uL of water through the solenoid valve.")
+        # noinspection PyUnresolvedReferences
         self.reward_btn.clicked.connect(self._deliver_reward)
         self.reward_btn.setObjectName("rewardButton")
 
@@ -734,6 +577,8 @@ class _ControlUIWindow(QMainWindow):
         self.volume_spinbox.setSuffix(" μL")  # Adds units suffix
         self.volume_spinbox.setToolTip("Sets water reward volume. Accepts values between 1 and 2 μL.")
         self.volume_spinbox.setMinimumHeight(30)
+        # noinspection PyUnresolvedReferences
+        self.volume_spinbox.valueChanged.connect(self._update_reward_volume)
 
         # Adds volume controls to left side
         valve_status_layout.addWidget(volume_label)
@@ -763,63 +608,78 @@ class _ControlUIWindow(QMainWindow):
         speed_group = QGroupBox("Speed Threshold")
         speed_layout = QVBoxLayout(speed_group)
 
-        speed_buttons_layout = QHBoxLayout()
-        self.speed_up_btn = QPushButton("⬆️ Inc")
-        self.speed_up_btn.setToolTip("Increases the minimum running speed threshold.")
+        # Speed Modifier
+        speed_status_label = QLabel("Current Modifier:")
+        speed_status_label.setAlignment(Qt.AlignCenter)
+        speed_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
+        speed_layout.addWidget(speed_status_label)
+        self.speed_spinbox = QDoubleSpinBox()
+        self.speed_spinbox.setRange(-200, 200)  # Factoring in the step of 0.05, this allows -20 to +20 cm/s
+        self.speed_spinbox.setValue(self._speed_modifier)  # Default value
+        self.speed_spinbox.setDecimals(0)  # Integer precision
+        self.speed_spinbox.setToolTip("Sets the running speed threshold modifier value.")
+        self.speed_spinbox.setMinimumHeight(30)
         # noinspection PyUnresolvedReferences
-        self.speed_up_btn.clicked.connect(self._increase_speed)
-
-        self.speed_down_btn = QPushButton("⬇️ Dec")
-        self.speed_down_btn.setToolTip("Decreases the minimum running speed threshold.")
-        # noinspection PyUnresolvedReferences
-        self.speed_down_btn.clicked.connect(self._decrease_speed)
-
-        # Applies button formatting
-        for btn in [self.speed_up_btn, self.speed_down_btn]:
-            btn.setMinimumHeight(30)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        speed_buttons_layout.addWidget(self.speed_up_btn)
-        speed_buttons_layout.addWidget(self.speed_down_btn)
-        speed_layout.addLayout(speed_buttons_layout)
-
-        # Adds the running speed modifier visualization
-        self.speed_label = QLabel(f"Modifier: {self._speed_modifier}")
-        self.speed_label.setAlignment(Qt.AlignCenter)
-        self.speed_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
-        speed_layout.addWidget(self.speed_label)
+        self.speed_spinbox.valueChanged.connect(self._update_speed_modifier)
+        speed_layout.addWidget(self.speed_spinbox)
 
         # Running Duration Threshold Control Group
         duration_group = QGroupBox("Duration Threshold")
         duration_layout = QVBoxLayout(duration_group)
 
-        duration_buttons_layout = QHBoxLayout()
-        self.duration_up_btn = QPushButton("⬅️ Inc")
-        self.duration_up_btn.setToolTip("Increases the running duration threshold.")
-        self.duration_up_btn.clicked.connect(self._increase_duration)
+        # Duration modifier
+        duration_status_label = QLabel("Current Modifier:")
+        duration_status_label.setAlignment(Qt.AlignCenter)
+        duration_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
+        duration_layout.addWidget(duration_status_label)
+        self.duration_spinbox = QDoubleSpinBox()
+        self.duration_spinbox.setRange(-200, 200)  # Factoring in the step of 0.05, this allows -20 to +20 s
+        self.duration_spinbox.setValue(self._duration_modifier)  # Default value
+        self.duration_spinbox.setDecimals(0)  # Integer precision
+        self.duration_spinbox.setToolTip("Sets the running duration threshold modifier value.")
+        # noinspection PyUnresolvedReferences
+        self.duration_spinbox.valueChanged.connect(self._update_duration_modifier)
+        duration_layout.addWidget(self.duration_spinbox)
 
-        self.duration_down_btn = QPushButton("➡️ Dec")
-        self.duration_down_btn.setToolTip("Decreases the running duration threshold.")
-        self.duration_down_btn.clicked.connect(self._decrease_duration)
-
-        # Applies button scaling
-        for btn in [self.duration_up_btn, self.duration_down_btn]:
-            btn.setMinimumHeight(30)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        duration_buttons_layout.addWidget(self.duration_up_btn)
-        duration_buttons_layout.addWidget(self.duration_down_btn)
-        duration_layout.addLayout(duration_buttons_layout)
-
-        # Adds the running duration modifier visualization
-        self.duration_label = QLabel(f"Modifier: {self._duration_modifier}")
-        self.duration_label.setAlignment(Qt.AlignCenter)
-        self.duration_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
-        duration_layout.addWidget(self.duration_label)
-
+        # Adds speed and duration threshold modifiers to the main UI widget
         controls_layout.addWidget(speed_group)
         controls_layout.addWidget(duration_group)
         main_layout.addLayout(controls_layout)
+
+        # Terminal Dialog Control Group
+        terminal_dialog_group = QGroupBox("Terminal Dialog Control")
+        terminal_dialog_layout = QHBoxLayout(terminal_dialog_group)
+        terminal_dialog_layout.setSpacing(6)
+
+        # Continue button
+        self.continue_btn = QPushButton("Continue")
+        self.continue_btn.setToolTip("Accepts the proposition displayed in the terminal.")
+        # noinspection PyUnresolvedReferences
+        self.continue_btn.clicked.connect(self._terminal_continue)
+        self.continue_btn.setObjectName("continueButton")
+
+        # Deny button
+        self.deny_btn = QPushButton("Deny")
+        self.deny_btn.setToolTip("Denies the proposition displayed in the terminal.")
+        # noinspection PyUnresolvedReferences
+        self.deny_btn.clicked.connect(self._terminal_deny)
+        self.deny_btn.setObjectName("denyButton")
+
+        # Abort button
+        self.abort_btn = QPushButton("Abort")
+        self.abort_btn.setToolTip("Denies the proposition displayed in the terminal and aborts the runtime.")
+        # noinspection PyUnresolvedReferences
+        self.abort_btn.clicked.connect(self._terminal_abort)
+        self.abort_btn.setObjectName("abortButton")
+
+        # Configure buttons
+        for btn in [self.continue_btn, self.deny_btn, self.abort_btn]:
+            btn.setMinimumHeight(35)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            terminal_dialog_layout.addWidget(btn)
+
+        # Add the terminal dialog control box to the UI widget
+        main_layout.addWidget(terminal_dialog_group)
 
     def _apply_qt5_styles(self) -> None:
         """Applies optimized styling to all UI elements managed by this class.
@@ -1106,6 +966,57 @@ class _ControlUIWindow(QMainWindow):
                         width: 8px;
                         border-radius: 4px;
                     }}
+                    QPushButton#continueButton {{
+                        background-color: #27ae60;
+                        color: white;
+                        border-color: #229954;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#continueButton:hover {{
+                        background-color: #229954;
+                        border-color: #1e8449;
+                    }}
+                    
+                    QPushButton#denyButton {{
+                        background-color: #f39c12;
+                        color: white;
+                        border-color: #e67e22;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#denyButton:hover {{
+                        background-color: #e67e22;
+                        border-color: #d35400;
+                    }}
+                    
+                    QPushButton#abortButton {{
+                        background-color: #e74c3c;
+                        color: white;
+                        border-color: #c0392b;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#abortButton:hover {{
+                        background-color: #c0392b;
+                        border-color: #a93226;
+                    }}
+                    
+                    QSpinBox {{
+                        border: 2px solid #bdc3c7;
+                        border-radius: 4px;
+                        padding: 4px 8px;
+                        font-weight: bold;
+                        font-size: 12pt;
+                        background-color: white;
+                        color: #2c3e50;
+                        min-height: 20px;
+                    }}
+                    
+                    QSpinBox:focus {{
+                        border-color: #3498db;
+                    }}
+                    
                 """)
 
     def _setup_monitoring(self) -> None:
@@ -1205,56 +1116,44 @@ class _ControlUIWindow(QMainWindow):
         self.pause_btn.style().polish(self.pause_btn)
         self.pause_btn.update()  # Force update to apply new styles
 
-    def _increase_speed(self) -> None:
-        """Increase speed threshold (equivalent to ESC+↑)."""
-        self._speed_modifier += 1
+    def _update_reward_volume(self) -> None:
+        """Updates the reward volume in the data array in response to user modifying the GUI field value."""
+        volume = int(self.volume_spinbox.value())
+        self._data_array.write_data(index=8, data=np.int32(volume))
+
+    def _update_speed_modifier(self) -> None:
+        """Updates the speed modifier in the data array in response to user modifying the GUI field value."""
+        self._speed_modifier = self.speed_spinbox.value()
         self._data_array.write_data(index=3, data=np.int32(self._speed_modifier))
-        self.speed_label.setText(f"Modifier: {self._speed_modifier}")
 
-    def _decrease_speed(self) -> None:
-        """Decrease speed threshold (equivalent to ESC+↓)."""
-        self._speed_modifier -= 1
-        self._data_array.write_data(index=3, data=np.int32(self._speed_modifier))
-        self.speed_label.setText(f"Modifier: {self._speed_modifier}")
-
-    def _increase_duration(self) -> None:
-        """Increase duration threshold (equivalent to ESC+←)."""
-        self._duration_modifier += 1
+    def _update_duration_modifier(self) -> None:
+        """Updates the duration modifier in the data array in response to user modifying the GUI field value."""
+        self._duration_modifier = self.duration_spinbox.value()
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
-        self.duration_label.setText(f"Modifier: {self._duration_modifier}")
 
-    def _decrease_duration(self) -> None:
-        """Decrease duration threshold (equivalent to ESC+→)."""
-        self._duration_modifier -= 1
-        self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
-        self.duration_label.setText(f"Modifier: {self._duration_modifier}")
+    def _terminal_continue(self) -> None:
+        """Configures the data array to indicate that the user has accepted the proposition printed in the terminal."""
+        self._data_array.write_data(index=9, data=np.int32(1))
 
+        # Resets other flags to 0
+        self._data_array.write_data(index=10, data=np.int32(0))
+        self._data_array.write_data(index=11, data=np.int32(0))
 
-# Example usage - drop-in replacement for KeyboardListener
-if __name__ == "__main__":
-    # This would replace: listener = KeyboardListener()
-    listener = QtControlUI()
+    def _terminal_deny(self) -> None:
+        """Configures the data array to indicate that the user has denied the proposition printed in the terminal."""
+        # Add your logic here - determine appropriate data array index
+        self._data_array.write_data(index=10, data=np.int32(1))
 
-    try:
-        # Your main runtime loop here
-        while True:
-            # Check signals just like with KeyboardListener
-            if listener.exit_signal:
-                print("Exit signal received!")
-                break
+        # Resets other flags to 0
+        self._data_array.write_data(index=9, data=np.int32(0))
+        self._data_array.write_data(index=11, data=np.int32(0))
 
-            if listener.reward_signal:
-                print("Reward signal received!")
+    def _terminal_abort(self) -> None:
+        """Configures the data array to indicate that the user has denied repeating a failed operation and instead chose
+        to abort the runtime with an error."""
+        # Add your logic here - determine appropriate data array index
+        self._data_array.write_data(index=11, data=np.int32(1))
 
-            if listener.pause_runtime:
-                print("Runtime paused")
-            else:
-                print("Runtime running")
-
-            print(f"Speed modifier: {listener.speed_modifier}")
-            print(f"Duration modifier: {listener.duration_modifier}")
-
-            time.sleep(0.5)
-
-    finally:
-        listener.shutdown()
+        # Resets other flags to 0
+        self._data_array.write_data(index=9, data=np.int32(0))
+        self._data_array.write_data(index=10, data=np.int32(0))
