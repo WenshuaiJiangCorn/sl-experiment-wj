@@ -409,40 +409,6 @@ class RuntimeControlUI:
         """
         return int(self._data_array.read_data(index=8, convert_output=True))
 
-    @property
-    def dialog_option(self) -> int:
-        """Checks whether the user has updated any of the terminal dialog option trackers and, if so, fetches and
-        returns the chosen option.
-
-        This property is used to query the user's response to the messages and propositions shown in the terminal during
-        runtime. Like other flag accessors, it sets the value(s) of all accessed flags to 0 after they are read.
-
-        Returns:
-            An integer representing the option chosen by the user: 0 (no decision made), 1 (deny), 2 (continue),
-            or 3 (abort).
-        """
-
-        # Queries all flag values
-        continue_flag = bool(self._data_array.read_data(index=9, convert_output=True))
-        deny_flag = bool(self._data_array.read_data(index=10, convert_output=True))
-        abort_flag = bool(self._data_array.read_data(index=11, convert_output=True))
-
-        # Resets the flag values for next query
-        self._data_array.write_data(index=9, data=np.int32(0))
-        self._data_array.write_data(index=10, data=np.int32(0))
-        self._data_array.write_data(index=11, data=np.int32(0))
-
-        # Hierarchically determines what to return
-        if abort_flag:
-            return 3  # Abort is the priority (value 2)
-        elif deny_flag:
-            return 1  # Deny is the second priority (value 0)
-        elif continue_flag:
-            return 2  # Continue is the third priority (value 1)
-        else:
-            # Otherwise, returns 0 to indicate that tbe user has not yet made a decision
-            return 0
-
 
 class _ControlUIWindow(QMainWindow):
     """Generates, renders, and maintains the main Mesoscope-VR acquisition system Graphical User Interface Qt5
@@ -645,41 +611,6 @@ class _ControlUIWindow(QMainWindow):
         controls_layout.addWidget(speed_group)
         controls_layout.addWidget(duration_group)
         main_layout.addLayout(controls_layout)
-
-        # Terminal Dialog Control Group
-        terminal_dialog_group = QGroupBox("Terminal Dialog Control")
-        terminal_dialog_layout = QHBoxLayout(terminal_dialog_group)
-        terminal_dialog_layout.setSpacing(6)
-
-        # Continue button
-        self.continue_btn = QPushButton("Continue")
-        self.continue_btn.setToolTip("Accepts the proposition displayed in the terminal.")
-        # noinspection PyUnresolvedReferences
-        self.continue_btn.clicked.connect(self._terminal_continue)
-        self.continue_btn.setObjectName("continueButton")
-
-        # Deny button
-        self.deny_btn = QPushButton("Deny")
-        self.deny_btn.setToolTip("Denies the proposition displayed in the terminal.")
-        # noinspection PyUnresolvedReferences
-        self.deny_btn.clicked.connect(self._terminal_deny)
-        self.deny_btn.setObjectName("denyButton")
-
-        # Abort button
-        self.abort_btn = QPushButton("Abort")
-        self.abort_btn.setToolTip("Denies the proposition displayed in the terminal and aborts the runtime.")
-        # noinspection PyUnresolvedReferences
-        self.abort_btn.clicked.connect(self._terminal_abort)
-        self.abort_btn.setObjectName("abortButton")
-
-        # Configure buttons
-        for btn in [self.continue_btn, self.deny_btn, self.abort_btn]:
-            btn.setMinimumHeight(35)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            terminal_dialog_layout.addWidget(btn)
-
-        # Add the terminal dialog control box to the UI widget
-        main_layout.addWidget(terminal_dialog_group)
 
     def _apply_qt5_styles(self) -> None:
         """Applies optimized styling to all UI elements managed by this class.
@@ -966,57 +897,6 @@ class _ControlUIWindow(QMainWindow):
                         width: 8px;
                         border-radius: 4px;
                     }}
-                    QPushButton#continueButton {{
-                        background-color: #27ae60;
-                        color: white;
-                        border-color: #229954;
-                        font-weight: bold;
-                    }}
-                    
-                    QPushButton#continueButton:hover {{
-                        background-color: #229954;
-                        border-color: #1e8449;
-                    }}
-                    
-                    QPushButton#denyButton {{
-                        background-color: #f39c12;
-                        color: white;
-                        border-color: #e67e22;
-                        font-weight: bold;
-                    }}
-                    
-                    QPushButton#denyButton:hover {{
-                        background-color: #e67e22;
-                        border-color: #d35400;
-                    }}
-                    
-                    QPushButton#abortButton {{
-                        background-color: #e74c3c;
-                        color: white;
-                        border-color: #c0392b;
-                        font-weight: bold;
-                    }}
-                    
-                    QPushButton#abortButton:hover {{
-                        background-color: #c0392b;
-                        border-color: #a93226;
-                    }}
-                    
-                    QSpinBox {{
-                        border: 2px solid #bdc3c7;
-                        border-radius: 4px;
-                        padding: 4px 8px;
-                        font-weight: bold;
-                        font-size: 12pt;
-                        background-color: white;
-                        color: #2c3e50;
-                        min-height: 20px;
-                    }}
-                    
-                    QSpinBox:focus {{
-                        border-color: #3498db;
-                    }}
-                    
                 """)
 
     def _setup_monitoring(self) -> None:
@@ -1130,30 +1010,3 @@ class _ControlUIWindow(QMainWindow):
         """Updates the duration modifier in the data array in response to user modifying the GUI field value."""
         self._duration_modifier = self.duration_spinbox.value()
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
-
-    def _terminal_continue(self) -> None:
-        """Configures the data array to indicate that the user has accepted the proposition printed in the terminal."""
-        self._data_array.write_data(index=9, data=np.int32(1))
-
-        # Resets other flags to 0
-        self._data_array.write_data(index=10, data=np.int32(0))
-        self._data_array.write_data(index=11, data=np.int32(0))
-
-    def _terminal_deny(self) -> None:
-        """Configures the data array to indicate that the user has denied the proposition printed in the terminal."""
-        # Add your logic here - determine appropriate data array index
-        self._data_array.write_data(index=10, data=np.int32(1))
-
-        # Resets other flags to 0
-        self._data_array.write_data(index=9, data=np.int32(0))
-        self._data_array.write_data(index=11, data=np.int32(0))
-
-    def _terminal_abort(self) -> None:
-        """Configures the data array to indicate that the user has denied repeating a failed operation and instead chose
-        to abort the runtime with an error."""
-        # Add your logic here - determine appropriate data array index
-        self._data_array.write_data(index=11, data=np.int32(1))
-
-        # Resets other flags to 0
-        self._data_array.write_data(index=9, data=np.int32(0))
-        self._data_array.write_data(index=10, data=np.int32(0))
