@@ -345,6 +345,16 @@ class MicroControllerInterfaces:
             tone_duration: The duration of the auditory tone, in milliseconds, to emit while simulating the water
                 reward delivery.
         """
+    def configure_reward_parameters(self, volume: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided volume and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            volume: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+        """
     def reference_valve(self) -> None:
         """Runs the reference valve calibration procedure.
 

@@ -830,6 +830,31 @@ class MicroControllerInterfaces:
 
         self.valve.tone()
 
+    def configure_reward_parameters(self, volume: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided volume and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            volume: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+        """
+        if volume != self._previous_volume or tone_duration != self._previous_tone_duration:
+            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
+            self._previous_volume = volume
+            self._previous_tone_duration = tone_duration
+
+            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
+            # consistency
+            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
+            self.valve.set_parameters(
+                pulse_duration=self.valve.get_duration_from_volume(volume),
+                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
+                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+                tone_duration=np.uint32(tone_duration),
+            )
+
     def reference_valve(self) -> None:
         """Runs the reference valve calibration procedure.
 

@@ -783,6 +783,18 @@ class _MesoscopeExperiment:
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
 
+    def configure_reward_parameters(self, reward_size: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided reward size (volume) and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            reward_size: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+        """
+        self._microcontrollers.configure_reward_parameters(volume=reward_size, tone_duration=tone_duration)
+
     def toggle_valve(self, state: bool) -> None:
         """Configures the valve to match the input state.
 
@@ -1464,6 +1476,18 @@ class _BehaviorTraining:
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
 
+    def configure_reward_parameters(self, reward_size: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided reward size (volume) and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            reward_size: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+        """
+        self._microcontrollers.configure_reward_parameters(volume=reward_size, tone_duration=tone_duration)
+
     def toggle_valve(self, state: bool) -> None:
         """Configures the valve to match the input state.
 
@@ -1707,6 +1731,7 @@ def lick_training_logic(
 
     unconsumed_count = 0
     previous_licks = 0
+    previous_reward_volume = 0
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
@@ -1747,6 +1772,10 @@ def lick_training_logic(
             # If the listener detects a reward delivery signal, delivers the reward to the animal
             if ui.reward_signal:
                 runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
+
+            # Adjusts the reward volume each time it is updated in the GUI
+            if ui.reward_volume != previous_reward_volume:
+                runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
             # If the listener detects a pause command, enters a holding loop.
             if ui.pause_runtime:
@@ -2087,6 +2116,7 @@ def run_training_logic(
 
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
+    previous_reward_volume = 0
     runtime_timer.reset()
     speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
     while runtime_timer.elapsed < (training_time + additional_time):
@@ -2216,6 +2246,10 @@ def run_training_logic(
         # If the listener detects a reward delivery signal, delivers the reward to the animal.
         if ui.reward_signal:
             runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+
+        # Adjusts the reward volume each time it is updated in the GUI
+        if ui.reward_volume != previous_reward_volume:
+            runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
         # If the user sent the abort command, terminates the training early with an error message.
         if ui.exit_signal:
@@ -2457,6 +2491,7 @@ def experiment_logic(
     runtime.start_mesoscope()
     runtime.change_vr_state(new_state=0)
     runtime.change_experiment_state(new_state=0)
+    previous_reward_volume = 0
 
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
@@ -2518,6 +2553,10 @@ def experiment_logic(
                 # If the listener detects a reward delivery signal, delivers the reward to the animal
                 if ui.reward_signal:
                     runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+
+                # Adjusts the reward volume each time it is updated in the GUI
+                if ui.reward_volume != previous_reward_volume:
+                    runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
                 # If the listener detects a pause command, enters a holding loop.
                 if ui.pause_runtime:

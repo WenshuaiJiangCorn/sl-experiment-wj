@@ -161,6 +161,16 @@ class _MesoscopeExperiment:
         This method is used by the experiment runtime logic to allow the experimenter to manually deliver water to the
         animal.
         """
+    def configure_reward_parameters(self, reward_size: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided reward size (volume) and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            reward_size: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+        """
     def toggle_valve(self, state: bool) -> None:
         """Configures the valve to match the input state.
 
@@ -319,6 +329,16 @@ class _BehaviorTraining:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
 
         This method is used by the training runtimes to reward the animal with water as part of the training process.
+        """
+    def configure_reward_parameters(self, reward_size: float = 5.0, tone_duration: int = 300) -> None:
+        """Configures all future water rewards to use the provided reward size (volume) and tone duration parameters.
+
+        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
+
+        Args:
+            reward_size: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
         """
     def toggle_valve(self, state: bool) -> None:
         """Configures the valve to match the input state.
