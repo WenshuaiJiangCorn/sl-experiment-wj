@@ -321,7 +321,7 @@ class MicroControllerInterfaces:
         """
     def close_valve(self) -> None:
         """Closes the water reward solenoid valve."""
-    def deliver_reward(self, volume: float = 5.0, tone_duration: int = 300) -> None:
+    def deliver_reward(self, volume: float = 5.0, tone_duration: int = 300, ignore_parameters: bool = False) -> None:
         """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
         water.
 
@@ -333,6 +333,9 @@ class MicroControllerInterfaces:
             volume: The volume of water to deliver, in microliters.
             tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
                 reward.
+            ignore_parameters: Determines whether to ignore the volume and tone_duration arguments. Calling the method
+                with this argument ensures that the delivered reward always uses the same volume and tone_duration as
+                the previous reward command. Primarily, this argument is used when receiving reward commands from Unity.
         """
     def simulate_reward(self, tone_duration: int = 300) -> None:
         """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.

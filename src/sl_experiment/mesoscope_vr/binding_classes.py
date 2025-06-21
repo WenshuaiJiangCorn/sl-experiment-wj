@@ -765,7 +765,7 @@ class MicroControllerInterfaces:
         """Closes the water reward solenoid valve."""
         self.valve.toggle(state=False)
 
-    def deliver_reward(self, volume: float = 5.0, tone_duration: int = 300) -> None:
+    def deliver_reward(self, volume: float = 5.0, tone_duration: int = 300, ignore_parameters: bool = False) -> None:
         """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
         water.
 
@@ -777,12 +777,15 @@ class MicroControllerInterfaces:
             volume: The volume of water to deliver, in microliters.
             tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
                 reward.
+            ignore_parameters: Determines whether to ignore the volume and tone_duration arguments. Calling the method
+                with this argument ensures that the delivered reward always uses the same volume and tone_duration as
+                the previous reward command. Primarily, this argument is used when receiving reward commands from Unity.
         """
 
         # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
         # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
         # reducing communication overhead.
-        if volume != self._previous_volume or tone_duration != self._previous_tone_duration:
+        if (volume != self._previous_volume or tone_duration != self._previous_tone_duration) and not ignore_parameters:
             # Parameters are cached here to use the tone_duration before it is converted to microseconds.
             self._previous_volume = volume
             self._previous_tone_duration = tone_duration

@@ -920,7 +920,7 @@ class _ControlUIWindow(QMainWindow):
         except:
             self.close()
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event: QCloseEvent | None) -> None:
         """Handles GUI window close events.
 
         This function is called when the user manually closes the GUI window. This is treated as the request to
@@ -937,7 +937,8 @@ class _ControlUIWindow(QMainWindow):
             self._data_array.write_data(index=0, data=np.int32(1))
         except:
             pass
-        event.accept()
+        if event is not None:
+            event.accept()
 
     def _exit_runtime(self) -> None:
         """Signals the runtime to gracefully terminate."""
@@ -1005,8 +1006,8 @@ class _ControlUIWindow(QMainWindow):
             self.runtime_status_label.setStyleSheet("QLabel { color: #27ae60; font-weight: bold; }")
 
         # Refreshes styles after object name change
-        self.pause_btn.style().unpolish(self.pause_btn)
-        self.pause_btn.style().polish(self.pause_btn)
+        self.pause_btn.style().unpolish(self.pause_btn)  # type: ignore
+        self.pause_btn.style().polish(self.pause_btn)  # type: ignore
         self.pause_btn.update()  # Force update to apply new styles
 
     def _update_reward_volume(self) -> None:

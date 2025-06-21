@@ -87,6 +87,8 @@ class _MesoscopeExperiment:
     _experiment_state: int
     _source_id: np.uint8
     _timestamp_timer: PrecisionTimer
+    _previous_position: float
+    _previous_licks: int
     _logger: DataLogger
     _microcontrollers: MicroControllerInterfaces
     _unity: MQTTCommunication
@@ -239,6 +241,19 @@ class _MesoscopeExperiment:
 
         These arrays should be passed to the BehaviorVisualizer class to monitor the lick, valve and running speed data
         in real time during the experiment session.
+        """
+    def synchronize_vr(self) -> None:
+        """Synchronizes the remote components of the Virtual Reality (VR) system.
+
+        The VR system broadly consists of two components: Unity game engine (virtual task) and a set of microcontrollers
+        managing the physical task environment. This function sends the data expected by Unity to the virtual reality
+        and receives and executes commands sent by Unity to the microcontrollers. To do so, it leverages the
+        MQTTCommunication class and acts as a persistent bidirectional interface between Unity and the rest of the
+        Mesoscope-VR system.
+
+        Notes:
+            This method has been introduced in version 2.0.0 to aggregate all Unity communication (via MQTT) at the
+            highest level of the runtime hierarchy (the main runtime management class).
         """
 
 class _BehaviorTraining:

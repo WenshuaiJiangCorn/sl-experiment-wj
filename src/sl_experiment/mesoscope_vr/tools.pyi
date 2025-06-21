@@ -128,7 +128,11 @@ class RuntimeControlUI:
         """
     @property
     def exit_signal(self) -> bool:
-        """Returns True if the user has requested the runtime to gracefully abort."""
+        """Returns True if the user has requested the runtime to gracefully abort.
+
+        Notes:
+            Each time this property is accessed, the flag is reset to 0.
+        """
     @property
     def reward_signal(self) -> bool:
         """Returns True if the user has requested the system to deliver a water reward.
@@ -144,7 +148,12 @@ class RuntimeControlUI:
         """Returns the current user-defined modifier to apply to the running epoch duration threshold."""
     @property
     def pause_runtime(self) -> bool:
-        """Returns True if the user has requested the acquisition system to pause the current runtime."""
+        """Returns True if the user has requested the acquisition system to pause the current runtime.
+
+        Notes:
+            Unlike most other flags,t he state of this flag does NOT change when it is accessed. Instead, the UI flips
+            it between True and False to pause and resume the managed runtime.
+        """
     @property
     def open_valve(self) -> bool:
         """Returns True if the user has requested the acquisition system to permanently open the water delivery
@@ -209,7 +218,7 @@ class _ControlUIWindow(QMainWindow):
         """
     def _check_termination(self) -> None:
         """Checks for the runtime termination signal and, if it has been received, terminates the runtime."""
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event: QCloseEvent | None) -> None:
         """Handles GUI window close events.
 
         This function is called when the user manually closes the GUI window. This is treated as the request to

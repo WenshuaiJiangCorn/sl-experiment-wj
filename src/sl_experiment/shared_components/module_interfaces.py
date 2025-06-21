@@ -2,7 +2,6 @@
 These interfaces are designed to work with the hardware modules assembled and configured according to the instructions
 from our microcontrollers' library: https://github.com/Sun-Lab-NBB/sl-micro-controllers."""
 
-from json import dumps
 import math
 from typing import Any
 
@@ -17,7 +16,6 @@ from ataraxis_communication_interface import (
     ModuleState,
     ModuleInterface,
     ModuleParameters,
-    MQTTCommunication,
     OneOffModuleCommand,
     RepeatedModuleCommand,
 )
@@ -54,7 +52,6 @@ class EncoderInterface(ModuleInterface):
         _object_diameter: Stores the diameter of the object connected to the encoder.
         _cm_per_pulse: Stores the conversion factor that translates encoder pulses into centimeters.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
-        _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
         _distance_tracker: Stores the SharedMemoryArray that stores the absolute distance traveled by the animal since
             class initialization, in centimeters. Note, the distance does NOT account for the direction of travel. It is
@@ -98,15 +95,12 @@ class EncoderInterface(ModuleInterface):
             decimals=8,
         )
 
-        # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
-        # issues
-        self._communication: MQTTCommunication | None = None
-
         # Precreates a shared memory array used to track and share the absolute distance, in centimeters, traveled by
-        # the animal since class initialization.
+        # the animal since class initialization and the current absolute position of the animal in centimeters relative
+        # to onset position.
         self._distance_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_distance_tracker",
-            prototype=np.zeros(shape=1, dtype=np.float64),
+            prototype=np.zeros(shape=2, dtype=np.float64),
             exist_ok=True,
         )
 
@@ -116,20 +110,11 @@ class EncoderInterface(ModuleInterface):
         self._distance_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class and connects to the MQTT broker.
-
-        Also connects to the speed_tracker SharedMemoryArray and initializes the PrecisionTimer used in running speed
-        calculation.
-        """
-        # MQTT Client is used to send motion data to Unity over MQTT
-        self._communication = MQTTCommunication()
-        self._communication.connect()
+        """Connects to the speed_tracker SharedMemoryArray."""
         self._distance_tracker.connect()
 
     def terminate_remote_assets(self) -> None:
-        """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""
-        if self._communication is not None:
-            self._communication.disconnect()
+        """Disconnects from the speed_tracker SharedMemoryArray."""
         self._distance_tracker.disconnect()
 
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
@@ -179,17 +164,14 @@ class EncoderInterface(ModuleInterface):
         distance += cm_motion
         self._distance_tracker.write_data(index=0, data=distance)
 
+        # Also updates the current absolute position of the animal (given relative to experiment onset position 0)
+        absolute_position = self._distance_tracker.read_data(index=1, convert_output=False)
+        absolute_position += signed_motion
+        self._distance_tracker.write_data(index=1, data=distance)
+
         # If the class is in the debug mode, prints the motion data via console
         if self._debug:
             console.echo(message=f"Encoder moved {cm_motion * sign} cm.")  # Includes the sign here
-
-        # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
-        # byte-string.
-        json_string = dumps(obj={"movement": signed_motion})
-        byte_array = json_string.encode("utf-8")
-
-        # Publishes the motion to the appropriate MQTT topic.
-        self._communication.send_data(topic=self._motion_topic, payload=byte_array)  # type: ignore
 
     def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
@@ -321,6 +303,9 @@ class EncoderInterface(ModuleInterface):
 
         The distance is stored under index 0 of the tracker and uses the float64 datatype. Note, the distance does NOT
         account for the direction of travel. It is a monotonically incrementing count of traversed centimeters.
+
+        Since version 2.0.0 the array uses index 1 to communicate the absolute position of the animal in Unity units.
+        The position is given relative to the position at runtime onset ('0').
         """
         return self._distance_tracker
 
@@ -853,9 +838,9 @@ class ValveInterface(ModuleInterface):
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
         # kOpen, kClosed, kCalibrated, kToneOn, kToneOff, kTonePinNotSet
-        #  data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56), np.uint8(57)}
+        # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56), np.uint8(57)}
         data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
-        mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
+        # mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
 
         self._debug: bool = debug
 
@@ -869,7 +854,7 @@ class ValveInterface(ModuleInterface):
             module_id=np.uint8(1),
             mqtt_communication=True,
             data_codes=data_codes,
-            mqtt_command_topics=mqtt_command_topics,
+            mqtt_command_topics=None,
             error_codes=error_codes,
         )
 
@@ -891,7 +876,7 @@ class ValveInterface(ModuleInterface):
         self._scale_coefficient: np.float64 = np.round(a=np.float64(scale_coefficient), decimals=8)
         self._nonlinearity_exponent: np.float64 = np.round(a=np.float64(nonlinearity_exponent), decimals=8)
 
-        # Stores the reward topic separately to make it accessible via property
+        # Stores the reward topic to make it accessible via property
         self._reward_topic: str = "Gimbl/Reward/"
 
         # Precreates a shared memory array used to track and share valve state data. Index 0 is used to report the
@@ -966,32 +951,9 @@ class ValveInterface(ModuleInterface):
         elif message.event == 54:
             console.echo(f"Valve Calibration: Complete")
 
-    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-        """When called, this method statically sends a reward delivery command to the ValveModule instance.
-
-        Notes:
-            The method does NOT evaluate the input message or topic. It is written to always send reward trigger
-            commands when called. If future Sun lab pipelines need this method to evaluate the input message, the logic
-            of the method needs to be rewritten.
-
-            Returning the command message is more efficient than using the input_queue interface in this particular
-            case.
-
-        Returns:
-            The command message to be sent to the microcontroller.
-        """
-
-        # Currently, the only message that can be processed by this method is the reward trigger message from Unity.
-        # Therefore, whenever this method is triggerd, regardless of the input message, sends a reward delivery
-        # command to the ValveModule instance.
-        command = OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
-        )
-        return command
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
+        """Not used."""
+        return
 
     def set_parameters(
         self,
@@ -1280,7 +1242,6 @@ class LickInterface(ModuleInterface):
         _lick_threshold: The threshold voltage for detecting a tongue contact.
         _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
-        _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
         _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
             of licks detected since class initialization.
@@ -1307,10 +1268,6 @@ class LickInterface(ModuleInterface):
         # Statically computes the voltage resolution of each analog step, assuming a 3.3V ADC with 12-bit resolution.
         self._volt_per_adc_unit: np.float64 = np.round(a=np.float64(3.3 / (2**12)), decimals=8)
 
-        # The communication class used to send data to Unity over MQTT. Initializes to a placeholder due to pickling
-        # issues
-        self._communication: MQTTCommunication | None = None
-
         # Precreates a shared memory array used to track and share the total number of licks recorded by the sensor
         # since class initialization.
         self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
@@ -1328,18 +1285,11 @@ class LickInterface(ModuleInterface):
         self._lick_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class, connects to the MQTT broker, and connects to the SharedMemoryArray
-        used to communicate lick status to other processes.
-        """
-        # MQTT Client is used to send lick data to Unity over MQTT
-        self._communication = MQTTCommunication()
-        self._communication.connect()
+        """Connects to the SharedMemoryArray used to communicate lick status to other processes."""
         self._lick_tracker.connect()
 
     def terminate_remote_assets(self) -> None:
-        """Destroys the MQTTCommunication class and disconnects from the lick-tracker SharedMemoryArray."""
-        if self._communication is not None:
-            self._communication.disconnect()
+        """Disconnects from the lick-tracker SharedMemoryArray."""
         self._lick_tracker.disconnect()  # Does not destroy the array to support start / stop cycling.
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
@@ -1374,10 +1324,6 @@ class LickInterface(ModuleInterface):
         # pair of licks has to be separated by a zero-value (lack of tongue contact). So, to properly report the licks,
         # only does it once per encountering a zero-value.
         if detected_voltage >= self._lick_threshold and self._previous_readout_zero:
-            # If the sensor detects a significantly high voltage, sends an empty message to the sensor MQTT topic,
-            # which acts as a binary lick trigger.
-            self._communication.send_data(topic=self._sensor_topic, payload=None)  # type: ignore
-
             # Increments the lick count and updates the tracker array with new data
             count = self._lick_tracker.read_data(index=0, convert_output=False)
             count += 1

@@ -7,6 +7,7 @@ experiment data or maintain the system modules. Primarily, this includes the run
 import os
 import copy
 import json
+from json import dumps
 import shutil as sh
 from pathlib import Path
 import tempfile
@@ -116,6 +117,10 @@ class _MesoscopeExperiment:
         self._source_id: np.uint8 = np.uint8(1)  # Reserves source ID code 1 for this class
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
 
+        # Initializes additional tracker variables used to send runtime data updates to Unity game engine.
+        self._previous_position: float = 0
+        self._previous_licks: int = 0
+
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
         self._logger: DataLogger = DataLogger(
@@ -130,11 +135,9 @@ class _MesoscopeExperiment:
         # Initializes the binding class for all MicroController Interfaces.
         self._microcontrollers: MicroControllerInterfaces = MicroControllerInterfaces(data_logger=self._logger)
 
-        # Instantiates an MQTTCommunication instance to directly communicate with Unity. Currently, this is used
-        # exclusively to verify that the Unity is running and to collect the sequence of VR wall cues used by the task.
-        # MicroController instances that communicate with Unity do it through their internal MQTTCommunication class
-        # instances.
-        monitored_topics = ("CueSequence/",)
+        # Instantiates an MQTTCommunication instance to directly communicate with Unity. Currently, ALL Unity
+        # communication is carried out through this instance.
+        monitored_topics = ("CueSequence/", self._microcontrollers.valve.mqtt_topic)
         self._unity: MQTTCommunication = MQTTCommunication(monitored_topics=monitored_topics)
 
         # Initializes the binding class for all VideoSystems.
@@ -573,6 +576,16 @@ class _MesoscopeExperiment:
             message = "Motor Positioning: Complete."
             console.echo(message=message, level=LogLevel.SUCCESS)
 
+            message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
+        # disconnecting.
+        self._zaber_motors.disconnect()
+
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
@@ -667,18 +680,6 @@ class _MesoscopeExperiment:
                 mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                     file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
                 )
-
-        # Optionally moves the motors to their parking positions
-        if move_zaber:
-            message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
-            console.echo(message=message, level=LogLevel.WARNING)
-            input("Enter anything to continue: ")
-
-            self._zaber_motors.park_position()
-
-        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
-        # disconnecting.
-        self._zaber_motors.disconnect()
 
         message = "Zaber motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1014,6 +1015,58 @@ class _MesoscopeExperiment:
             self._microcontrollers.distance_tracker,
         )
 
+    def synchronize_vr(self) -> None:
+        """Synchronizes the remote components of the Virtual Reality (VR) system.
+
+        The VR system broadly consists of two components: Unity game engine (virtual task) and a set of microcontrollers
+        managing the physical task environment. This function sends the data expected by Unity to the virtual reality
+        and receives and executes commands sent by Unity to the microcontrollers. To do so, it leverages the
+        MQTTCommunication class and acts as a persistent bidirectional interface between Unity and the rest of the
+        Mesoscope-VR system.
+
+        Notes:
+            This method has been introduced in version 2.0.0 to aggregate all Unity communication (via MQTT) at the
+            highest level of the runtime hierarchy (the main runtime management class).
+        """
+
+        # If the mouse has changed its position since the previous cycle, updates the position and sends the data to
+        # Unity. Since Unity expects to be sent the delta (change) in mouse position, rather than the current absolute
+        # position, converts the absolute position readout to a delta value.
+        current_position = self._microcontrollers.distance_tracker.read_data(index=1, convert_output=True)
+
+        # Subtracting previous position from current correctly maps positive deltas to moving forward and negative
+        # deltas to moving backward
+        position_delta = current_position - self._previous_position
+
+        # If position changed, sends the change to Unity
+        if position_delta != 0:
+            # Updates locally stored value using the cached delta
+            self._previous_position += position_delta
+
+            # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
+            # byte-string.
+            json_string = dumps(obj={"movement": position_delta})
+            byte_array = json_string.encode("utf-8")
+
+            # Publishes the motion to the appropriate MQTT topic.
+            self._unity.send_data(topic=self._microcontrollers.wheel_encoder.mqtt_topic, payload=byte_array)
+
+        # If the lick tracker indicates that the sensor has detected new licks, sends a binary lick indicator to
+        # Unity.
+        lick_count = self._microcontrollers.lick_tracker.read_data(index=0, convert_output=True)
+        if lick_count > self._previous_licks:
+            self._unity.send_data(topic=self._microcontrollers.lick.mqtt_topic, payload=None)
+
+        # If Unity sends updates to the Mesoscope-VR system, receives and processes the data. Note, this will discard
+        # all unexpected data
+        if self._unity.has_data:
+            topic: str
+            topic, _ = self._unity.get_data()  # type: ignore
+
+            # Uses the reward volume specified during startup (5.0) or via the UI (Anything from 1 to 20).
+            if topic == self._microcontrollers.valve.mqtt_topic:
+                self._microcontrollers.deliver_reward(ignore_parameters=True)
+
 
 class _BehaviorTraining:
     """The base class for all behavior training runtimes.
@@ -1342,6 +1395,23 @@ class _BehaviorTraining:
             message = "Motor Positioning: Complete."
             console.echo(message=message, level=LogLevel.SUCCESS)
 
+            # Instructs the user to remove the animal from the VR rig.
+            message = (
+                "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
+            # Parks and disconnects from all Zaber motors.
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
+        # disconnecting.
+        self._zaber_motors.disconnect()
+
+        message = "Zaber motors: Reset."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Notifies the user that the data acquisition is complete.
         console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
@@ -1381,25 +1451,6 @@ class _BehaviorTraining:
             src=self._session_data.raw_data.session_descriptor_path,
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
-
-        # Optionally moves the motors to their parking positions
-        if move_zaber:
-            # Instructs the user to remove the animal from the VR rig.
-            message = (
-                "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal."
-            )
-            console.echo(message=message, level=LogLevel.WARNING)
-            input("Enter anything to continue: ")
-
-            # Parks and disconnects from all Zaber motors.
-            self._zaber_motors.park_position()
-
-        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
-        # disconnecting.
-        self._zaber_motors.disconnect()
-
-        message = "Zaber motors: Reset."
-        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Preprocesses the session data
         preprocess_session_data(session_data=self._session_data)
@@ -2122,7 +2173,9 @@ def run_training_logic(
     # Resets the valve tracker array before proceeding. This allows the suer to use the section above to debug the
     # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
     # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
+    # noinspection PyTypeChecker
     valve_tracker.write_data(index=0, data=0)
+    # noinspection PyTypeChecker
     valve_tracker.write_data(index=1, data=0)
 
     message = f"Initiating lick training procedure..."
@@ -2491,7 +2544,7 @@ def experiment_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
-    # Initializes the runtime control UI. Has tgo be done before the visualzier
+    # Initializes the runtime control UI. Has tgo be done before the visualizer
     ui = RuntimeControlUI()
 
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
@@ -2509,7 +2562,6 @@ def experiment_logic(
     # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
     # manually reposition all Zaber motors.
     while ui.pause_runtime:
-
         visualizer.update()  # Continuously updates the visualizer
 
         if ui.reward_signal:
@@ -2562,6 +2614,9 @@ def experiment_logic(
 
             while runtime_timer.elapsed < (state.state_duration_s + additional_time):
                 visualizer.update()  # Continuously updates the visualizer
+
+                # Handles Unity-MQTT communication
+                runtime.synchronize_vr()
 
                 # Updates the progress bar every second. While the current implementation is technically not safe,
                 # we know that the loop will cycle much faster than 1 second, so it should not be possible for the

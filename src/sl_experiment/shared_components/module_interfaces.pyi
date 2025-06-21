@@ -2,13 +2,7 @@ import numpy as np
 from numpy.typing import NDArray as NDArray
 from ataraxis_time import PrecisionTimer
 from ataraxis_data_structures import SharedMemoryArray
-from ataraxis_communication_interface import (
-    ModuleData,
-    ModuleState,
-    ModuleInterface,
-    MQTTCommunication,
-    OneOffModuleCommand,
-)
+from ataraxis_communication_interface import ModuleData, ModuleState, ModuleInterface
 
 class EncoderInterface(ModuleInterface):
     """Interfaces with EncoderModule instances running on Ataraxis MicroControllers.
@@ -41,7 +35,6 @@ class EncoderInterface(ModuleInterface):
         _object_diameter: Stores the diameter of the object connected to the encoder.
         _cm_per_pulse: Stores the conversion factor that translates encoder pulses into centimeters.
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
-        _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
         _distance_tracker: Stores the SharedMemoryArray that stores the absolute distance traveled by the animal since
             class initialization, in centimeters. Note, the distance does NOT account for the direction of travel. It is
@@ -54,7 +47,6 @@ class EncoderInterface(ModuleInterface):
     _debug: bool
     _cm_per_pulse: np.float64
     _unity_unit_per_pulse: np.float64
-    _communication: MQTTCommunication | None
     _distance_tracker: SharedMemoryArray
     def __init__(
         self,
@@ -66,13 +58,9 @@ class EncoderInterface(ModuleInterface):
     def __del__(self) -> None:
         """Ensures the speed_tracker is properly cleaned up when the class is garbage-collected."""
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class and connects to the MQTT broker.
-
-        Also connects to the speed_tracker SharedMemoryArray and initializes the PrecisionTimer used in running speed
-        calculation.
-        """
+        """Connects to the speed_tracker SharedMemoryArray."""
     def terminate_remote_assets(self) -> None:
-        """Destroys the MQTTCommunication class and disconnects from the speed_tracker SharedMemoryArray."""
+        """Disconnects from the speed_tracker SharedMemoryArray."""
     def process_received_data(self, message: ModuleState | ModuleData) -> None:
         """Processes incoming data in real time.
 
@@ -159,6 +147,9 @@ class EncoderInterface(ModuleInterface):
 
         The distance is stored under index 0 of the tracker and uses the float64 datatype. Note, the distance does NOT
         account for the direction of travel. It is a monotonically incrementing count of traversed centimeters.
+
+        Since version 2.0.0 the array uses index 1 to communicate the absolute position of the animal in Unity units.
+        The position is given relative to the position at runtime onset ('0').
         """
 
 class TTLInterface(ModuleInterface):
@@ -482,20 +473,8 @@ class ValveInterface(ModuleInterface):
         Note:
             Make sure the console is enabled before calling this method.
         """
-    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-        """When called, this method statically sends a reward delivery command to the ValveModule instance.
-
-        Notes:
-            The method does NOT evaluate the input message or topic. It is written to always send reward trigger
-            commands when called. If future Sun lab pipelines need this method to evaluate the input message, the logic
-            of the method needs to be rewritten.
-
-            Returning the command message is more efficient than using the input_queue interface in this particular
-            case.
-
-        Returns:
-            The command message to be sent to the microcontroller.
-        """
+    def parse_mqtt_command(self, topic: str, payload: bytes | bytearray) -> None:
+        """Not used."""
     def set_parameters(
         self,
         pulse_duration: np.uint32 = ...,
@@ -687,7 +666,6 @@ class LickInterface(ModuleInterface):
         _lick_threshold: The threshold voltage for detecting a tongue contact.
         _volt_per_adc_unit: The conversion factor to translate the raw analog values recorded by the 12-bit ADC into
             voltage in Volts.
-        _communication: Stores the communication class used to send data to Unity over MQTT.
         _debug: Stores the debug flag.
         _lick_tracker: Stores the SharedMemoryArray that stores the current lick detection status and the total number
             of licks detected since class initialization.
@@ -698,18 +676,15 @@ class LickInterface(ModuleInterface):
     _sensor_topic: str
     _lick_threshold: np.uint16
     _volt_per_adc_unit: np.float64
-    _communication: MQTTCommunication | None
     _lick_tracker: SharedMemoryArray
     _previous_readout_zero: bool
     def __init__(self, lick_threshold: int = 1000, debug: bool = False) -> None: ...
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
     def initialize_remote_assets(self) -> None:
-        """Initializes the MQTTCommunication class, connects to the MQTT broker, and connects to the SharedMemoryArray
-        used to communicate lick status to other processes.
-        """
+        """Connects to the SharedMemoryArray used to communicate lick status to other processes."""
     def terminate_remote_assets(self) -> None:
-        """Destroys the MQTTCommunication class and disconnects from the lick-tracker SharedMemoryArray."""
+        """Disconnects from the lick-tracker SharedMemoryArray."""
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Processes incoming data.
 
