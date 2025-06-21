@@ -8,9 +8,9 @@ from dataclasses import field, dataclass
 from multiprocessing import Process
 
 import numpy as np
-from PyQt5.QtGui import QFont, QCloseEvent
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (
+from PyQt6.QtGui import QFont, QCloseEvent
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (
     QLabel,
     QWidget,
     QGroupBox,
@@ -323,8 +323,8 @@ class RuntimeControlUI:
             window = _ControlUIWindow(self._data_array)
             window.show()
 
-            # Runs the Qt5 event loop until the shutdown command is received
-            app.exec_()  # Qt5 uses exec_()
+            # Runs the app
+            app.exec()
 
         # Terminates with an exception which will be propagated to the main process
         except Exception as e:

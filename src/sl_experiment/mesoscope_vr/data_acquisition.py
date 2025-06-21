@@ -1701,12 +1701,16 @@ def lick_training_logic(
     runtime.start()
 
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
+    # visualizer = BehaviorVisualizer(
+    #     lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    # )
 
     # Initializes the runtime control UI
     ui = RuntimeControlUI()
+
+    runtime.stop()
+    import sys
+    sys.exit(1)
 
     # Configures all system components to support lick training
     runtime.lick_train_state()
