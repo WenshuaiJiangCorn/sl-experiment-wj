@@ -459,9 +459,18 @@ class _MesoscopeExperiment:
 
         # Stops mesoscope frame acquisition.
         self._microcontrollers.stop_mesoscope()
+        message = "Terminating experiment runtime..."
+        console.echo(message=message, level=LogLevel.INFO)
+
         self._timestamp_timer.reset()  # Resets the timestamp timer. It is now co-opted to enforce the shutdown delay
         message = "Mesoscope frame acquisition stop command: Sent."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # If the user prefers using manual stop triggers, instructs the user to stop the mesoscope before continuing
+        # with the shutdown procedure.
+        message = "If using manual stop triggers, make sure that the mesoscope acquisition has been stopped!"
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
 
         # Stops all cameras.
         self._cameras.stop()
