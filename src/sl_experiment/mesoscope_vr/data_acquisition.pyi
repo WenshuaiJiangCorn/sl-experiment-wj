@@ -230,7 +230,7 @@ class _MesoscopeExperiment:
             new_state: The integer byte-code for the new experiment state. The code will be serialized as an uint8
                 value, so only values between 0 and 255 inclusive are supported.
         """
-    def _set_lick_guidance(self, must_lick: bool):
+    def _set_lick_guidance(self, must_lick: bool) -> None:
         """Sets the Unity task to optionally require the animal to lick in the reward zone to receive water."""
     @property
     def trackers(self) -> tuple[SharedMemoryArray, SharedMemoryArray, SharedMemoryArray]:

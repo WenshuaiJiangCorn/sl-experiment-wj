@@ -2,8 +2,8 @@ from pathlib import Path
 from dataclasses import field, dataclass
 
 from _typeshed import Incomplete
-from PyQt5.QtGui import QCloseEvent
-from PyQt5.QtWidgets import QMainWindow
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QMainWindow
 from sl_shared_assets import SessionData, MesoscopeSystemConfiguration
 from ataraxis_data_structures import SharedMemoryArray
 
@@ -126,9 +126,6 @@ class RuntimeControlUI:
 
         This runs Qt5 in the main thread of the separate process, which is perfectly valid.
         """
-    @staticmethod
-    def _setup_high_dpi_scaling() -> None:
-        """Configures the runtime environment to support proper high-DPI scaling for Qt5 applications."""
     @property
     def exit_signal(self) -> bool:
         """Returns True if the user has requested the runtime to gracefully abort."""
@@ -198,7 +195,7 @@ class _ControlUIWindow(QMainWindow):
     duration_spinbox: Incomplete
     def _setup_ui(self) -> None:
         """Creates and arranges all UI elements optimized for Qt5 with proper scaling."""
-    def _apply_qt5_styles(self) -> None:
+    def _apply_qt6_styles(self) -> None:
         """Applies optimized styling to all UI elements managed by this class.
 
         This configured the UI to display properly, assuming the UI window uses the default resolution.

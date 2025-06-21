@@ -1710,6 +1710,7 @@ def lick_training_logic(
 
     runtime.stop()
     import sys
+
     sys.exit(1)
 
     # Configures all system components to support lick training

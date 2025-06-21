@@ -262,7 +262,7 @@ class RuntimeControlUI:
 
     def __init__(self) -> None:
         self._data_array = SharedMemoryArray.create_array(
-            name="qt5_control_ui", prototype=np.zeros(shape=12, dtype=np.int32), exist_ok=True
+            name="runtime_control_ui", prototype=np.zeros(shape=12, dtype=np.int32), exist_ok=True
         )
 
         # Starts the UI process
@@ -308,9 +308,6 @@ class RuntimeControlUI:
 
         # Create and run the Qt5 application in this process's main thread
         try:
-            # Enables high-DPI scaling before creating QApplication
-            self._setup_high_dpi_scaling()
-
             # Creates the QT5 GUI application
             app = QApplication(sys.argv)
             app.setApplicationName("Mesoscope-VR Control Panel")
@@ -334,19 +331,6 @@ class RuntimeControlUI:
         # Ensures proper UI shutdown when runtime encounters errors
         finally:
             self._data_array.disconnect()
-
-    @staticmethod
-    def _setup_high_dpi_scaling() -> None:
-        """Configures the runtime environment to support proper high-DPI scaling for Qt5 applications."""
-
-        # Enables high-DPI scaling for Qt5
-        if hasattr(Qt, "AA_EnableHighDpiScaling"):
-            # noinspection PyTypeChecker
-            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-
-        if hasattr(Qt, "AA_UseHighDpiPixmaps"):
-            # noinspection PyTypeChecker
-            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     @property
     def exit_signal(self) -> bool:
@@ -442,7 +426,7 @@ class _ControlUIWindow(QMainWindow):
         self._setup_monitoring()
 
         # Applies Qt5-optimized styling and scaling parameters
-        self._apply_qt5_styles()
+        self._apply_qt6_styles()
 
     def _setup_ui(self) -> None:
         """Creates and arranges all UI elements optimized for Qt5 with proper scaling."""
@@ -479,12 +463,12 @@ class _ControlUIWindow(QMainWindow):
         # Configures the buttons to expand when UI is resized, but use a fixed height of 35 points
         for btn in [self.exit_btn, self.pause_btn]:
             btn.setMinimumHeight(35)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             runtime_control_layout.addWidget(btn)
 
         # Adds runtime status tracker to the same box
         self.runtime_status_label = QLabel("Runtime Status: ⏸️ Paused")
-        self.runtime_status_label.setAlignment(Qt.AlignCenter)
+        self.runtime_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         runtime_status_font = QFont()
         runtime_status_font.setPointSize(35)
         runtime_status_font.setBold(True)
@@ -527,7 +511,7 @@ class _ControlUIWindow(QMainWindow):
         # Configures the buttons to expand when UI is resized, but use a fixed height of 35 points
         for btn in [self.valve_open_btn, self.valve_close_btn, self.reward_btn]:
             btn.setMinimumHeight(35)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             valve_buttons_layout.addWidget(btn)
 
         valve_layout.addLayout(valve_buttons_layout)
@@ -556,7 +540,7 @@ class _ControlUIWindow(QMainWindow):
 
         # Adds the valve status tracker on the right
         self.valve_status_label = QLabel("Valve: 🔒 Closed")
-        self.valve_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)  # Right-aligned
+        self.valve_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         valve_status_font = QFont()
         valve_status_font.setPointSize(35)
         valve_status_font.setBold(True)
@@ -580,7 +564,7 @@ class _ControlUIWindow(QMainWindow):
 
         # Speed Modifier
         speed_status_label = QLabel("Current Modifier:")
-        speed_status_label.setAlignment(Qt.AlignCenter)
+        speed_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         speed_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
         speed_layout.addWidget(speed_status_label)
         self.speed_spinbox = QDoubleSpinBox()
@@ -599,7 +583,7 @@ class _ControlUIWindow(QMainWindow):
 
         # Duration modifier
         duration_status_label = QLabel("Current Modifier:")
-        duration_status_label.setAlignment(Qt.AlignCenter)
+        duration_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         duration_status_label.setStyleSheet("QLabel { font-weight: bold; color: #34495e; }")
         duration_layout.addWidget(duration_status_label)
         self.duration_spinbox = QDoubleSpinBox()
@@ -616,7 +600,7 @@ class _ControlUIWindow(QMainWindow):
         controls_layout.addWidget(duration_group)
         main_layout.addLayout(controls_layout)
 
-    def _apply_qt5_styles(self) -> None:
+    def _apply_qt6_styles(self) -> None:
         """Applies optimized styling to all UI elements managed by this class.
 
         This configured the UI to display properly, assuming the UI window uses the default resolution.
