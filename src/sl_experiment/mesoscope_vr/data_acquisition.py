@@ -573,6 +573,16 @@ class _MesoscopeExperiment:
             message = "Motor Positioning: Complete."
             console.echo(message=message, level=LogLevel.SUCCESS)
 
+            message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
+        # disconnecting.
+        self._zaber_motors.disconnect()
+
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
@@ -667,18 +677,6 @@ class _MesoscopeExperiment:
                 mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                     file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
                 )
-
-        # Optionally moves the motors to their parking positions
-        if move_zaber:
-            message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
-            console.echo(message=message, level=LogLevel.WARNING)
-            input("Enter anything to continue: ")
-
-            self._zaber_motors.park_position()
-
-        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
-        # disconnecting.
-        self._zaber_motors.disconnect()
 
         message = "Zaber motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1342,6 +1340,23 @@ class _BehaviorTraining:
             message = "Motor Positioning: Complete."
             console.echo(message=message, level=LogLevel.SUCCESS)
 
+            # Instructs the user to remove the animal from the VR rig.
+            message = (
+                "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+
+            # Parks and disconnects from all Zaber motors.
+            self._zaber_motors.park_position()
+
+        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
+        # disconnecting.
+        self._zaber_motors.disconnect()
+
+        message = "Zaber motors: Reset."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
         # Notifies the user that the data acquisition is complete.
         console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
@@ -1381,25 +1396,6 @@ class _BehaviorTraining:
             src=self._session_data.raw_data.session_descriptor_path,
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
-
-        # Optionally moves the motors to their parking positions
-        if move_zaber:
-            # Instructs the user to remove the animal from the VR rig.
-            message = (
-                "REMOVE the animal from the VR rig. Failure to do so may DAMAGE the mesoscope and HARM the animal."
-            )
-            console.echo(message=message, level=LogLevel.WARNING)
-            input("Enter anything to continue: ")
-
-            # Parks and disconnects from all Zaber motors.
-            self._zaber_motors.park_position()
-
-        # Disconnects from Zaber motor. This does not change motor positions, but does lock (park) all motors before
-        # disconnecting.
-        self._zaber_motors.disconnect()
-
-        message = "Zaber motors: Reset."
-        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Preprocesses the session data
         preprocess_session_data(session_data=self._session_data)
@@ -2122,7 +2118,9 @@ def run_training_logic(
     # Resets the valve tracker array before proceeding. This allows the suer to use the section above to debug the
     # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
     # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
+    # noinspection PyTypeChecker
     valve_tracker.write_data(index=0, data=0)
+    # noinspection PyTypeChecker
     valve_tracker.write_data(index=1, data=0)
 
     message = f"Initiating lick training procedure..."
