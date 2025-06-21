@@ -1700,24 +1700,45 @@ def lick_training_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
-    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
-    # visualizer = BehaviorVisualizer(
-    #     lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    # )
-
-    # Initializes the runtime control UI
+    # Initializes the runtime control UI. Similar to cameras, HAS to be initialized before the visualizer
     ui = RuntimeControlUI()
 
-    runtime.stop()
-    import sys
+    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
+    visualizer = BehaviorVisualizer(
+        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
+    )
 
-    sys.exit(1)
+    # Final checkpoint
+    message = (
+        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
+        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Configures all system components to support lick training
-    runtime.lick_train_state()
+    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
+    # manually reposition all Zaber motors.
+    while ui.pause_runtime:
+        # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
+        # interest and appear visually smooth to human observers.
+        visualizer.update()
+
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)
+
+        if ui.open_valve:
+            runtime.toggle_valve(True)
+
+        if ui.close_valve:
+            runtime.toggle_valve(False)
+
+    # Ensures the valve is closed before continuing
+    runtime.toggle_valve(False)
 
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
+
+    # Configures all system components to support lick training
+    runtime.lick_train_state()
 
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
@@ -2046,6 +2067,9 @@ def run_training_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
+    # Initializes the runtime control UI. Similar to cameras, HAS to be initialized before the visualizer
+    ui = RuntimeControlUI()
+
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
     visualizer = BehaviorVisualizer(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
@@ -2054,20 +2078,8 @@ def run_training_logic(
     # Updates the threshold lines to use the initial speed and duration values
     visualizer.update_speed_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
 
-    # Initializes the runtime control UI
-    ui = RuntimeControlUI()
-
     message = f"Initiating run training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
-
-    # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
-    # delivered to the animal
-    progress_bar = tqdm(
-        total=round(maximum_water_volume, ndigits=3),
-        desc="Delivered water volume",
-        unit="ml",
-        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
-    )
 
     # Tracks the data necessary to update the training progress bar
     previous_time = 0
@@ -2081,19 +2093,61 @@ def run_training_logic(
     speed_threshold: np.float64 = np.float64(0)
     duration_threshold: np.float64 = np.float64(0)
 
-    # If the runtime is paused, this is used to extend the training runtime to account for the time spent in the
-    # paused state.
-    additional_time = 0
+    # Final checkpoint
+    message = (
+        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
+        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
+    )
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Configures all system components to support run training
-    runtime.run_train_state()
+    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
+    # manually reposition all Zaber motors.
+    while ui.pause_runtime:
+        # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
+        # interest and appear visually smooth to human observers.
+        visualizer.update()
+
+        if ui.reward_signal:
+            runtime.deliver_reward(reward_size=ui.reward_volume)
+
+        if ui.open_valve:
+            runtime.toggle_valve(True)
+
+        if ui.close_valve:
+            runtime.toggle_valve(False)
+
+    # Ensures the valve is closed before continuing
+    runtime.toggle_valve(False)
+
+    # Resets the valve tracker array before proceeding. This allows the suer to use the section above to debug the
+    # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
+    # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
+    valve_tracker.write_data(index=0, data=0)
+    valve_tracker.write_data(index=1, data=0)
 
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
 
+    # Configures all system components to support run training
+    runtime.run_train_state()
+
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
     previous_reward_volume = 0
+
+    # If the runtime is paused, this is used to extend the training runtime to account for the time spent in the
+    # paused state.
+    additional_time = 0
+
+    # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
+    # delivered to the animal
+    progress_bar = tqdm(
+        total=round(maximum_water_volume, ndigits=3),
+        desc="Delivered water volume",
+        unit="ml",
+        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
+    )
+
     runtime_timer.reset()
     speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
     while runtime_timer.elapsed < (training_time + additional_time):
@@ -2437,13 +2491,13 @@ def experiment_logic(
     # putting the animal on the VR rig.
     runtime.start()
 
+    # Initializes the runtime control UI. Has tgo be done before the visualzier
+    ui = RuntimeControlUI()
+
     # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
     visualizer = BehaviorVisualizer(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
     )
-
-    # Initializes the runtime control UI
-    ui = RuntimeControlUI()
 
     # Final checkpoint
     message = (
@@ -2455,6 +2509,9 @@ def experiment_logic(
     # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
     # manually reposition all Zaber motors.
     while ui.pause_runtime:
+
+        visualizer.update()  # Continuously updates the visualizer
+
         if ui.reward_signal:
             runtime.deliver_reward(reward_size=ui.reward_volume)
 

@@ -334,8 +334,14 @@ class RuntimeControlUI:
 
     @property
     def exit_signal(self) -> bool:
-        """Returns True if the user has requested the runtime to gracefully abort."""
-        return bool(self._data_array.read_data(index=1, convert_output=True))
+        """Returns True if the user has requested the runtime to gracefully abort.
+
+        Notes:
+            Each time this property is accessed, the flag is reset to 0.
+        """
+        exit_flag = bool(self._data_array.read_data(index=1, convert_output=True))
+        self._data_array.write_data(index=1, data=np.int32(0))
+        return exit_flag
 
     @property
     def reward_signal(self) -> bool:
@@ -360,7 +366,12 @@ class RuntimeControlUI:
 
     @property
     def pause_runtime(self) -> bool:
-        """Returns True if the user has requested the acquisition system to pause the current runtime."""
+        """Returns True if the user has requested the acquisition system to pause the current runtime.
+
+        Notes:
+            Unlike most other flags,t he state of this flag does NOT change when it is accessed. Instead, the UI flips
+            it between True and False to pause and resume the managed runtime.
+        """
         return bool(self._data_array.read_data(index=5, convert_output=True))
 
     @property
@@ -523,6 +534,9 @@ class _ControlUIWindow(QMainWindow):
         # Volume control on the left
         volume_label = QLabel("Reward volume:")
         volume_label.setObjectName("volumeLabel")
+
+        # Ensures the array is also set to the default value
+        self._data_array.write_data(index=8, data=np.int32(5))
 
         self.volume_spinbox = QDoubleSpinBox()
         self.volume_spinbox.setRange(1, 20)  # Ranges from 1 to 20
