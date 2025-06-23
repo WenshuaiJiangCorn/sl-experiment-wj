@@ -457,22 +457,19 @@ class _MesoscopeExperiment:
         # this is used as a shortcut to prepare the VR system for shutdown.
         self.idle()
 
-        # Stops mesoscope frame acquisition.
-        self._microcontrollers.stop_mesoscope()
-        message = "Terminating experiment runtime..."
-        console.echo(message=message, level=LogLevel.INFO)
+        # To avoid potential bugs due to automatic termination, the runtime now prompts the user to manually terminate
+        # all non-Python components.
+        message = "Manually stop the Mesoscope frame acquisition ('loop' mode) and Unity runtime!"
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
 
         self._timestamp_timer.reset()  # Resets the timestamp timer. It is now co-opted to enforce the shutdown delay
-        message = "Mesoscope frame acquisition stop command: Sent."
-        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Stops all cameras.
         self._cameras.stop()
 
-        # Manually stops hardware modules not stopped by the REST state. This excludes mesoscope frame monitoring, which
-        # is stopped separately after the 5-second delay (see below).
+        # Disables lick monitoring
         self._microcontrollers.disable_lick_monitoring()
-        self._microcontrollers.disable_torque_monitoring()
 
         # Delays for 5 seconds to give mesoscope time to stop acquiring frames. Primarily, this ensures that all
         # mesoscope frames have recorded acquisition timestamps. This implementation times the delay relative to the
@@ -486,10 +483,6 @@ class _MesoscopeExperiment:
 
         # Stops all microcontroller interfaces
         self._microcontrollers.stop()
-
-        # 0-state is used to mark the start and end of the experiment runtime
-        self.change_vr_state(new_state=0)
-        self.change_experiment_state(new_state=0)
 
         # Stops the data logger instance
         self._logger.stop()
@@ -1043,8 +1036,8 @@ class _MesoscopeExperiment:
 
         # If position changed, sends the change to Unity
         if position_delta != 0:
-            # Updates locally stored value using the cached delta
-            self._previous_position += position_delta
+            # Overwrites the cached position with the loaded data
+            self._previous_position = current_position
 
             # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
             # byte-string.
@@ -2583,7 +2576,7 @@ def experiment_logic(
     message = f"Initiating Mesoscope experiment..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # To avoid photobleaching during potentially lengthy preparation stage, only start the Mesoscope once the
+    # To avoid photobleaching during potentially lengthy preparation stage, only starts the Mesoscope once the
     # experimenter unpauses the runtime.
     runtime.start_mesoscope()
     runtime.change_vr_state(new_state=0)
