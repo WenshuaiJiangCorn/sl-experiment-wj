@@ -167,7 +167,7 @@ class EncoderInterface(ModuleInterface):
         # Also updates the current absolute position of the animal (given relative to experiment onset position 0)
         absolute_position = self._distance_tracker.read_data(index=1, convert_output=False)
         absolute_position += signed_motion
-        self._distance_tracker.write_data(index=1, data=distance)
+        self._distance_tracker.write_data(index=1, data=absolute_position)
 
         # If the class is in the debug mode, prints the motion data via console
         if self._debug:
