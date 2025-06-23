@@ -466,12 +466,6 @@ class _MesoscopeExperiment:
         message = "Mesoscope frame acquisition stop command: Sent."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # If the user prefers using manual stop triggers, instructs the user to stop the mesoscope before continuing
-        # with the shutdown procedure.
-        message = "If using manual stop triggers, make sure that the mesoscope acquisition has been stopped!"
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
         # Stops all cameras.
         self._cameras.stop()
 
@@ -1064,6 +1058,7 @@ class _MesoscopeExperiment:
         # Unity.
         lick_count = self._microcontrollers.lick_tracker.read_data(index=0, convert_output=True)
         if lick_count > self._previous_licks:
+            self._previous_licks = lick_count  # Updates the local lick counter
             self._unity.send_data(topic=self._microcontrollers.lick.mqtt_topic, payload=None)
 
         # If Unity sends updates to the Mesoscope-VR system, receives and processes the data. Note, this will discard
