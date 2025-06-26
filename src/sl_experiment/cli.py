@@ -387,19 +387,7 @@ def run_training(
     required=True,
     help="The weight of the animal, in grams, at the beginning of the experiment session.",
 )
-@click.option(
-    "-g",
-    "--guided",
-    is_flag=True,
-    show_default=True,
-    default=False,
-    help=(
-        "Determines whether the experiment task should run in the guided mode. When set to True, the animal receives "
-        "water rewards from just entering the designated reward zone(s). When set to False, the animal receives water "
-        "rewards only if it licks while inside the reward zone(s)."
-    ),
-)
-def run_experiment(user: str, project: str, experiment: str, animal: str, animal_weight: float, guided: bool) -> None:
+def run_experiment(user: str, project: str, experiment: str, animal: str, animal_weight: float) -> None:
     """Runs the requested experiment session for the specified animal and project combination.
 
     Experiment runtimes are carried out after the lick and run training sessions Unlike training session commands, this
@@ -413,8 +401,7 @@ def run_experiment(user: str, project: str, experiment: str, animal: str, animal
         project_name=project,
         experiment_name=experiment,
         animal_id=animal,
-        animal_weight=animal_weight,
-        guided=guided,
+        animal_weight=animal_weight
     )
 
 

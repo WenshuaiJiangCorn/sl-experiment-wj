@@ -70,11 +70,16 @@ class _VRPCPersistentData:
     """Stores the path to the session_descriptor.yaml file generated at the end of the previous session runtime. This 
     is used to automatically restore session runtime parameters used during the previous session. Primarily, this is 
     used during animal training."""
+    window_screenshot_path: Path = field(default_factory=Path, init=False)
+    """Stores the path to the window_screenshot.png file. This is a screenshot of the red-dot alignment, the 
+    ScanImage acquisition parameters, and the state of the imaged ROIs from the previous session. The screenshots are 
+    used to restore the imaging parameters to the same state as used during the previous session."""
 
     def __post_init__(self) -> None:
         # Resolves paths that can be derived from the root path.
         self.zaber_positions_path = self.persistent_data_path.joinpath("zaber_positions.yaml")
         self.mesoscope_positions_path = self.persistent_data_path.joinpath("mesoscope_positions.yaml")
+        self.window_screenshot_path = self.persistent_data_path.joinpath("window_screenshot.png")
 
         # Resolves the session descriptor path based on the session type.
         if self.session_type == "lick training":
@@ -407,6 +412,19 @@ class RuntimeControlUI:
         """
         return int(self._data_array.read_data(index=8, convert_output=True))
 
+    @property
+    def enable_guidance(self) -> bool:
+        """Returns True if the user has enabled lick guidance mode.
+
+        Querying this property dynamically configures the VR task to either require the animal to lick to receive
+        rewards or to automatically dispense water as the animal enters the reward zone.
+
+        Notes:
+            Unlike most other flags, the state of this flag does NOT change when it is accessed. Instead, the UI flips
+            it between True and False to enable and disable guidance.
+        """
+        return bool(self._data_array.read_data(index=9, convert_output=True))
+
 
 class _ControlUIWindow(QMainWindow):
     """Generates, renders, and maintains the main Mesoscope-VR acquisition system Graphical User Interface Qt5
@@ -415,6 +433,14 @@ class _ControlUIWindow(QMainWindow):
     This class specializes the Qt5 GUI elements and statically defines the GUI element layout used by the main interface
     window application. The interface enables sl-experiment users to control certain runtime parameters in real time via
     an interactive GUI.
+
+    Attributes:
+        _data_array: A reference to the shared memory array used for communication between the main runtime thread
+            and the Qt6 GUI.
+        _is_paused: A flag indicating whether the runtime is paused or not.
+        _speed_modifier: The current user-defined modifier to apply to the running speed threshold.
+        _duration_modifier: The current user-defined modifier to apply to the running epoch duration threshold.
+        _guidance_enabled: A flag indicating whether lick guidance mode is enabled or not.
     """
 
     def __init__(self, data_array: SharedMemoryArray):
@@ -425,12 +451,13 @@ class _ControlUIWindow(QMainWindow):
         self._is_paused: bool = True
         self._speed_modifier: int = 0
         self._duration_modifier: int = 0
+        self._guidance_enabled: bool = False
 
         # Configures the window title
         self.setWindowTitle("Mesoscope-VR Control Panel")
 
         # Uses fixed size
-        self.setFixedSize(450, 500)
+        self.setFixedSize(450, 550)
 
         # Sets up the interactive UI
         self._setup_ui()
@@ -471,8 +498,16 @@ class _ControlUIWindow(QMainWindow):
         self.pause_btn.clicked.connect(self._toggle_pause)
         self.pause_btn.setObjectName("resumeButton")
 
+        # Lick Guidance
+        self._data_array.write_data(index=9, data=np.int32(0))
+        self.guidance_btn = QPushButton("🎯 Enable Guidance")
+        self.guidance_btn.setToolTip("Toggles lick guidance mode on or off.")
+        # noinspection PyUnresolvedReferences
+        self.guidance_btn.clicked.connect(self._toggle_guidance)
+        self.guidance_btn.setObjectName("guidanceButton")
+
         # Configures the buttons to expand when UI is resized, but use a fixed height of 35 points
-        for btn in [self.exit_btn, self.pause_btn]:
+        for btn in [self.exit_btn, self.pause_btn, self.guidance_btn]:
             btn.setMinimumHeight(35)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             runtime_control_layout.addWidget(btn)
@@ -899,6 +934,30 @@ class _ControlUIWindow(QMainWindow):
                         width: 8px;
                         border-radius: 4px;
                     }}
+                    
+                    QPushButton#guidanceButton {{
+                    background-color: #9b59b6;
+                    color: white;
+                    border-color: #8e44ad;
+                    font-weight: bold;
+                    }}
+                    
+                    QPushButton#guidanceButton:hover {{
+                        background-color: #8e44ad;
+                        border-color: #7d3c98;
+                    }}
+                    
+                    QPushButton#guidanceDisableButton {{
+                        background-color: #95a5a6;
+                        color: white;
+                        border-color: #7f8c8d;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#guidanceDisableButton:hover {{
+                        background-color: #7f8c8d;
+                        border-color: #6c7b7d;
+                    }}
                 """)
 
     def _setup_monitoring(self) -> None:
@@ -1024,3 +1083,20 @@ class _ControlUIWindow(QMainWindow):
         """Updates the duration modifier in the data array in response to user modifying the GUI field value."""
         self._duration_modifier = int(self.duration_spinbox.value())
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
+
+    def _toggle_guidance(self) -> None:
+        """Toggles guidance mode between enabled and disabled states."""
+        self._guidance_enabled = not self._guidance_enabled
+        if self._guidance_enabled:
+            self._data_array.write_data(index=9, data=np.int32(1))
+            self.guidance_btn.setText("🚫 Disable Guidance")
+            self.guidance_btn.setObjectName("guidanceDisableButton")
+        else:
+            self._data_array.write_data(index=9, data=np.int32(0))
+            self.guidance_btn.setText("🎯 Enable Guidance")
+            self.guidance_btn.setObjectName("guidanceButton")
+
+        # Refreshes styles after object name change
+        self.guidance_btn.style().unpolish(self.guidance_btn)  # type: ignore
+        self.guidance_btn.style().polish(self.guidance_btn)  # type: ignore
+        self.guidance_btn.update()  # Forces update to apply new styles

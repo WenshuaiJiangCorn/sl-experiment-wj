@@ -60,7 +60,8 @@ dependencies = [
     "pyqt6==6.9.1",
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
-    "sl-shared-assets==1.2.0rc3",
+    "natsort==8.4.0",
+    "sl-shared-assets==1.2.0rc4",
 ]
 
 [project.urls]
@@ -87,6 +88,7 @@ condarun = [
     "appdirs==1.4.4",
     "importlib_metadata==8.7.0",
     "pytz==2025.2",
+    "natsort==8.4.0",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).

@@ -13,6 +13,7 @@ from datetime import datetime
 from functools import partial
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from natsort import natsorted
 
 from tqdm import tqdm
 import numpy as np
@@ -77,26 +78,6 @@ def _delete_directory(directory_path: Path) -> None:
             if attempt == max_attempts - 1:
                 break  # Breaks after 5 attempts
             time.sleep(0.5)  # For each failed attempt, sleeps for 500 ms
-
-
-def _get_stack_number(tiff_path: Path) -> int | None:
-    """A helper function that determines the position of the input tiff stack in the overall sequence of tiff stacks
-    acquired by the mesoscope during the acquisition cycle.
-
-    This is used to sort all TIFF stacks in a directory before recompressing them with LERC scheme. Like
-    other helpers, this helper is also used to identify and remove non-mesoscope TIFFs from the dataset.
-
-    Args:
-        tiff_path: The path to the TIFF file to evaluate.
-
-    Returns:
-        The position of the stack in the overall stack sequence acquired by the mesoscope during runtime or None to
-        indicate that the input file is not a valid mesoscope TIFF stack.
-    """
-    try:
-        return int(tiff_path.stem.split("_")[-1])  # ScanImage appends _acquisition#_file# to files, we use file# here.
-    except (ValueError, IndexError):
-        return None  # This is used to filter non-ScanImage TIFFS
 
 
 def _check_stack_size(file: Path) -> int:
@@ -714,9 +695,10 @@ def _preprocess_mesoscope_directory(
     # Finds all TIFF files in the input directory (non-recursive).
     tiff_files = list(image_directory.glob("*.tif")) + list(image_directory.glob("*.tiff"))
 
-    # Sorts files with a valid naming pattern and filters out (removes) files that are not ScanImage TIFF stacks.
-    tiff_files = [f for f in tiff_files if _get_stack_number(f) is not None]
-    tiff_files.sort(key=_get_stack_number)  # type: ignore
+    # Sorts files naturally. Since all files use the _acquisition#_stack# format, this procedure should naturally
+    # sort the data in the order of acquisition. This is used to serialize multiple acquisitions recorded as part of the
+    # session into one continuous frame stack.
+    tiff_files = natsorted(tiff_files)
 
     # Goes over each stack and, for each, determines the position of the first frame from the stack in the overall
     # sequence of frames acquired by all stacks. This is used to map frames stored in multiple stacks to a single
@@ -1293,4 +1275,52 @@ def purge_redundant_data() -> None:
         _delete_directory(directory_path=candidate)
 
     message = "Redundant data purging: Complete"
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+
+def purge_failed_session(session_data: SessionData) -> None:
+    """ Removes all data and directories associated with the input session.
+
+    This function is extremely dangerous and should be used with caution. It is designed to remove all data from failed
+    or no longer necessary sessions. Never use this function on sessions that contain valid scientific data.
+
+    Args:
+        session_data: The SessionData instance for the session whose data needs to be removed.
+    """
+    message = (
+        f"Preparing to remove all data for session {session_data.session_name} from animal "
+        f"{session_data.animal_id}. Warning, this process is NOT reversible and removes ALL session data. Are you sure "
+        f"you want to proceed?"
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+
+    # Locks and waits for user response
+    while True:
+        answer = input("Enter 'yes' (to proceed) or 'no' (to abort): ")
+
+        # Continues with the deletion
+        if answer.lower() == "yes":
+            break
+
+        # Aborts without deleting
+        elif answer.lower() == "no":
+            message = f"Session {session_data.session_name} data purging: Aborted"
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            return
+
+    # Uses MesoscopeData to query the paths to all known session data directories. This includes the directories on the
+    # NAS and the BioHPC server.
+    mesoscope_data = MesoscopeData(session_data)
+    deletion_candidates = [
+        mesoscope_data.destinations.nas_raw_data_path,
+        mesoscope_data.destinations.server_raw_data_path,
+        mesoscope_data.destinations.server_processed_data_path,
+        mesoscope_data.scanimagepc_data.session_specific_path,
+    ]
+
+    # Removes all session-specific data directories from all destinations
+    for candidate in tqdm(deletion_candidates, desc="Deleting session directories", unit="directory"):
+        _delete_directory(directory_path=candidate)
+
+    message = "Session data purging: Complete"
     console.echo(message=message, level=LogLevel.SUCCESS)
