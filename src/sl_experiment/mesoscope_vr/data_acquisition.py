@@ -35,7 +35,7 @@ from .tools import MesoscopeData, RuntimeControlUI, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
 from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, write_version_data
-from .data_preprocessing import preprocess_session_data, purge_failed_session
+from .data_preprocessing import purge_failed_session, preprocess_session_data
 
 
 class _MesoscopeExperiment:
@@ -53,10 +53,8 @@ class _MesoscopeExperiment:
 
     Args:
         experiment_configuration: An initialized MesoscopeExperimentConfiguration instance that specifies experiment
-            configuration and runtime sequence.
-        session_data: An initialized SessionData instance used to control the flow of data during acquisition and
-            preprocessing. Each instance is initialized for the specific project, animal, and session combination for
-            which the data is acquired.
+            configuration and state sequence.
+        session_data: An initialized SessionData instance used to control the flow of data during acquisition.
         session_descriptor: A partially initialized MesoscopeExperimentDescriptor instance. This instance is used to
             store session-specific information in a human-readable format.
 
@@ -111,12 +109,12 @@ class _MesoscopeExperiment:
 
         # Saves SessionData to class attribute and uses it to initialize the MesoscopeData instance. MesoscopeData works
         # similar to SessionData, but only stores the paths used by the Mesoscope-VR system while managing the session's
-        # data acquisition and preprocessing. These paths only exist on the VRPC filesystem.
+        # data acquisition. These paths only exist on the VRPC filesystem.
         self._session_data: SessionData = session_data
         self._mesoscope_data: MesoscopeData = MesoscopeData(session_data)
 
         # Defines other flags used during runtime:
-        # VR and Experiment states are initialized 0 by default. This indicates pre-runtime initialization state.
+        # VR and Experiment states are initialized to 0 (idle state) by default.
         self._vr_state: int = 0
         self._experiment_state: int = 0
         self._source_id: np.uint8 = np.uint8(1)  # Reserves logging source ID code 1 for this class
@@ -143,7 +141,11 @@ class _MesoscopeExperiment:
 
         # Instantiates an MQTTCommunication instance to directly communicate with Unity. Currently, ALL Unity
         # communication is carried out through this instance.
-        monitored_topics = ("CueSequence/", self._microcontrollers.valve.mqtt_topic)
+        monitored_topics = (
+            "CueSequence/",  # Used as part of Unity (re) initialization
+            "Gimbl/Session/Stop",  # Used to detect Unity shutdown events
+            self._microcontrollers.valve.mqtt_topic  # Allows Unity to operate the valve
+        )
         self._unity: MQTTCommunication = MQTTCommunication(monitored_topics=monitored_topics)
 
         # Initializes the binding class for all VideoSystems.
@@ -2562,9 +2564,7 @@ def experiment_logic(
 
     # Generates the session descriptor class
     descriptor = MesoscopeExperimentDescriptor(
-        experimenter=experimenter,
-        mouse_weight_g=animal_weight,
-        dispensed_water_volume_ml=0.0
+        experimenter=experimenter, mouse_weight_g=animal_weight, dispensed_water_volume_ml=0.0
     )
 
     # Initializes the main runtime interface class.

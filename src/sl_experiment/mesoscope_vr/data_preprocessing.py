@@ -13,10 +13,10 @@ from datetime import datetime
 from functools import partial
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from natsort import natsorted
 
 from tqdm import tqdm
 import numpy as np
+from natsort import natsorted
 import tifffile
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
@@ -1279,7 +1279,7 @@ def purge_redundant_data() -> None:
 
 
 def purge_failed_session(session_data: SessionData) -> None:
-    """ Removes all data and directories associated with the input session.
+    """Removes all data and directories associated with the input session.
 
     This function is extremely dangerous and should be used with caution. It is designed to remove all data from failed
     or no longer necessary sessions. Never use this function on sessions that contain valid scientific data.

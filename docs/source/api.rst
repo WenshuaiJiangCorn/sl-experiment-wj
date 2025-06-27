@@ -17,6 +17,18 @@ Command Line Interfaces
    :prog: sl-devices
    :nested: full
 
+.. click:: sl_experiment.cli:generate_system_configuration_file
+   :prog: sl-create-system-config
+   :nested: full
+
+.. click:: sl_experiment.cli:generate_project_configuration_file
+   :prog: sl-create-project
+   :nested: full
+
+.. click:: sl_experiment.cli:generate_experiment_configuration_file
+   :prog: sl-create-experiment
+   :nested: full
+
 .. click:: sl_experiment.cli:maintain_acquisition_system
    :prog: sl-maintain
    :nested: full
