@@ -1076,18 +1076,18 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     # verification
     system_configuration = get_system_configuration()
 
-    # The paths below map the same directories, but relative to different roots. 'remote' paths are relative to the
-    # BioHPC server root, providing the paths to the target directories the server itself would use. 'local' paths point
-    # to the same directories as 'remote' paths do, but relative to the VRPC root. These directories are mounted on the
-    # VRPC filesystem via the SMB protocol.
-    remote_processed_directory = system_configuration.paths.server_processed_data_root
-    remote_job_working_directory = remote_processed_directory.joinpath("temp")  # Shared temporary directory
-
     # Resolves the path to the server access credentials file.
     server_credentials = system_configuration.paths.server_credentials_path
 
     # Establishes bidirectional communication with the server via the SSH protocol.
     server = Server(credentials_path=server_credentials)
+
+    # The paths below map the same directories, but relative to different roots. 'remote' paths are relative to the
+    # BioHPC server root, providing the paths to the target directories the server itself would use. 'local' paths point
+    # to the same directories as 'remote' paths do, but relative to the VRPC root. These directories are mounted on the
+    # VRPC filesystem via the SMB protocol.
+    remote_processed_directory = Path(server.processed_data_root)
+    remote_job_working_directory = remote_processed_directory.joinpath("temp")  # Shared temporary directory
 
     # Instantiates the Job object for the integrity verification job.
     job = Job(
@@ -1103,7 +1103,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     # Instructs the job to verify the integrity of the session data on the server and to create the processed data
     # hierarchy for the session.
-    remote_session_directory = system_configuration.paths.server_raw_data_root.joinpath(
+    remote_session_directory = Path(server.raw_data_root).joinpath(
         session_data.project_name, session_data.animal_id, session_data.session_name
     )
     job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory}")

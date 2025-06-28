@@ -39,7 +39,7 @@ from .data_preprocessing import purge_failed_session, preprocess_session_data
 
 
 class _MesoscopeExperiment:
-    """The base class for all mesoscope experiment runtimes.
+    """The base class for all Mesoscope-VR experiment runtimes.
 
     This class provides methods for conducting experiments using the Mesoscope-VR system. It abstracts most
     low-level interactions with the VR system and the mesoscope via a simple high-level state API.
@@ -65,7 +65,7 @@ class _MesoscopeExperiment:
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
-        _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
+        vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _experiment_state: Stores the user-defined experiment state. Experiment states are defined by the user and
             are expected to have unique meaning for each project and, potentially, experiment.
@@ -126,7 +126,7 @@ class _MesoscopeExperiment:
 
         # Defines other flags used during runtime:
         # VR and Experiment states are initialized to 0 (idle state) by default.
-        self._vr_state: int = 0
+        self.vr_state: int = 0
         self._experiment_state: int = 0
         self._source_id: np.uint8 = np.uint8(1)  # Reserves logging source ID code 1 for this class
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
@@ -163,7 +163,7 @@ class _MesoscopeExperiment:
         monitored_topics = (
             self._cue_sequence_topic,  # Used as part of Unity (re) initialization
             self._unity_termination_topic,  # Used to detect Unity shutdown events
-            self._microcontrollers.valve.mqtt_topic  # Allows Unity to operate the valve
+            self._microcontrollers.valve.mqtt_topic,  # Allows Unity to operate the valve
         )
         self._unity: MQTTCommunication = MQTTCommunication(monitored_topics=monitored_topics)
 
@@ -827,6 +827,15 @@ class _MesoscopeExperiment:
         """
         self._microcontrollers.deliver_reward(volume=reward_size)
 
+    def simulate_reward(self) -> None:
+        """Uses the buzzer controlled by the valve module to deliver an audible tone without delivering any water.
+
+        This method is used when the animal refuses to consume water rewards. The tone notifies the animal that it
+        performs the experiment as expected, while simultaneously minimizing water reward wasting. Primarily, this is
+        helpful for experiments that run in the guided mode.
+        """
+        self._microcontrollers.simulate_reward()
+
     def configure_reward_parameters(self, reward_size: float = 5.0, tone_duration: int = 300) -> None:
         """Configures all future water rewards to use the provided reward size (volume) and tone duration parameters.
 
@@ -961,7 +970,6 @@ class _MesoscopeExperiment:
 
                 # If received data is a termination message, breaks the loop
                 if topic == self._unity_termination_topic:
-
                     # Disables the VR screens before runtime starts.
                     self._microcontrollers.disable_vr_screens()
                     return
@@ -985,6 +993,28 @@ class _MesoscopeExperiment:
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
         timeout_timer = PrecisionTimer("s")
 
+        # Ensures that the mesoscope is not already acquiring frames. This is crucial to properly reset the mesoscope
+        # data folder to remove any TIFFs acquired during motion estimator generation.
+        message = "Ensuring that the mesoscope is not currently acquiring frames..."
+        console.echo(message=message, level=LogLevel.INFO)
+        previous_frame_count = self._microcontrollers.mesoscope_frame_count
+        while True:
+            # Dalys for 2 seconds. Mesoscope acquires frames at 10 Hz, so if there are no incoming triggers for that
+            # period of time, it is safe to assume that the acquisition has stopped.
+            timeout_timer.delay_noblock(delay=2)
+            if previous_frame_count == self._microcontrollers.mesoscope_frame_count:
+                break  # Breaks the loop
+            else:
+                previous_frame_count = self._microcontrollers.mesoscope_frame_count
+
+        # Before starting the acquisition, clears any existing TIFF / TIF files. This solves the problem of the motion
+        # estimator generation pipeline generating an unexpected TIFF stack that sits in the output folder and needs to
+        # be cleared before processing session mesoscope data.
+        for pattern in ["*.tif", "*.tiff"]:
+            for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
+                file.unlink(missing_ok=True)
+
+        # Attempts to start the new mesoscope acquisition
         status = False
         outcome = ""
         # The procedure will be repeated until it succeeds or the user manually aborts the loop
@@ -1041,7 +1071,7 @@ class _MesoscopeExperiment:
         Args:
             new_state: The byte-code for the newly activated VR state.
         """
-        self._vr_state = new_state  # Updates the VR state
+        self.vr_state = new_state  # Updates the VR state
 
         # Logs the VR state update. Uses header-code 1 to indicate that the logged value is the VR state-code.
         log_package = LogPackage(
@@ -1169,7 +1199,6 @@ class _MesoscopeExperiment:
             # If Unity runtime (game mode) terminates, Unity sends a message to the termination topic. In turn, the
             # runtime uses this as an indicator to reset the task logic.
             if topic == self._unity_termination_topic:
-
                 # Automatically transitions into the 'idle' VR AND experiment state. Note, the expectation here is that
                 # the runtime logic always checks the state of 'unity_terminated' tracker once this method returns and
                 # applies the global runtime 'pause' state. Transitioning into 'idle' mode is designed to rapidly cut
@@ -1180,8 +1209,7 @@ class _MesoscopeExperiment:
                 # stream, there should be minimal deviation of the read position and the physical position of the
                 # animal.
                 traveled_distance: np.float64 = self._microcontrollers.distance_tracker.read_data(
-                    index=1,
-                    convert_output=False
+                    index=1, convert_output=False
                 )
                 # Converts float64 to a byte array to make it compatible with the log.
                 distance_bytes = traveled_distance.view(np.uint8)
@@ -1203,7 +1231,7 @@ class _MesoscopeExperiment:
 
 
 class _BehaviorTraining:
-    """The base class for all behavior training runtimes.
+    """The base class for all Mesoscope-VR behavior training runtimes.
 
     This class provides methods for running the lick and run training sessions using a subset of the Mesoscope-VR
     system. It abstracts most low-level interactions with the VR system and the mesoscope via a simple
@@ -1222,6 +1250,13 @@ class _BehaviorTraining:
 
     Attributes:
         _started: Tracks whether the VR system and training runtime are currently running.
+        _source_id: Stores the unique identifier code for this class instance. The identifier is used to mark log
+            entries made by this class instance and has to be unique across all sources that log data at the same time,
+            such as MicroControllerInterfaces and VideoSystems.
+        _timestamp_timer: A PrecisionTimer instance used to timestamp log entries generated by the class instance.
+        _hardware_state_saved: Tracks whether the instance has cached the HardwareState instance to disk. Since this
+            is done as part of configuring system runtime state, this tracker is used to limit the caching to only
+            happen once per each runtime.
         descriptor: Stores the session descriptor instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
@@ -1241,6 +1276,10 @@ class _BehaviorTraining:
     ) -> None:
         # Creates the _started flag first to avoid leaks if the initialization method fails.
         self._started: bool = False
+
+        self._source_id: np.uint8 = np.uint8(1)  # Reserves logging source ID code 1 for this class
+        self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
+        self._hardware_state_saved: bool = False
 
         # Caches SessionDescriptor instance to class attribute.
         self.descriptor: LickTrainingDescriptor | RunTrainingDescriptor = session_descriptor
@@ -1333,13 +1372,28 @@ class _BehaviorTraining:
 
         # Starts the data logger
         self._logger.start()
+
+        # Generates and logs the onset timestamp for the VR system as a whole. The MesoscopeExperiment class logs
+        # changes to VR and Experiment state during runtime, so it needs to have the onset stamp, just like all other
+        # classes that generate data logs.
+
+        # Constructs the timezone-aware stamp using UTC time. This creates a reference point for all later delta time
+        # readouts. The time is returned as an array of bytes.
+        onset: NDArray[np.uint8] = get_timestamp(as_bytes=True)  # type: ignore
+        self._timestamp_timer.reset()  # Immediately resets the timer to make it as close as possible to the onset time
+
+        # Logs the onset timestamp. All further timestamps will be treated as integer time deltas (in microseconds)
+        # relative to the onset timestamp. Note, ID of 1 is used to mark the main experiment system.
+        package = LogPackage(
+            source_id=self._source_id, time_stamp=np.uint64(0), serialized_data=onset
+        )  # Packages the id, timestamp, and data.
+        self._logger.input_queue.put(package)
+
         message = "DataLogger: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Starts the face camera. This starts frame acquisition and displays acquired frames to the user. However,
-        # frame saving is disabled at this time. Body cameras are also disabled. This is intentional, as at this point
-        # we want to minimize the number of active processes. This is helpful if this method is called while the
-        # previous session is still running its data preprocessing pipeline and needs as many free cores as possible.
+        # frame saving is disabled at this time. Body cameras are also disabled. This is intentional.
         self._cameras.start_face_camera()
 
         # Determines whether to carry out the Zaber motor positioning sequence.
@@ -1461,11 +1515,8 @@ class _BehaviorTraining:
         # Stops all cameras.
         self._cameras.stop()
 
-        # Manually stops all hardware modules before shutting down the microcontrollers
-        self._microcontrollers.enable_break()
-        self._microcontrollers.disable_lick_monitoring()
-        self._microcontrollers.disable_torque_monitoring()
-        self._microcontrollers.disable_encoder_monitoring()
+        # Switches the system into the idle state before shutting down
+        self.idle()
 
         # Stops all microcontroller interfaces
         self._microcontrollers.stop()
@@ -1498,6 +1549,43 @@ class _BehaviorTraining:
 
         message = "Zaber motor positions: Saved."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+        # before processing so that the notes are properly transferred to the NAS and server.
+        message = (
+            f"Open the session descriptor file stored in session's raw_data folder and update it with the notes taken "
+            f"during runtime."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+        input("Enter anything to continue: ")
+
+        # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
+        descriptor: LickTrainingDescriptor | RunTrainingDescriptor = self.descriptor.from_yaml(  # type: ignore
+            file_path=Path(self._session_data.raw_data.session_descriptor_path)
+        )
+        while "Replace this with your notes." in descriptor.experimenter_notes:
+            message = (
+                "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
+                "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
+                "replace the default text under the 'experimenter_notes' field with the notes taken during the "
+                "experiment. Make sure to save the changes to the file by using 'CTRL+S' combination."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
+
+            # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
+            descriptor = self.descriptor.from_yaml(  # type: ignore
+                file_path=self._session_data.raw_data.session_descriptor_path
+            )
+
+        # If the descriptor has passed the verification, backs it up to the animal's persistent directory. This is a
+        # feature primarily used during training to restore the training parameters between training sessions of the
+        # same type. However, the MesoscopeData resolves the paths to the persistent descriptor files in a way that
+        # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
+        sh.copy2(
+            src=self._session_data.raw_data.session_descriptor_path,
+            dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
+        )
 
         # Determines whether to carry out the Zaber motor shutdown sequence.
         message = (
@@ -1546,58 +1634,40 @@ class _BehaviorTraining:
         message = "Zaber motors: Reset."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Notifies the user that the data acquisition is complete.
-        console.echo(message="Data acquisition: Complete.", level=LogLevel.SUCCESS)
+        # Notifies the user that the acquisition is complete.
+        console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
-        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
-        # before processing so that the notes are properly transferred to the NAS and server.
+        # Determines whether to carry out data preprocessing or purging.
         message = (
-            f"Open the session descriptor file stored in session's raw_data folder and update it with the notes taken "
-            f"during runtime."
+            f"Do you want to carry out data preprocessing? CRITICAL! Only enter 'no' if you want to REMOVE the session "
+            f"data. All valid data REQUIRES preprocessing to ensure safe storage."
         )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
+        console.echo(message=message, level=LogLevel.WARNING)
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
 
-        # Verifies and blocks in-place until the user has updated the session descriptor file with experimenter notes.
-        descriptor: LickTrainingDescriptor | RunTrainingDescriptor = self.descriptor.from_yaml(  # type: ignore
-            file_path=Path(self._session_data.raw_data.session_descriptor_path)
-        )
-        while "Replace this with your notes." in descriptor.experimenter_notes:
-            message = (
-                "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
-                "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
-                "replace the default text under the 'experimenter_notes' field with the notes taken during the "
-                "experiment. Make sure to save the changes to the file by using 'CTRL+S' combination."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            input("Enter anything to continue: ")
+            # Default case: preprocesses the data
+            if answer.lower() == "yes":
+                preprocess_session_data(session_data=self._session_data)
+                break
 
-            # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            descriptor = self.descriptor.from_yaml(  # type: ignore
-                file_path=self._session_data.raw_data.session_descriptor_path
-            )
-
-        # If the descriptor has passed the verification, backs it up to the animal's persistent directory. This is a
-        # feature primarily used during training to restore the training parameters between training sessions of the
-        # same type. However, the MesoscopeData resolves the paths to the persistent descriptor files in a way that
-        # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
-        sh.copy2(
-            src=self._session_data.raw_data.session_descriptor_path,
-            dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
-        )
-
-        # Preprocesses the session data
-        preprocess_session_data(session_data=self._session_data)
+            # Exclusively for failed runtimes: removes all session data from all destinations.
+            elif answer.lower() == "no":
+                purge_failed_session(session_data=self._session_data)
+                break
 
         message = "Behavior training runtime: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def lick_train_state(self) -> None:
+    def lick_train(self) -> None:
         """Configures the Mesoscope-VR system for running the lick training.
 
         In this state, the break is engaged to prevent the mouse from moving the wheel. The encoder module is
         disabled, and the torque sensor is enabled. The VR screens are switched off, cutting off light emission.
         The lick sensor monitoring is on to record animal licking data.
+
+        Notes:
+            Calling this method automatically switches the 'experiment state' to 255 to indicate active runtime.
         """
 
         message = "Lick training mesoscope-vr state: Applied."
@@ -1618,25 +1688,36 @@ class _BehaviorTraining:
         # Initiates lick monitoring
         self._microcontrollers.enable_lick_monitoring()
 
+        # Lick training uses VR code 1 and experiment code 255
+        self._change_vr_state(1)
+        self._change_experiment_state(255)
+
         # Generates a snapshot of the Mesoscope-VR hardware state. In turn, this data is used to parse the .npz log
         # files during processing. Note, lick training does not use the encoder and run training does not use the torque
         # sensor.
-        hardware_state = MesoscopeHardwareState(
-            torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-            lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-            valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-            valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-        )
-        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
-        message = "Hardware state snapshot: Generated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        if not self._hardware_state_saved:
+            hardware_state = MesoscopeHardwareState(
+                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+            )
+            hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
+            message = "Hardware state snapshot: Generated."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def run_train_state(self) -> None:
+            # Prevents running this section again
+            self._hardware_state_saved = True
+
+    def run_train(self) -> None:
         """Configures the Mesoscope-VR system for running the run training.
 
         In this state, the break is disengaged, allowing the mouse to run on the wheel. The encoder module is
         enabled, and the torque sensor is disabled. The VR screens are switched off, cutting off light emission.
         The lick sensor monitoring is on to record animal licking data.
+
+        Notes:
+            Calling this method automatically switches the 'experiment state' to 255 to indicate active runtime.
         """
 
         message = "Run training mesoscope-vr state: Applied."
@@ -1657,18 +1738,90 @@ class _BehaviorTraining:
         # Initiates lick monitoring
         self._microcontrollers.enable_lick_monitoring()
 
+        # Run training uses VR code 2 and experiment code 255
+        self._change_vr_state(2)
+        self._change_experiment_state(255)
+
         # Generates a snapshot of the Mesoscope-VR hardware state. In turn, this data is used to parse the .npz log
         # files during processing. Note, lick training does not use the encoder and run training does not use the torque
         # sensor.
-        hardware_state = MesoscopeHardwareState(
-            cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
-            lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-            valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-            valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+        if not self._hardware_state_saved:
+            hardware_state = MesoscopeHardwareState(
+                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+            )
+            hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
+            message = "Hardware state snapshot: Generated."
+            console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Prevents running this section again
+        self._hardware_state_saved = True
+
+    def idle(self) -> None:
+        """Switches the Mesoscope-VR system to the idle state.
+
+        In the idle state, the break is engaged to prevent the animal from moving the wheel and sensor monitoring is
+        disabled. This state is designed to be used exclusively during 'pause' periods to prevent generating aberrant
+        data.
+
+        Notes:
+            When this method is called, it automatically switches the ongoing 'experiment state' to 0 to indicate the
+            pause epoch.
+
+            Idle Mesoscope-VR state is hardcoded as '0'.
+        """
+
+        # Ensures VR screens are turned OFF
+        self._microcontrollers.disable_vr_screens()
+
+        # Engages the break to prevent the mouse from moving the wheel
+        self._microcontrollers.enable_break()
+
+        # Disables all sensor monitoring
+        self._microcontrollers.disable_encoder_monitoring()
+        self._microcontrollers.disable_torque_monitoring()
+        self._microcontrollers.disable_lick_monitoring()
+
+        # Switches VR and Experiment states to 0
+        self._change_vr_state(0)
+        self._change_experiment_state(0)
+
+    def _change_vr_state(self, new_state: int) -> None:
+        """Updates and logs the new Mesoscope-VR state.
+
+        This method is used internally to timestamp and log VR state (stage) changes, such as transitioning between
+        the paused and the training states.
+
+        Args:
+            new_state: The byte-code for the newly activated VR state.
+        """
+        # Logs the VR state update. Uses header-code 1 to indicate that the logged value is the VR state-code.
+        log_package = LogPackage(
+            source_id=self._source_id,
+            time_stamp=np.uint64(self._timestamp_timer.elapsed),
+            serialized_data=np.array([1, new_state], dtype=np.uint8),
         )
-        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
-        message = "Hardware state snapshot: Generated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        self._logger.input_queue.put(log_package)
+
+    def _change_experiment_state(self, new_state: int) -> None:
+        """Updates and logs the new experiment state.
+
+        Unlike a similar method for the MesoscopeExperiment class, this class is designed to only use two experiment
+        states: 0 (paused) and 255 (active).
+
+        Args:
+            new_state: The integer byte-code for the new experiment state. The code will be serialized as an uint8
+                value, so only values between 0 and 255 inclusive are supported.
+        """
+        # Logs the VR state update. Uses header-code 2 to indicate that the logged value is the experiment state-code.
+        log_package = LogPackage(
+            source_id=self._source_id,
+            time_stamp=np.uint64(self._timestamp_timer.elapsed),
+            serialized_data=np.array([2, new_state], dtype=np.uint8),
+        )
+        self._logger.input_queue.put(log_package)
 
     def deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
@@ -1919,11 +2072,16 @@ def lick_training_logic(
     # Ensures the valve is closed before continuing
     runtime.toggle_valve(False)
 
+    # Resets the valve tracker array before proceeding. This allows the user to use the section above to debug the
+    # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
+    # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
+    # noinspection PyTypeChecker
+    valve_tracker.write_data(index=0, data=0)
+    # noinspection PyTypeChecker
+    valve_tracker.write_data(index=1, data=0)
+
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
-
-    # Configures all system components to support lick training
-    runtime.lick_train_state()
 
     # This tracker is used to terminate the training if manual abort command is sent via the keyboard
     terminate = False
@@ -1937,6 +2095,9 @@ def lick_training_logic(
     unconsumed_count = 0
     previous_licks = 0
     previous_reward_volume = 0
+
+    # Configures all system components to support lick training
+    runtime.lick_train()
 
     # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
     delay_timer.reset()
@@ -1959,7 +2120,7 @@ def lick_training_logic(
                 previous_licks = visualizer.lick_count
                 unconsumed_count = 0
 
-            # If the listener detects the default abort sequence, terminates the runtime.
+            # If the ui detects the default abort sequence, terminates the runtime.
             if ui.exit_signal:
                 message = "Lick training runtime abort signal: received. Are you sure you want to abort the runtime?"
                 console.echo(message=message, level=LogLevel.WARNING)
@@ -1974,7 +2135,7 @@ def lick_training_logic(
                         # Returns to running the runtime
                         break
 
-            # If the listener detects a reward delivery signal, delivers the reward to the animal
+            # If the ui detects a reward delivery signal, delivers the reward to the animal
             if ui.reward_signal:
                 runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
 
@@ -1982,14 +2143,31 @@ def lick_training_logic(
             if ui.reward_volume != previous_reward_volume:
                 runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
-            # If the listener detects a pause command, enters a holding loop.
+            # If the ui detects a pause command, enters a holding loop.
             if ui.pause_runtime:
-                message = "Lick training runtime: paused due to user request."
+                message = (
+                    "Lick training runtime: paused due to user request. Note, sensor readout monitoring is suspended."
+                )
                 console.echo(message=message, level=LogLevel.WARNING)
+
+                # Switches runtime into the idle state
+                runtime.idle()
+
+                # Caches valve data to discard any valve data accumulated during the idle period.
+                cached_valve_pulse_count = valve_tracker.read_data(index=0)
+                cached_water_volume = valve_tracker.read_data(index=1)
 
                 # Blocks in-place until the user either unpauses or aborts the training.
                 while ui.pause_runtime:
                     visualizer.update()  # Continuously updates the visualizer
+
+                    # If the ui detects a reward delivery signal, delivers the reward to the animal
+                    if ui.reward_signal:
+                        runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
+
+                    # Adjusts the reward volume each time it is updated in the GUI
+                    if ui.reward_volume != previous_reward_volume:
+                        runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
                     # If the user requests for the paused runtime to be aborted, terminates the runtime.
                     if ui.exit_signal:
@@ -2005,9 +2183,21 @@ def lick_training_logic(
                                 break  # Breaks the while loop
 
                             elif answer.lower() == "no":
-                                # Returns to running the runtime
+                                # Returns to the pause state
                                 break
-                        break  # Escapes the pause 'while' loop
+
+                        if terminate:
+                            break  # Escapes the pause 'while' loop if the user chose to terminate the runtime
+                else:
+                    # Discards any valve data accumulated during the idle period
+                    valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
+                    valve_tracker.write_data(index=1, data=cached_water_volume)
+
+                    # Restores the runtime state
+                    runtime.lick_train()
+
+                    # Resets unconsumed reward tracker
+                    unconsumed_count = 0
 
                 # Escapes the outer (reward delay) 'while' loop
                 if terminate:
@@ -2060,13 +2250,13 @@ def run_training_logic(
     project_name: str,
     animal_id: str,
     animal_weight: float,
-    initial_speed_threshold: float = 0.40,
-    initial_duration_threshold: float = 0.40,
+    initial_speed_threshold: float = 0.50,
+    initial_duration_threshold: float = 0.50,
     speed_increase_step: float = 0.05,
-    duration_increase_step: float = 0.01,
+    duration_increase_step: float = 0.05,
     increase_threshold: float = 0.1,
     maximum_water_volume: float = 1.0,
-    maximum_training_time: int = 20,
+    maximum_training_time: int = 40,
     maximum_idle_time: float = 0.5,
     maximum_unconsumed_rewards: int = 1,
     load_previous_parameters: bool = False,
@@ -2079,11 +2269,6 @@ def run_training_logic(
     'epoch'. Each time the animal receives 'increase_threshold' of water, the speed and duration thresholds increase to
     make the task progressively more challenging. The training continues either until the training time exceeds the
     'maximum_training_time', or the animal receives the 'maximum_water_volume' of water, whichever happens earlier.
-
-    Notes:
-        During runtime, it is possible to manually increase or decrease both thresholds via 'ESC' and arrow keys. The
-        speed and duration thresholds are limited to a minimum of 0.1 cm/s and 0.05 s and a maximum of 20 cm/s and
-        20 s.
 
     Args:
         experimenter: The id of the experimenter conducting the training.
@@ -2226,11 +2411,11 @@ def run_training_logic(
     # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
     # optimize main loop runtime speed:
     initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
-    maximum_speed = np.float64(20)  # In centimeters per second
+    maximum_speed = np.float64(5)  # In centimeters per second
     speed_step = np.float64(speed_increase_step)  # In centimeters per second
 
     initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
-    maximum_duration = np.float64(20000)  # In milliseconds
+    maximum_duration = np.float64(5000)  # In milliseconds
     duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
 
     # The way 'increase_threshold' is used requires it to be greater than 0. So if a threshold of 0 is passed, the
@@ -2304,7 +2489,7 @@ def run_training_logic(
     # Ensures the valve is closed before continuing
     runtime.toggle_valve(False)
 
-    # Resets the valve tracker array before proceeding. This allows the suer to use the section above to debug the
+    # Resets the valve tracker array before proceeding. This allows the user to use the section above to debug the
     # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
     # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
     # noinspection PyTypeChecker
@@ -2314,9 +2499,6 @@ def run_training_logic(
 
     message = f"Initiating lick training procedure..."
     console.echo(message=message, level=LogLevel.INFO)
-
-    # Configures all system components to support run training
-    runtime.run_train_state()
 
     # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
     # volume of water is delivered or the loop is aborted by the user.
@@ -2334,6 +2516,9 @@ def run_training_logic(
         unit="ml",
         bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
     )
+
+    # Configures all system components to support run training
+    runtime.run_train()
 
     runtime_timer.reset()
     speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
@@ -2461,7 +2646,7 @@ def run_training_logic(
             console.echo(message=message, level=LogLevel.SUCCESS)
             break
 
-        # If the listener detects a reward delivery signal, delivers the reward to the animal.
+        # If the ui detects a reward delivery signal, delivers the reward to the animal.
         if ui.reward_signal:
             runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
 
@@ -2490,16 +2675,31 @@ def run_training_logic(
                 console.echo(message=message, level=LogLevel.ERROR)
                 break
 
-        # If the listener detects a pause command, enters a holding loop.
+        # If the ui detects a pause command, enters a holding loop.
         if ui.pause_runtime:
             pause_start = runtime_timer.elapsed
-            message = "Run training runtime: paused due to user request."
+            message = "Run training runtime: paused due to user request. Note, sensor readout monitoring is suspended."
             console.echo(message=message, level=LogLevel.WARNING)
+
+            # Switches runtime to the idle state
+            runtime.idle()
+
+            # Caches valve data to discard any valve data accumulated during the idle period.
+            cached_valve_pulse_count = valve_tracker.read_data(index=0)
+            cached_water_volume = valve_tracker.read_data(index=1)
 
             # Blocks in-place until the user either unpauses or aborts the training.
             abort_stage: bool = False
             while ui.pause_runtime:
                 visualizer.update()  # Continuously updates the visualizer
+
+                # If the ui detects a reward delivery signal, delivers the reward to the animal
+                if ui.reward_signal:
+                    runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
+
+                # Adjusts the reward volume each time it is updated in the GUI
+                if ui.reward_volume != previous_reward_volume:
+                    runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
                 # If the user requests for the paused runtime to be aborted, terminates the runtime.
                 if ui.exit_signal:
@@ -2513,8 +2713,17 @@ def run_training_logic(
                             break  # Breaks the while loop
 
                         elif answer.lower() == "no":
-                            # Returns to running the runtime
-                            break
+                            break  # Returns to the pause state
+            else:
+                # Discards any valve data accumulated during the idle period
+                valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
+                valve_tracker.write_data(index=1, data=cached_water_volume)
+
+                # Restores the runtime state
+                runtime.run_train()
+
+                # Resets unconsumed reward tracker
+                unconsumed_count = 0
 
             # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
             # increases the training time to counteract the duration of the 'paused' state.
@@ -2652,7 +2861,10 @@ def experiment_logic(
 
     # Generates the session descriptor class
     descriptor = MesoscopeExperimentDescriptor(
-        experimenter=experimenter, mouse_weight_g=animal_weight, dispensed_water_volume_ml=0.0
+        experimenter=experimenter,
+        mouse_weight_g=animal_weight,
+        dispensed_water_volume_ml=0.0,
+        maximum_unconsumed_rewards=1,  # For now, all our tasks use a fixed value of 1. THe value is set via Unity.
     )
 
     # Initializes the main runtime interface class.
@@ -2703,6 +2915,14 @@ def experiment_logic(
     # Ensures the valve is closed before continuing
     runtime.toggle_valve(False)
 
+    # Resets the valve tracker array before proceeding. This allows the user to use the section above to debug the
+    # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
+    # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
+    # noinspection PyTypeChecker
+    valve_tracker.write_data(index=0, data=0)
+    # noinspection PyTypeChecker
+    valve_tracker.write_data(index=1, data=0)
+
     message = f"Initiating Mesoscope experiment..."
     console.echo(message=message, level=LogLevel.INFO)
 
@@ -2710,6 +2930,7 @@ def experiment_logic(
     # experimenter unpauses the runtime.
     runtime.start_mesoscope()
     previous_reward_volume = 0
+    terminate_runtime: bool = False
 
     # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
     # state
@@ -2743,6 +2964,88 @@ def experiment_logic(
                 # Handles Unity-MQTT communication
                 runtime.communicate_with_unity()
 
+                # Blocks the runtime in-place until the user pauses via the GUI
+                if runtime.unity_terminated:
+                    message = (
+                        "A runtime termination signal has been received from the Unity game engine. Pause the runtime "
+                        "via GUI and re-initialize Unity to continue."
+                    )
+                    console.echo(message=message, level=LogLevel.WARNING)
+                    while not ui.pause_runtime:
+                        pass
+
+                    # If the ui detects a pause command, enters a holding loop. Pauses are handled before all other
+                    # states to comply with recovering from receiving Unity termination messages
+                    if ui.pause_runtime:
+                        pause_start = runtime_timer.elapsed
+                        message = "Experiment runtime: paused due to user request."
+                        console.echo(message=message, level=LogLevel.WARNING)
+
+                        # Switches the runtime control system to the 'idle' state, unless it is already in that state.
+                        if runtime.vr_state != 0:
+                            runtime.idle()
+
+                        # Caches valve data to discard any valve data accumulated during the idle period.
+                        cached_valve_pulse_count = valve_tracker.read_data(index=0)
+                        cached_water_volume = valve_tracker.read_data(index=1)
+
+                        # Blocks in-place until the user either unpauses or aborts the runtime.
+                        while ui.pause_runtime:
+
+                            visualizer.update()  # Continuously updates the visualizer
+
+                            # If the ui detects a reward delivery signal, delivers the reward to the animal
+                            if ui.reward_signal:
+                                runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+
+                            # Adjusts the reward volume each time it is updated in the GUI
+                            if ui.reward_volume != previous_reward_volume:
+                                runtime.configure_reward_parameters(reward_size=ui.reward_volume)
+
+                            # If the user requests for the paused stage to be aborted, terminates the runtime.
+                            if ui.exit_signal:
+                                message = (
+                                    "Experiment runtime abort signal: received. Are you sure you want to abort the "
+                                    "runtime?"
+                                )
+                                console.echo(message=message, level=LogLevel.WARNING)
+                                while True:
+                                    answer = input("Enter 'yes' or 'no': ")
+
+                                    if answer.lower() == "yes":
+                                        terminate_runtime = True  # Sets the terminate flag
+                                        break  # Breaks the while loop
+
+                                    elif answer.lower() == "no":
+                                        # Returns to running the runtime
+                                        break
+
+                                if terminate_runtime:
+                                    break  # Escapes the pause 'while' loop
+                        else:
+                            # Discards any valve data accumulated during the idle period
+                            valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
+                            valve_tracker.write_data(index=1, data=cached_water_volume)
+
+                            # Updates the 'additional time' value to reflect the time spent inside the 'paused' state.
+                            # This increases the experiment stage duration to counteract the duration of the 'paused'
+                            # state.
+                            additional_time += runtime_timer.elapsed - pause_start
+
+                            # Re-queries the cue sequence as Unity re-initialization always generates a new sequence.
+                            # Also ensures that Unity has been properly re-initialized.
+                            runtime.get_cue_sequence()
+
+                            # Restores the runtime state
+                            if state.system_state_code == 1:
+                                runtime.rest()
+                            elif state.system_state_code == 2:
+                                runtime.run()
+
+                        # Escapes the outer (experiment state) 'while loop if the user chose to terminate the runtime
+                        if terminate_runtime:
+                            break
+
                 # Updates the progress bar every second. While the current implementation is technically not safe,
                 # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
                 # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
@@ -2752,26 +3055,23 @@ def experiment_logic(
 
                 # If the user sent the abort command, terminates the runtime early with an error message.
                 if ui.exit_signal:
-                    terminate = False
                     message = "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
                     console.echo(message=message, level=LogLevel.WARNING)
                     while True:
                         answer = input("Enter 'yes' or 'no': ")
 
                         if answer.lower() == "yes":
-                            terminate = True  # Sets the terminate flag
+                            terminate_runtime = True  # Sets the terminate flag
                             break  # Breaks the while loop
 
                         elif answer.lower() == "no":
                             # Returns to running the runtime
                             break
 
-                    if terminate:
-                        message = f"Experiment runtime: aborted due to user request."
-                        console.echo(message=message, level=LogLevel.ERROR)
+                    if terminate_runtime:
                         break
 
-                # If the listener detects a reward delivery signal, delivers the reward to the animal
+                # If the ui detects a reward delivery signal, delivers the reward to the animal
                 if ui.reward_signal:
                     runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
 
@@ -2779,57 +3079,10 @@ def experiment_logic(
                 if ui.reward_volume != previous_reward_volume:
                     runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
-                # If the listener detects a pause command, enters a holding loop.
-                if ui.pause_runtime:
-                    pause_start = runtime_timer.elapsed
-                    message = "Experiment runtime: paused due to user request."
-                    console.echo(message=message, level=LogLevel.WARNING)
-
-                    # Switches the runtime control system to the 'idle' state.
-                    runtime.idle()
-
-                    # Blocks in-place until the user either unpauses or aborts the current experiment stage.
-                    abort_stage: bool = False
-                    while ui.pause_runtime:
-                        visualizer.update()  # Continuously updates the visualizer
-
-                        # If the user requests for the paused stage to be aborted, terminates the runtime.
-                        if ui.exit_signal:
-                            abort_stage = False
-                            message = (
-                                "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
-                            )
-                            console.echo(message=message, level=LogLevel.WARNING)
-                            while True:
-                                answer = input("Enter 'yes' or 'no': ")
-
-                                if answer.lower() == "yes":
-                                    abort_stage = True  # Sets the terminate flag
-                                    break  # Breaks the while loop
-
-                                elif answer.lower() == "no":
-                                    # Returns to running the runtime
-                                    break
-
-                            if abort_stage:
-                                message = f"Experiment runtime: aborted due to user request."
-                                console.echo(message=message, level=LogLevel.ERROR)
-                                break  # Escapes the pause 'while' loop
-
-                    # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
-                    # increases the experiment stage duration to counteract the duration of the 'paused' state.
-                    additional_time += runtime_timer.elapsed - pause_start
-
-                    # Escapes the outer (experiment state) 'while loop
-                    if abort_stage:
-                        break
-                    else:
-                        # Otherwise, if the user has unpaused the runtime, restores the system to the appropriate
-                        # state.
-                        if state.system_state_code == 1:
-                            runtime.rest()
-                        elif state.system_state_code == 2:
-                            runtime.run()
+            if terminate_runtime:
+                message = f"Experiment runtime: aborted due to user request."
+                console.echo(message=message, level=LogLevel.ERROR)
+                break  # Escapes the experiment 'for' loop
 
     # Shutdown sequence:
     message = f"Experiment runtime: Complete."
