@@ -13,7 +13,7 @@ from sl_shared_assets import (
     get_system_configuration_data,
     set_system_configuration_file,
 )
-from ataraxis_base_utilities import console, ensure_directory_exists
+from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
 
 from .mesoscope_vr import (
     CRCCalculator,
@@ -25,6 +25,7 @@ from .mesoscope_vr import (
     window_checking_logic,
     discover_zaber_devices,
     preprocess_session_data,
+    purge_failed_session
 )
 
 
@@ -470,7 +471,6 @@ def lick_training(
     help="The maximum volume of water, in milliliters, that can be delivered during training.",
 )
 @click.option(
-    "-t",
     "--maximum_time",
     type=int,
     show_default=True,
@@ -676,3 +676,30 @@ def purge_data() -> None:
     at least weekly to remove no longer necessary data from the PCs used during data acquisition.
     """
     purge_redundant_data()
+
+@click.command()
+@click.option(
+    "-sp",
+    "--session-path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    required=True,
+    prompt="Enter the path to the target session directory: ",
+    help="The path to the local session directory of the session to be removed.",
+)
+def delete_session(session_path: Path) -> None:
+    """ Removes ALL data of the target session from ALL data acquisition and long-term storage machines accessible to
+    the host-machine.
+
+    This is an EXTREMELY dangerous command that can potentially delete valuable data if not used well. This command is
+    intended exclusively for removing failed and test sessions from all computers used in Sun lab data acquisition
+    process. Never call this command unless you know what you are doing.
+    """
+    session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
+
+    # Restores SessionData from the cache .yaml file.
+    session_data = SessionData.load(session_path=session_path)
+
+    # Removes all data of the target session from all data acquisition and long-term storage machines accessible to the
+    # host-computer
+    purge_failed_session(session_data)
+

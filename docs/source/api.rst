@@ -57,6 +57,10 @@ Command Line Interfaces
    :prog: sl-purge
    :nested: full
 
+.. click:: sl_experiment.cli:delete_session
+   :prog: sl-delete-session-data
+   :nested: full
+
 Mesoscope-VR Acquisition System
 ===============================
 .. automodule:: sl_experiment.mesoscope_vr

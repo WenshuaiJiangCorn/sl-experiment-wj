@@ -424,8 +424,8 @@ class _MesoscopeExperiment:
 
         # Instructs the user to finalize runtime preparation by arming Mesoscope and Unity.
         message = (
-            f"Run all mesoscope and Unity preparation procedures. Specifically, start (play) the Unity task and switch "
-            f"the ScanImage into the 'loop' acquisition mode with external triggers set to enabled."
+            f"Run all mesoscope and Unity preparation procedures. Start (play) the Unity task, but DO NOT start the "
+            f"ScanImage data acquisition loop until instructed by this runtime."
         )
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
@@ -889,14 +889,15 @@ class _MesoscopeExperiment:
             # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
             self._unity.send_data(topic=self._cue_sequence_request_topic)
 
-            # Waits at most 2 seconds to receive the response
+            # Waits at most 20 seconds to receive the response
             timeout_timer.reset()
-            while timeout_timer.elapsed < 2:
+            while timeout_timer.elapsed < 20:
                 # If Unity responds with the cue sequence message, attempts to parse the message
                 if self._unity.has_data:
                     topic: str
                     payload: bytes
                     topic, payload = self._unity.get_data()  # type: ignore
+
                     if topic == self._cue_sequence_topic:
                         # Extracts the sequence of cues that will be used during task runtime.
                         sequence: NDArray[np.uint8] = np.array(
@@ -910,22 +911,15 @@ class _MesoscopeExperiment:
                         self._logger.input_queue.put(package)
                         self._cue_sequence = sequence
 
-                    else:
-                        # If the topic is not "CueSequence/", aborts with an error
-                        message = (
-                            f"Received an unexpected topic {topic} while waiting for Unity to respond to the cue "
-                            f"sequence request. Make sure the Unity is not configured to send data to other topics "
-                            f"monitored by the MesoscopeExperiment instance until the cue sequence is resolved as part "
-                            f"of the start() method runtime."
-                        )
-                        console.error(message=message, error=RuntimeError)
+                        # Returns to avoid raising the error messages below
+                        return
 
             # If the loop above is escaped, this is due to not receiving any message from Unity. Raises an error.
             message = (
                 f"The MesoscopeExperiment has requested the task Cue Sequence by sending the trigger to the "
-                f"'{self._cue_sequence_request_topic}' topic and received no response for 2 seconds. It is likely that "
-                f"the Unity game engine is not running or is not configured to work with MesoscopeExperiment. Make "
-                f"sure Unity game engine is started and configured before continuing."
+                f"'{self._cue_sequence_request_topic}' topic and received no response for 20 seconds. It is likely "
+                f"that the Unity game engine is not running or is not configured to work with MesoscopeExperiment. "
+                f"Make sure Unity game engine is started and configured before continuing."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
@@ -944,13 +938,20 @@ class _MesoscopeExperiment:
         Notes:
             This method contains an infinite loop that forces the user to cycle through Unity game state or manually
             abort the runtime.
-
-        Raises:
-            RuntimeError: If the user aborts the runtime instead of starting and stopping Unity game engine.
         """
 
         # Activates the VR screens so that the user can check whether the Unity task displays as expected.
         self._microcontrollers.enable_vr_screens()
+
+        delay_timer = PrecisionTimer("s")
+        # Delays the runtime for 2 seconds to ensure that if the user has already performed the unity check, the screen
+        # controllers have time to toggle on and off as expected.
+        delay_timer.delay_noblock(delay=2)
+
+        # Discards all data received community up tot his point. This is done to ensure that the user carries out the
+        # power up and shutdown cycle as instructed.
+        while self._unity.has_data:
+            _ = self._unity.get_data()  # type: ignore
 
         # Instructs the user to check the displays.
         message = (
@@ -995,7 +996,10 @@ class _MesoscopeExperiment:
 
         # Ensures that the mesoscope is not already acquiring frames. This is crucial to properly reset the mesoscope
         # data folder to remove any TIFFs acquired during motion estimator generation.
-        message = "Ensuring that the mesoscope is not currently acquiring frames..."
+        message = (
+            "Ensuring that the mesoscope is not currently acquiring frames. If the mesoscope is acquiring frames, "
+            "stop the frame acquisition."
+        )
         console.echo(message=message, level=LogLevel.INFO)
         previous_frame_count = self._microcontrollers.mesoscope_frame_count
         while True:
@@ -1014,53 +1018,19 @@ class _MesoscopeExperiment:
             for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
                 file.unlink(missing_ok=True)
 
-        # Attempts to start the new mesoscope acquisition
-        status = False
-        outcome = ""
-        # The procedure will be repeated until it succeeds or the user manually aborts the loop
-        while not status and outcome != "abort":
-            # Instructs the mesoscope to begin acquiring frames
-            self._microcontrollers.start_mesoscope()
+        # Instructs the user to begin mesoscope frame acquisition.
+        message = "Start mesoscope frame acquisition by setting it into the 'Loop' mode."
+        console.echo(message=message, level=LogLevel.WARNING)
 
-            # Waits at most 2 seconds for the mesoscope to begin sending frame acquisition timestamps to the PC
-            timeout_timer.reset()
-            while timeout_timer.elapsed < 2:
-                # If the mesoscope starts scanning a frame, the method has successfully started the mesoscope frame
-                # acquisition.
-                if self._microcontrollers.mesoscope_frame_count:
-                    message = "Mesoscope frame acquisition: Started."
-                    console.echo(message=message, level=LogLevel.SUCCESS)
+        # Ensures that the frame acquisition starts as expected
+        message = "Waiting for the mesoscope frame acquisition to start..."
+        console.echo(message=message, level=LogLevel.INFO)
+        while self._microcontrollers.mesoscope_frame_count < 20:
+            pass
 
-                    message = "Verifying the acquisition stability by acquiring 20 frames..."
-                    console.echo(message=message, level=LogLevel.INFO)
-
-                    timeout_timer.reset()
-                    stability_check = True
-                    while self._microcontrollers.mesoscope_frame_count < 20:
-                        # At ~10 Hz, this should be over in 2 seconds. If the frames are not acquired in 20 seconds,
-                        # indicates a runtime error.
-                        if timeout_timer.elapsed > 20:
-                            stability_check = False
-                            break
-
-                    # If the stability check is passed, returns to caller. Otherwise, raises an error.
-                    if stability_check:
-                        return
-
-            # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
-            message = (
-                f"The MesoscopeExperiment has requested the mesoscope to start acquiring frames and received no frame "
-                f"acquisition trigger for 2 seconds or failed to acquire 20 frames over 20 seconds. It is likely that "
-                f"the mesoscope has not been armed for frame acquisition or that the mesoscope trigger or frame "
-                f"timestamp connection is not functional. Make sure the Mesoscope is configured for data acquisition "
-                f"before continuing and retry the mesoscope activation."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
-
-        message = f"Runtime aborted due to user request."
-        console.error(message=message, error=RuntimeError)
-        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+        # Returns to caller
+        message = "Mesoscope frame acquisition: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
     def _change_vr_state(self, new_state: int) -> None:
         """Updates and logs the new Mesoscope-VR state.
@@ -1101,15 +1071,19 @@ class _MesoscopeExperiment:
         )
         self._logger.input_queue.put(log_package)
 
-    def toggle_lick_guidance(self, must_lick: bool) -> None:
+    def toggle_lick_guidance(self, enable_guidance: bool) -> None:
         """Sets the Unity task to either require the animal to lick in the reward zone to get water or to get rewards
         automatically upon entry into the reward zone.
 
+        Notes:
+            The boolean 'enable guidance' state is an inverse of the Unities 'must lick' toggle. Therefore, if
+            guidance is True, Must Lick is False.
+
         Args:
-            must_lick: Determines whether the animal must lick (True) to get water rewards or whether it will receive
-                rewards automatically when entering the zone (False).
+            enable_guidance: Determines whether the animal must lick (False) to get water rewards or whether it will
+                receive rewards automatically when entering the zone (True).
         """
-        if must_lick:
+        if not enable_guidance:
             self._unity.send_data(topic=self._disable_guidance_topic)
         else:
             self._unity.send_data(topic=self._enable_guidance_topic)
@@ -1119,7 +1093,7 @@ class _MesoscopeExperiment:
         log_package = LogPackage(
             source_id=self._source_id,
             time_stamp=np.uint64(self._timestamp_timer.elapsed),
-            serialized_data=np.array([3, must_lick], dtype=np.uint8),
+            serialized_data=np.array([3, enable_guidance], dtype=np.uint8),
         )
         self._logger.input_queue.put(log_package)
 
@@ -1208,11 +1182,11 @@ class _MesoscopeExperiment:
                 # Reads the current position, in Unity units. Since this is done after cutting off the wheel motion
                 # stream, there should be minimal deviation of the read position and the physical position of the
                 # animal.
-                traveled_distance: np.float64 = self._microcontrollers.distance_tracker.read_data(
-                    index=1, convert_output=False
+                traveled_distance: float = self._microcontrollers.distance_tracker.read_data(
+                    index=1, convert_output=True
                 )
-                # Converts float64 to a byte array to make it compatible with the log.
-                distance_bytes = traveled_distance.view(np.uint8)
+                # Converts float to a byte array using little-endian format
+                distance_bytes = np.array([traveled_distance], dtype="<i8").view(np.uint8)
 
                 # Generates a new log entry with message ID code 4. This code is statically used to indicate that the
                 # Unity runtime has been terminated. The message includes the current position of the animal in Unity
@@ -2508,6 +2482,9 @@ def run_training_logic(
     # paused state.
     additional_time = 0
 
+    # Configures all system components to support run training
+    runtime.run_train()
+
     # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
     # delivered to the animal
     progress_bar = tqdm(
@@ -2516,9 +2493,6 @@ def run_training_logic(
         unit="ml",
         bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
     )
-
-    # Configures all system components to support run training
-    runtime.run_train()
 
     runtime_timer.reset()
     speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
@@ -2714,6 +2688,10 @@ def run_training_logic(
 
                         elif answer.lower() == "no":
                             break  # Returns to the pause state
+
+                    # Escapes the pause loop, if the user chose to abort the runtime
+                    if abort_stage:
+                        break
             else:
                 # Discards any valve data accumulated during the idle period
                 valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
@@ -2891,6 +2869,10 @@ def experiment_logic(
         lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
     )
 
+    # Uses initial UI guidance state to configure the runtime
+    previous_guidance_state: bool = ui.enable_guidance
+    runtime.toggle_lick_guidance(enable_guidance=previous_guidance_state)
+
     # Final checkpoint
     message = (
         f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
@@ -2911,6 +2893,11 @@ def experiment_logic(
 
         if ui.close_valve:
             runtime.toggle_valve(False)
+
+        # Switches the guidance status in response to user requests
+        if ui.enable_guidance != previous_guidance_state:
+            previous_guidance_state = ui.enable_guidance
+            runtime.toggle_lick_guidance(enable_guidance=previous_guidance_state)
 
     # Ensures the valve is closed before continuing
     runtime.toggle_valve(False)
@@ -2974,77 +2961,90 @@ def experiment_logic(
                     while not ui.pause_runtime:
                         pass
 
-                    # If the ui detects a pause command, enters a holding loop. Pauses are handled before all other
-                    # states to comply with recovering from receiving Unity termination messages
-                    if ui.pause_runtime:
-                        pause_start = runtime_timer.elapsed
-                        message = "Experiment runtime: paused due to user request."
-                        console.echo(message=message, level=LogLevel.WARNING)
+                # If the ui detects a pause command, enters a holding loop. Pauses are handled before all other
+                # states to comply with recovering from receiving Unity termination messages
+                if ui.pause_runtime:
+                    pause_start = runtime_timer.elapsed
+                    message = "Experiment runtime: paused due to user request."
+                    console.echo(message=message, level=LogLevel.WARNING)
 
-                        # Switches the runtime control system to the 'idle' state, unless it is already in that state.
-                        if runtime.vr_state != 0:
-                            runtime.idle()
+                    # Switches the runtime control system to the 'idle' state, unless it is already in that state.
+                    if runtime.vr_state != 0:
+                        runtime.idle()
 
-                        # Caches valve data to discard any valve data accumulated during the idle period.
-                        cached_valve_pulse_count = valve_tracker.read_data(index=0)
-                        cached_water_volume = valve_tracker.read_data(index=1)
+                    # Caches valve data to discard any valve data accumulated during the idle period.
+                    cached_valve_pulse_count = valve_tracker.read_data(index=0)
+                    cached_water_volume = valve_tracker.read_data(index=1)
 
-                        # Blocks in-place until the user either unpauses or aborts the runtime.
-                        while ui.pause_runtime:
+                    # Blocks in-place until the user either unpauses or aborts the runtime.
+                    while ui.pause_runtime:
 
-                            visualizer.update()  # Continuously updates the visualizer
+                        visualizer.update()  # Continuously updates the visualizer
 
-                            # If the ui detects a reward delivery signal, delivers the reward to the animal
-                            if ui.reward_signal:
-                                runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+                        # Keeps unity communication loop running. Primarily, this is done to support receiving
+                        # unity termination messages, if the user chooses to pause the runtime first and then terminate
+                        # the Unity
+                        runtime.communicate_with_unity()
 
-                            # Adjusts the reward volume each time it is updated in the GUI
-                            if ui.reward_volume != previous_reward_volume:
-                                runtime.configure_reward_parameters(reward_size=ui.reward_volume)
+                        # If the ui detects a reward delivery signal, delivers the reward to the animal
+                        if ui.reward_signal:
+                            runtime.deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
 
-                            # If the user requests for the paused stage to be aborted, terminates the runtime.
-                            if ui.exit_signal:
-                                message = (
-                                    "Experiment runtime abort signal: received. Are you sure you want to abort the "
-                                    "runtime?"
-                                )
-                                console.echo(message=message, level=LogLevel.WARNING)
-                                while True:
-                                    answer = input("Enter 'yes' or 'no': ")
+                        # Adjusts the reward volume each time it is updated in the GUI
+                        if ui.reward_volume != previous_reward_volume:
+                            runtime.configure_reward_parameters(reward_size=ui.reward_volume)
 
-                                    if answer.lower() == "yes":
-                                        terminate_runtime = True  # Sets the terminate flag
-                                        break  # Breaks the while loop
+                        # Switches the guidance status in response to user requests
+                        if ui.enable_guidance != previous_guidance_state:
+                            previous_guidance_state = ui.enable_guidance
+                            runtime.toggle_lick_guidance(enable_guidance=previous_guidance_state)
 
-                                    elif answer.lower() == "no":
-                                        # Returns to running the runtime
-                                        break
+                        # If the user requests for the paused stage to be aborted, terminates the runtime.
+                        if ui.exit_signal:
+                            message = (
+                                "Experiment runtime abort signal: received. Are you sure you want to abort the "
+                                "runtime?"
+                            )
+                            console.echo(message=message, level=LogLevel.WARNING)
+                            while True:
+                                answer = input("Enter 'yes' or 'no': ")
 
-                                if terminate_runtime:
-                                    break  # Escapes the pause 'while' loop
-                        else:
-                            # Discards any valve data accumulated during the idle period
-                            valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
-                            valve_tracker.write_data(index=1, data=cached_water_volume)
+                                if answer.lower() == "yes":
+                                    terminate_runtime = True  # Sets the terminate flag
+                                    break  # Breaks the while loop
 
-                            # Updates the 'additional time' value to reflect the time spent inside the 'paused' state.
-                            # This increases the experiment stage duration to counteract the duration of the 'paused'
-                            # state.
-                            additional_time += runtime_timer.elapsed - pause_start
+                                elif answer.lower() == "no":
+                                    # Returns to running the runtime
+                                    break
 
-                            # Re-queries the cue sequence as Unity re-initialization always generates a new sequence.
-                            # Also ensures that Unity has been properly re-initialized.
+                            if terminate_runtime:
+                                break  # Escapes the pause 'while' loop
+                    else:
+                        # Discards any valve data accumulated during the idle period
+                        valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
+                        valve_tracker.write_data(index=1, data=cached_water_volume)
+
+                        # Updates the 'additional time' value to reflect the time spent inside the 'paused' state.
+                        # This increases the experiment stage duration to counteract the duration of the 'paused'
+                        # state.
+                        additional_time += runtime_timer.elapsed - pause_start
+
+                        # Re-queries the cue sequence as Unity re-initialization always generates a new sequence.
+                        # Also ensures that Unity has been properly re-initialized.
+                        if runtime.unity_terminated:
                             runtime.get_cue_sequence()
+                            # Resets the unity termination tracker
+                            runtime.unity_terminated = False
 
-                            # Restores the runtime state
-                            if state.system_state_code == 1:
-                                runtime.rest()
-                            elif state.system_state_code == 2:
-                                runtime.run()
+                        # Restores the runtime state
+                        if state.system_state_code == 1:
+                            runtime.rest()
+                        elif state.system_state_code == 2:
+                            runtime.run()
 
-                        # Escapes the outer (experiment state) 'while loop if the user chose to terminate the runtime
-                        if terminate_runtime:
-                            break
+                    # Escapes the outer (experiment state) 'while loop if the user chose to terminate the runtime
+                    if terminate_runtime:
+                        break
 
                 # Updates the progress bar every second. While the current implementation is technically not safe,
                 # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
@@ -3078,6 +3078,11 @@ def experiment_logic(
                 # Adjusts the reward volume each time it is updated in the GUI
                 if ui.reward_volume != previous_reward_volume:
                     runtime.configure_reward_parameters(reward_size=ui.reward_volume)
+
+                # If the user switches the guidance state, adjusts the runtime guidance parameter
+                if ui.enable_guidance != previous_guidance_state:
+                    previous_guidance_state = ui.enable_guidance
+                    runtime.toggle_lick_guidance(enable_guidance=previous_guidance_state)
 
             if terminate_runtime:
                 message = f"Experiment runtime: aborted due to user request."

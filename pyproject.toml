@@ -77,7 +77,6 @@ Documentation = "https://sl-experiment-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy==2.2.6",
-    "scipy==1.16.0",
     "tifffile==2025.6.11",
     "tqdm==4.67.1",
     "matplotlib==3.10.3",
@@ -159,6 +158,7 @@ sl-experiment = "sl_experiment.cli:run_experiment"
 sl-check-window = "sl_experiment.cli:check_window"
 sl-preprocess = "sl_experiment.cli:preprocess_session"
 sl-purge = "sl_experiment.cli:purge_data"
+sl-delete-session-data = "sl_experiment.cli:delete_session"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]

@@ -1312,9 +1312,10 @@ def purge_failed_session(session_data: SessionData) -> None:
     # NAS and the BioHPC server.
     mesoscope_data = MesoscopeData(session_data)
     deletion_candidates = [
-        mesoscope_data.destinations.nas_raw_data_path,
-        mesoscope_data.destinations.server_raw_data_path,
-        mesoscope_data.destinations.server_processed_data_path,
+        session_data.raw_data.raw_data_path.parent,
+        mesoscope_data.destinations.nas_raw_data_path.parent,
+        mesoscope_data.destinations.server_raw_data_path.parent,
+        mesoscope_data.destinations.server_processed_data_path.parent,
         mesoscope_data.scanimagepc_data.session_specific_path,
     ]
 
