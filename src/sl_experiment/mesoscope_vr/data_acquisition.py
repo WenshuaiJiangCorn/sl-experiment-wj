@@ -366,7 +366,7 @@ class _MesoscopeExperiment:
                 f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
                 f"screenshots stored in the folder before proceeding."
             )
-            console.echo(message=message, level=LogLevel.WARNING)
+            console.echo(message=message, level=LogLevel.ERROR)
             input("Enter anything to continue: ")
             screenshots = [
                 screenshot for screenshot in Path(self._mesoscope_data.scanimagepc_data.meso_data_path).glob("*.png")
@@ -949,7 +949,7 @@ class _MesoscopeExperiment:
             f"the VR screens inside the Mesoscope cage. This runtime will block in place until the task is started "
             f"(played) AND stopped at least once."
         )
-        console.echo(message=message, level=LogLevel.WARNING)
+        console.echo(message=message, level=LogLevel.INFO)
 
         # Blocks until Unity sends the task termination message. This is used to detect that the user has enabled and
         # disabled the task at least once, presumably to check the displays as instructed.
@@ -3120,7 +3120,7 @@ def window_checking_logic(
     project_folder = system_configuration.paths.root_directory.joinpath(project_name)
     if not project_folder.exists():
         message = (
-            f"Unable to execute the run training for the animal {animal_id} of project {project_name}. The target "
+            f"Unable to execute the window checking for the animal {animal_id} of project {project_name}. The target "
             f"project does not exist on the local machine. Use the 'sl-create-project' command to create the project "
             f"before running training or experiment sessions."
         )
@@ -3213,7 +3213,7 @@ def window_checking_logic(
         "implantation quality. Exercise caution when moving HeadBar Roll and Pitch axes motors. Make sure you are "
         "satisfied with the imaging quality before proceeding further."
     )
-    console.echo(message=message, level=LogLevel.WARNING)
+    console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
     # Generates the mesoscope positions file precursor in the raw_data folder of the managed session and forces the
@@ -3227,7 +3227,7 @@ def window_checking_logic(
         "Generate the cranial window screenshot and record the mesoscope objective positions in the precursor "
         "mesoscope_positions file."
     )
-    console.echo(message=message, level=LogLevel.WARNING)
+    console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
     # Retrieves current motor positions and packages them into a ZaberPositions object.
@@ -3253,7 +3253,7 @@ def window_checking_logic(
             f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
             f"screenshots stored in the folder before proceeding."
         )
-        console.echo(message=message, level=LogLevel.WARNING)
+        console.echo(message=message, level=LogLevel.ERROR)
         input("Enter anything to continue: ")
         screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
 
@@ -3283,7 +3283,7 @@ def window_checking_logic(
             "fields with coordinates displayed in the ScanImage software or the ThorLabs pad. Make sure to save the "
             "changes to the file by using 'CTRL+S' combination."
         )
-        console.echo(message=message, level=LogLevel.WARNING)
+        console.echo(message=message, level=LogLevel.ERROR)
         input("Enter anything to continue: ")
 
         # Reloads the mesoscope positions data each time to verify whether the user ahs edited the data.
