@@ -13,7 +13,7 @@ from sl_shared_assets import (
     get_system_configuration_data,
     set_system_configuration_file,
 )
-from ataraxis_base_utilities import console, ensure_directory_exists, LogLevel
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 
 from .mesoscope_vr import (
     CRCCalculator,
@@ -21,11 +21,11 @@ from .mesoscope_vr import (
     maintenance_logic,
     run_training_logic,
     lick_training_logic,
+    purge_failed_session,
     purge_redundant_data,
     window_checking_logic,
     discover_zaber_devices,
     preprocess_session_data,
-    purge_failed_session
 )
 
 
@@ -591,7 +591,20 @@ def run_training(
     required=True,
     help="The weight of the animal, in grams, at the beginning of the experiment session.",
 )
-def run_experiment(user: str, project: str, experiment: str, animal: str, animal_weight: float) -> None:
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=1,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
+def run_experiment(
+    user: str, project: str, experiment: str, animal: str, animal_weight: float, unconsumed_rewards: int
+) -> None:
     """Runs the requested experiment session for the specified animal and project combination.
 
     Experiment runtimes are carried out after the lick and run training sessions Unlike training session commands, this
@@ -606,6 +619,7 @@ def run_experiment(user: str, project: str, experiment: str, animal: str, animal
         experiment_name=experiment,
         animal_id=animal,
         animal_weight=animal_weight,
+        maximum_unconsumed_rewards=unconsumed_rewards,
     )
 
 
@@ -677,6 +691,7 @@ def purge_data() -> None:
     """
     purge_redundant_data()
 
+
 @click.command()
 @click.option(
     "-sp",
@@ -687,7 +702,7 @@ def purge_data() -> None:
     help="The path to the local session directory of the session to be removed.",
 )
 def delete_session(session_path: Path) -> None:
-    """ Removes ALL data of the target session from ALL data acquisition and long-term storage machines accessible to
+    """Removes ALL data of the target session from ALL data acquisition and long-term storage machines accessible to
     the host-machine.
 
     This is an EXTREMELY dangerous command that can potentially delete valuable data if not used well. This command is
@@ -702,4 +717,3 @@ def delete_session(session_path: Path) -> None:
     # Removes all data of the target session from all data acquisition and long-term storage machines accessible to the
     # host-computer
     purge_failed_session(session_data)
-

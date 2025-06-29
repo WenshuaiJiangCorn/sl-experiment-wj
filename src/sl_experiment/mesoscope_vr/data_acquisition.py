@@ -78,6 +78,7 @@ class _MesoscopeExperiment:
         _previous_licks: Stores the number of detected licks, used during the last communication cycle between this
             class and Unity.
         _cue_sequence: Stores the Virtual Reality wall cue sequence used by the currently active Unity VR runtime.
+        _unconsumed_count: Tracks the number of rewards delivered to the animal without the animal consuming them.
         _unity_termination_topic: Stores the MQTT topic used by Unity game engine to announce when it terminates the
             game state.
         _cue_sequence_topic: Stores the MQTT topic used by Unity game engine to respond to the request of the VR wall
@@ -135,6 +136,7 @@ class _MesoscopeExperiment:
         self._previous_position: float = 0.0
         self._previous_licks: int = 0
         self._cue_sequence: NDArray[np.uint8] = np.zeros(shape=(0,), dtype=np.uint8)
+        self._unconsumed_count: int = 0
         self.unity_terminated: bool = False
 
         # Stores the names of MQTT topics that need to be monitored for incoming messages sent by Unity game engine.
@@ -948,10 +950,10 @@ class _MesoscopeExperiment:
         # controllers have time to toggle on and off as expected.
         delay_timer.delay_noblock(delay=2)
 
-        # Discards all data received community up tot his point. This is done to ensure that the user carries out the
+        # Discards all data received community up to this point. This is done to ensure that the user carries out the
         # power up and shutdown cycle as instructed.
         while self._unity.has_data:
-            _ = self._unity.get_data()  # type: ignore
+            _ = self._unity.get_data()
 
         # Instructs the user to check the displays.
         message = (
@@ -967,7 +969,7 @@ class _MesoscopeExperiment:
             # Parses all data received from Unity game engine.
             if self._unity.has_data:
                 topic: str
-                topic, _ = self._unity.get_data()  # type: ignore
+                topic, _ = self._unity.get_data()
 
                 # If received data is a termination message, breaks the loop
                 if topic == self._unity_termination_topic:
@@ -1076,7 +1078,7 @@ class _MesoscopeExperiment:
         automatically upon entry into the reward zone.
 
         Notes:
-            The boolean 'enable guidance' state is an inverse of the Unities 'must lick' toggle. Therefore, if
+            The boolean 'enable guidance' state is inverse of the Unities 'must lick' toggle. Therefore, if
             guidance is True, Must Lick is False.
 
         Args:
@@ -1158,6 +1160,11 @@ class _MesoscopeExperiment:
         lick_count = self._microcontrollers.lick_tracker.read_data(index=0, convert_output=True)
         if lick_count > self._previous_licks:
             self._previous_licks = lick_count  # Updates the local lick counter
+
+            # Whenever the animal licks the water delivery tube, it is consuming any available rewards. Resets the
+            # unconsumed count whenever new licks are detected.
+            self._unconsumed_count = 0
+
             self._unity.send_data(topic=self._microcontrollers.lick.mqtt_topic, payload=None)
 
         # If Unity sends updates to the Mesoscope-VR system, receives and processes the data. Note, this will discard
@@ -1168,7 +1175,13 @@ class _MesoscopeExperiment:
 
             # Uses the reward volume specified during startup (5.0) or via the UI (Anything from 1 to 20).
             if topic == self._microcontrollers.valve.mqtt_topic:
-                self._microcontrollers.deliver_reward(ignore_parameters=True)
+                # Only delivers water rewards if the current unconsumed count value is below the user-defined threshold.
+                if self._unconsumed_count < self.descriptor.maximum_unconsumed_rewards:
+                    self._microcontrollers.deliver_reward(ignore_parameters=True)
+
+                # Otherwise, simulates water reward by sounding the buzzer without delivering any water
+                else:
+                    self.simulate_reward()
 
             # If Unity runtime (game mode) terminates, Unity sends a message to the termination topic. In turn, the
             # runtime uses this as an indicator to reset the task logic.
@@ -2689,7 +2702,7 @@ def run_training_logic(
                         elif answer.lower() == "no":
                             break  # Returns to the pause state
 
-                    # Escapes the pause loop, if the user chose to abort the runtime
+                    # Escapes the pause loop if the user chose to abort the runtime
                     if abort_stage:
                         break
             else:
@@ -2744,6 +2757,7 @@ def experiment_logic(
     experiment_name: str,
     animal_id: str,
     animal_weight: float,
+    maximum_unconsumed_rewards: int = 1,
 ) -> None:
     """Encapsulates the logic used to run experiments via the Mesoscope-VR system.
 
@@ -2773,6 +2787,10 @@ def experiment_logic(
         experiment_name: The name or ID of the experiment to be conducted.
         animal_id: The numeric ID of the animal participating in the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
+        maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
+            them, before reward delivery (but not the experiment!) pauses until the animal consumes available rewards.
+            If this is set to a value below 1, the unconsumed reward limit will not be enforced. A value of 1 means
+            the animal has to consume each reward before getting the next reward.
     """
     message = f"Initializing {experiment_name} experiment runtime..."
     console.echo(message=message, level=LogLevel.INFO)
@@ -2842,7 +2860,7 @@ def experiment_logic(
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
         dispensed_water_volume_ml=0.0,
-        maximum_unconsumed_rewards=1,  # For now, all our tasks use a fixed value of 1. THe value is set via Unity.
+        maximum_unconsumed_rewards=maximum_unconsumed_rewards,
     )
 
     # Initializes the main runtime interface class.
@@ -2978,11 +2996,10 @@ def experiment_logic(
 
                     # Blocks in-place until the user either unpauses or aborts the runtime.
                     while ui.pause_runtime:
-
                         visualizer.update()  # Continuously updates the visualizer
 
                         # Keeps unity communication loop running. Primarily, this is done to support receiving
-                        # unity termination messages, if the user chooses to pause the runtime first and then terminate
+                        # unity termination messages if the user chooses to pause the runtime first and then terminate
                         # the Unity
                         runtime.communicate_with_unity()
 
@@ -3002,8 +3019,7 @@ def experiment_logic(
                         # If the user requests for the paused stage to be aborted, terminates the runtime.
                         if ui.exit_signal:
                             message = (
-                                "Experiment runtime abort signal: received. Are you sure you want to abort the "
-                                "runtime?"
+                                "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
                             )
                             console.echo(message=message, level=LogLevel.WARNING)
                             while True:

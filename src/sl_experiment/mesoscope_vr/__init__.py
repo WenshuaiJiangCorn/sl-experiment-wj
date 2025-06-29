@@ -10,7 +10,7 @@ from .data_acquisition import (
     lick_training_logic,
     window_checking_logic,
 )
-from .data_preprocessing import purge_redundant_data, preprocess_session_data, purge_failed_session
+from .data_preprocessing import purge_failed_session, purge_redundant_data, preprocess_session_data
 
 __all__ = [
     "CRCCalculator",
