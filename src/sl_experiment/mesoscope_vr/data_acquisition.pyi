@@ -284,7 +284,7 @@ class _MesoscopeExperiment:
         automatically upon entry into the reward zone.
 
         Notes:
-            The boolean 'enable guidance' state is an inverse of the Unities 'must lick' toggle. Therefore, if
+            The boolean 'enable guidance' state is inverse of the Unities 'must lick' toggle. Therefore, if
             guidance is True, Must Lick is False.
 
         Args:

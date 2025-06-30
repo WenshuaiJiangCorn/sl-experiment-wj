@@ -432,9 +432,7 @@ class _MesoscopeExperiment:
         console.echo(message=message, level=LogLevel.WARNING)
         input("Enter anything to continue: ")
 
-        # Starts monitoring the sensors used during all VR states. Currently, this is the lick sensor state and
-        # the mesoscope frame ttl module state.
-        self._microcontrollers.enable_mesoscope_frame_monitoring()
+        # Since licks are monitored during all experiment phases, permanently enables lick monitoring.
         self._microcontrollers.enable_lick_monitoring()
 
         # Sets the rest of the subsystems to use the IDLE state.
@@ -995,6 +993,10 @@ class _MesoscopeExperiment:
 
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
         timeout_timer = PrecisionTimer("s")
+
+        # Starts mesoscope frame monitoring and delays for 1 second to ensure hardware has time to initialize
+        self._microcontrollers.enable_mesoscope_frame_monitoring()
+        timeout_timer.delay_noblock(delay=1)
 
         # Ensures that the mesoscope is not already acquiring frames. This is crucial to properly reset the mesoscope
         # data folder to remove any TIFFs acquired during motion estimator generation.
