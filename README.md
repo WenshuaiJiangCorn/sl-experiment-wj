@@ -14,83 +14,34 @@ ___
 
 ## Detailed Description
 
-This library functions as the central hub for collecting and preprocessing the data shared by all individual Sun lab 
-projects. To do so, it exposes the API that allows interfacing with the hardware making up the overall Mesoscope-VR 
-(Virtual Reality) system used in the lab and working with the data collected via this hardware. Primarily, this involves
-specializing varius general-purpose libraries, released as part of the 'Ataraxis' science-automation project
-to work within the specific hardware implementations used in the lab.
+This library functions as the central hub for collecting and preprocessing the data for all current and future projects 
+in the Sun lab. To do so, it exposes the API to interface with all data acquisition systems in the lab. Primarily, this 
+relies on specializing varius general-purpose libraries released as part of the 'Ataraxis' science-automation project
+to work within the specific hardware implementations available in the lab.
 
 This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab,
-and will likely not work in other contexts without extensive modification. It is made public to serve as the real-world 
-example of how to use 'Ataraxis' libraries to acquire and preprocess scientific data.
-
-Currently, the Mesoscope-VR system consists of three major parts: 
-1. The [2P-Random-Access-Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472), assembled by 
-   [Thor Labs](https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=10646) and controlled by 
-   [ScanImage](https://www.mbfbioscience.com/products/scanimage/) software. The Mesoscope control and data acquisition 
-   are performed by a dedicated computer referred to as the 'ScanImagePC' or 'Mesoscope PC.' 
-2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
-   experiments to control the task environment and resolve the task logic. The virtual environment runs on the main data
-   acquisition computer referred to as the 'VRPC.'
-3. The [microcontroller-powered](https://github.com/Sun-Lab-NBB/sl-micro-controllers) hardware that allows 
-   bidirectionally interfacing with the Virtual Reality world and collecting non-visual animal behavior data. This 
-   hardware, as well as dedicated camera hardware used to record visual behavior data, is controlled through the 'VRPC.'
+and will likely not work in other contexts without extensive modification. The library broadly consists of two 
+parts: the shared assets and the acquisition-system-specific bindings. The shared assets are reused by all acquisition 
+systems and are mostly inherited from the [sl-shared-assets](https://github.com/Sun-Lab-NBB/sl-shared-assets) library. 
+The acquisition-system-specific code is tightly integrated with the hardware used in the lab and is generally not 
+designed to be reused in any other context. See the [data acquisition systems](#data-acquisition-systems) section for 
+more details on currently supported acquisition systems.
 ___
 
 ## Table of Contents
-
-- [Dependencies](#dependencies)
 - [Installation](#installation)
-- [System Assembly](#system-assembly)
-- [Usage](#usage)
+- [Data Acquisition Systems](#data-acquisition-systems)
+- [Mesoscope-VR System](#mesoscope-vr-data-acquisition-system)
+- [Acquired Data Structure and Management](#acquired-data-structure-and-management)
+- [Acquiring Data in the Sun Lab](#acquiring-data-in-the-sun-lab)
 - [API Documentation](#api-documentation)
 - [Recovering from Interruptions](#recovering-from-interruptions)
 - [Versioning](#versioning)
 - [Authors](#authors)
 - [License](#license)
 - [Acknowledgements](#Acknowledgments)
-___
 
-## Dependencies
-
-### Main Dependency
-- ***Linux*** operating system. While the library may also work on Windows and macOS, it has been explicitly written for
-  and tested on mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution of the GNU 
-  Linux operating system.
-
-### Software Dependencies
-***Note!*** This list only includes external dependencies that are required to run the library, in addition to all 
-dependencies automatically installed from pip / conda as part of library installation. The dependencies below have to
-be installed and configured on the **VRPC** before calling runtime commands via the command-line interface (CLI) exposed
-by this library.
-
-- [MQTT broker](https://mosquitto.org/). The broker should be running locally with the **default** IP (27.0.0.1) and 
-  Port (1883) configuration.
-- [FFMPEG](https://www.ffmpeg.org/download.html). As a minimum, the version of FFMPEG should support H265 and H264 
-  codecs with hardware acceleration (Nvidia GPU). It is typically safe to use the latest available version.
-- [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/) GenTL producer. This library is used with version 
-  **2.9.2**, which is freely distributed. Higher GenTL producer versions will likely work too, but they require 
-  purchasing a license.
-- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). Use the latest available release.
-- [Unity Game Engine](https://unity.com/products/unity-engine). Use the latest available release.
 ---
-
-### Hardware Dependencies
-
-**Note!** These dependencies only apply to the 'VRPC,' the main PC that runs the data acquisition and 
-preprocessing pipelines. Hardware dependencies for the ScanImagePC are determined by ThorLabs.
-
-- [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
-  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with RTX 4090.
-- A CPU with at least 12, preferably 16, physical cores. This library has been tested with 
-  [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
-  It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
-  for predictable performance of all library components.
-- A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
-  required for the high-quality machine vision camera used to record videos of the animal’s face. We also use 10-Gigabit
-  lines for transferring the data between the PCs used in the data acquisition process and destinations used for 
-  long-term data storage (see [data management section](#data-structure-and-management)).
-___
 
 ## Installation
 
@@ -106,29 +57,111 @@ Note, installation from source is ***highly discouraged*** for everyone who is n
 
 ### pip
 Use the following command to install the library using pip: ```pip install sl-experiment```.
+
 ___
 
-## System Assembly
+## Data Acquisition Systems
+
+A Data Acquisition (and Runtime Control) system can be broadly defined as a collection of hardware and software tools 
+used to conduct experiments and acquire scientific data. Each data acquisition system can use one or more machines
+(PCs) to acquire the data, with this library typically running on the **main** data acquisition machine. Additionally, 
+each system typically uses a Network Attached Storage (NAS), a remote storage server, or both to store
+the data after the acquisition safely (with redundancy and parity).
+
+Primarily, each data acquisition system is built around the main tool used to acquire brain activity data. For example, 
+the main system in the Sun lab is the [Mesoscope-VR](#mesoscope-vr-data-acquisition-system) system, which uses the 
+[2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472). All other components of that 
+system are built around the Mesoscope to facilitate the acquisition of the brain activity data. Due to this inherent 
+specialization, each data acquisition system in the lab is treated as an independent unit that requires custom software
+to both acquire and process the resultant data.
+
+***Note!*** Since each data acquisition system is unique, the section below will be iteratively expanded to include 
+system-specific assembly instructions for **each supported acquisition system**. Commonly, updates to this section 
+coincide with major or minor library version updates.
+
+---
+
+## Mesoscope-VR Data Acquisition System
+
+This is the main ddata acquisition system currently used in the Sun lab. The system broadly consists of four major 
+parts: 
+1. The [2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472), assembled by 
+   [Thor Labs](https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=10646) and controlled by 
+   [ScanImage](https://www.mbfbioscience.com/products/scanimage/) software. The Mesoscope control and data acquisition 
+   are performed by a dedicated computer referred to as the **'ScanImagePC'** or, (less frequently) the
+   **'Mesoscope PC.'**. This PC is assembled and configured by the [MBF Bioscience](https://www.mbfbioscience.com/). The
+   only modification carried out by the Sun lab during assembly was the configuration of a Server Message Block (SMB)
+   protocol access to the root folder used by the ScanImage software to save the mesoscope data.
+2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
+   experiments to control the task environment and resolve the task logic. The virtual environment runs on the main data
+   acquisition computer referred to as the **'VRPC'** and relies on the [MQTT](https://mqtt.org/) communication protocol
+   and the [Sun lab implementation of the GIMBL](https://github.com/Sun-Lab-NBB/Unity-tasks) package to bidirectionally 
+   interface with the virtual task environment.
+3. The [microcontroller powered](https://github.com/Sun-Lab-NBB/sl-micro-controllers) hardware that allows 
+   bidirectionally interfacing with various physical components (modules) of the Mesoscope-VR systems.
+4. A set of visual and IR-range cameras used to acquire behavior video data.
+
+### Main Dependency
+- ***Linux*** operating system. While the library *may* also work on Windows and macOS, it has been explicitly written 
+  for and tested on the mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution of 
+  the GNU Linux operating system.
+
+### Software Dependencies
+***Note!*** This list only includes *external dependencies*, which are installed *in addition* to all 
+dependencies automatically installed from pip / conda as part of library installation. The dependencies below have to
+be installed and configured on the **VRPC** before calling runtime commands via the command-line interface (CLI) exposed
+by this library.
+
+- [MQTT broker](https://mosquitto.org/). The broker should be running locally and can use the **default** IP
+  (27.0.0.1) and Port (1883) configuration.
+- [FFMPEG](https://www.ffmpeg.org/download.html). As a minimum, the version of FFMPEG should support H265 and H264 
+  codecs with hardware acceleration (Nvidia GPU). It is typically safe to use the latest available version.
+- [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/). This library is tested with version **2.9.2**, 
+  which is freely distributed. Higher GenTL producer versions will likely work too, but they require purchasing a 
+  license.
+- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). Use the latest available release.
+- [Unity Game Engine](https://unity.com/products/unity-engine). Use the latest available release.
+
+### Hardware Dependencies
+
+**Note!** These dependencies only apply to the **VRPC**. Hardware dependencies for the **ScanImagePC** are determined 
+and controlled by MBF and ThorLabs.
+
+- [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
+  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with RTX 4090.
+- A CPU with at least 12, preferably 16, physical cores. This library has been tested with 
+  [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
+  It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
+  for predictable performance of all library components.
+- A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
+  required for the high-quality machine vision camera used to record videos of the animal’s face. We also use 10-Gigabit
+  lines for transferring the data between the PCs used in the data acquisition process and destinations used for 
+  long-term data storage (see [acquired data management section](#acquired-data-structure-and-management) for more 
+  details).
+
+### System Assembly
 
 The Mesoscope-VR system consists of multiple interdependent components. We are constantly making minor changes to the 
 system to optimize its performance and facilitate novel experiments and projects carried out in the lab. Treat this 
 section as a general system composition guide, but consult our publications over this section for instructions on 
-building specific system implementations used for various projects.
+building specific system implementations used to acquire the data featured in different publications.
 
 Physical assembly and mounting of ***all*** hardware components mentioned in the specific subsections below is discussed
 in the [main Mesoscope-VR assembly section](#mesoscope-vr-assembly).
 
 ### Zaber Motors
-All brain activity recordings with the mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
-the Virtual Reality treadmill (running wheel) and promote task performance, we use two groups of motors controlled 
+All brain activity recordings with the Mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
+the Virtual Reality treadmill (running wheel) and promote task performance, we use three groups of motors controlled 
 though Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
 Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this allows for a wide range of 
-motions necessary to promote good animal running behavior and brain activity data collection. The second group of 
+motion necessary to align the Mesoscope objective with the brain imaging plane. The second group of 
 motors, the **LickPort**, controls the position of the water delivery port (and sensor) in X, Y, and Z axes. This
 is used to ensure all animals have comfortable access to the water delivery tube, regardless of their head position.
+The third group of motors, the **Wheel**, controls the position of the running wheel in the X-axis relative to the 
+head-fixed animal’s body and is used to position the animal on the running wheel to promote good running behavior.
 
-The current snapshot of Zaber motor configurations used in the lab, alongside motor parts list and electrical wiring 
-instructions, is available 
+The current snapshot of Zaber motor configurations used in the lab, alongside the motor parts list and electrical wiring
+instructions is available 
 [here](https://drive.google.com/drive/folders/1SL75KE3S2vuR9TTkxe6N4wvrYdK-Zmxn?usp=drive_link).
 
 **Warning!** Zaber motors have to be configured correctly to work with this library. To (re)configure the motors to work
@@ -138,17 +171,50 @@ the 'Applying Zaber Configuration' document for the correct application procedur
 
 **Although this is highly discouraged, you can also edit the motor settings manually**. To configure the motors
 to work with this library, you need to overwrite the non-volatile User Data of each motor device (controller) with
-the data expected by this library. See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
-**ZaberSettings** class to learn more about the settings used by this library. See the source code from the 
-[zaber_bindings.py](/src/sl_experiment/zaber_bindings.py) module to learn how these settings are used during runtime.
+the data expected by this library:
+1. **User Data 0**: Device CRC Code. This variable should store the CRC32-XFER checksum of the device’s name 
+   (user-defined name). During runtime, the library generates the CRC32-XFER checksum of each device’s name and compares
+   it against the value stored inside the User Data 0 variable to ensure that each device is configured appropriately to
+   work with the sl-experiment library. **Tip!** Use the `sl-crc` console command to generate the CRC32-XFER checksum 
+   for each device during manual configuration, as it uses the same code as used during runtime and, therefore, 
+   guarantees that the checksums will be matching.
+2. **User Data 1**: Device ShutDown Flag. This variable is used as a secondary safety measure to ensure each device has 
+   been properly shut down during previous runtimes. As part of the manual device configuration, make sure that this 
+   variable is set to **1**. Otherwise, the library will not start any runtime that involves that Zaber motor. During 
+   runtime, the library sets this variable to 0, making it impossible to use the motor without manual intervention again
+   if the runtime interrupts without executing the proper shut down sequence that sets the variable back to 1.
+   **Warning!** It is imperative to ensure that all motors are parked at positions where they are **guaranteed** to 
+   successfully home after power cycling before setting this to 1. Otherwise, it is possible for some motors to collide
+   with other system components and damage the acquisition system.
+3. **User Data 10**: Device Axis Type Flag. This variable should be set to **1** for motors that move on a linear axis 
+   and **0** for motors that move on a rotary axis. This static flag is primarily used to support proper unit 
+   conversions and motor positioning logic during runtimes.
+4. **User Data 11**: Device Park Position. This variable should be set to the position, in native motor units, where 
+   the device should be moved as part of the 'park' command and the shut-down sequence. This is used to position all 
+   motors in a way that guarantees they can be safely 'homed' at the beginning of the next runtime. In other words, each
+   park position has to be selected so that each motor can move to their 'home' sensor without colliding with any other
+   motor **simultaneously** moving towards their 'home' position. **Note!** The lick-port uses the 'park' position as 
+   the **default** imaging position. In other words, during runtime, it will move to the 'park' position if it has no 
+   animal-specific position to use during imaging. Therefore, make sure that the park position for the lick-port is 
+   always set so that it cannot possibly harm the animal mounted in the rig.
+5. **User Data 12** Device Maintenance Position. This variable should be set to the position, in native motor units, 
+   where the device should be moved as part of the 'maintain' command. Primarily, this position is used during water 
+   delivery system calibration and the running-wheel surface maintenance task. Typically, this position is calibrated to
+   provide easy access to all hardware components of the system by moving all motors as far away from each other as 
+   reasonable.
+6. **User Data 13**: Device Mount Position. This variable should be set to the position, in native motor units, where 
+   the device should be moved as part of the 'mount' command. For the lick-port, this position is usually far away from 
+   the animal, which facilitates mounting and unmounting the animal from the rig. For the head-bar and the wheel motor 
+   groups, this position is used as the **default** imaging position. Therefore, set the head-bar and the wheel 'mount'
+   positions so that any (new) animal can be comfortably and safely mounted in the Mesoscope-VR system.
 
 ### Behavior Cameras
 To record the animal’s behavior, we use a group of three cameras. The **face_camera** is a high-end machine-vision 
 camera used to record the animal’s face with approximately 3-MegaPixel resolution. The **left-camera** and 
 **right_camera** are 1080P security cameras used to record the body of the animal. Only the data recorded by the 
-**face_camera** is currently used during data processing and analysis. We use custom 
-[ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system) bindings to interface with and record the 
-frames acquired by all cameras.
+**face_camera** is currently used during data processing and analysis, but we save the data from all available cameras. 
+We use custom [ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system) bindings to interface with 
+and record the frames acquired by all cameras.
 
 Specific information about the components used by the camera systems, as well as the snapshot of the configuration 
 parameters used by the **face_camera**, is available 
@@ -163,158 +229,224 @@ For instructions on assembling and wiring the electronic components used in each
 code running on each microcontroller, see the 
 [microcontroller repository](https://github.com/Sun-Lab-NBB/sl-micro-controllers).
 
-### Unity Game World
-The task environment used in Sun lab experiments is rendered and controlled by the Unity game engine. To make Unity work
-with this library, each project-specific Unity task must use the bindings and assets released as part of our 
-[GIMBL-tasks repository](https://github.com/Sun-Lab-NBB/GIMBL-tasks). Follow the instructions from that repository to 
-set up Unity Game engine to run Sun lab experiment tasks.
+### Virtual Reality Task Environment (Unity)
+The task environment used in all Mesoscope-VR experiments is rendered and controlled by the Unity game engine. To make 
+Unity work with this library, each project-specific Unity task must use the bindings and assets released as part of our 
+[Unity-tasks repository](https://github.com/Sun-Lab-NBB/Unity-tasks). Follow the instructions from that repository to 
+set up Unity Game engine to interface with this library and to create new virtual task environments.
 
-**Note** This library does not contain tools to initialize Unity Game engine. The desired Virtual Reality task
-has to be started ***manually*** before initializing the main experiment runtime through this library. The main Unity 
-repository contains more details about starting the virtual reality tasks when running experiments.
+**Note!** This library does not contain tools to initialize Unity Game engine. The desired Virtual Reality task
+has to be started ('armed') ***manually*** before initializing the main experiment runtime through this library. The 
+main Unity repository contains more details about starting the virtual reality tasks when running experiments. During 
+CLI-driven experiment runtimes, the library instructs the user when to 'arm' the Unity game engine.
 
 ### Google Sheets API Integration
 
-This library is statically configured to interact with various Google Sheet files used in the Sun lab. Currently, this 
-includes two files: the **surgery log** and the **water restriction log**. Primarily, this part of the library is 
-designed as a convenience feature for lab members and to back up and store all project-related data in the same place.
+This library interacts with project-specific Google Sheet files used in the Sun lab to track and communicate certain 
+information about the animals that participate in the project. Currently, this includes two files: the **surgery log** 
+and the **water restriction log**. Primarily, this integration is used to ensure that all information about each 
+experiment subject is stored in the same location (on the long-term storage machine(s)). Additionally, it is used in the
+lab to automate certain data logging tasks.
 
 #### Setting up Google Sheets API Access
 
-**If you already have a service Google Sheets API account, skip to the next section.** Typically, we use the same 
-service account for all projects and log files.
+**If you already have a service Google Sheets API account, skip to the next section.** Since we use the same 
+service account for all projects and log files, this section should generally be ignored by most lab members.
 
-1. Log into the [Google Cloud Console](https://shorturl.at/qiDYc). 
+1. Log into the [Google Cloud Console](https://console.cloud.google.com/welcome). 
 2. Create a new project.
-3. Navigate to APIs & Services > Library and enable the Google Sheets API for the project. 
-4. Under IAM & Admin > Service Accounts, create a service account. This will generate a service account ID in the format
+3. Navigate to APIs & Services → Library and enable the Google Sheets API for the project. 
+4. Under IAM & Admin → Service Accounts, create a service account. This will generate a service account ID in the format
    of `your-service-account@gserviceaccount.com`.
-5. Select Manage Keys from the Actions menu and, if a key does not already exist, create a new key and download the 
-   private key in JSON format. This key is then used to access the Google Sheets.
+5. Use Actions → Manage Keys and, if a key does not already exist, create a new key and download it in JSON format. 
+   This key is then used to access the Google Sheets.
 
 #### Adding Google Sheets Access to the Service Account
 To access the **surgery log** and the **water restriction log** Google Sheets as part of this library runtime, create 
-and share these log files with the email of the service account created above. The service account requires **Viewer** 
-access to the **surgery log** file and **Editor** access to the **water restriction log** file.
+and share these log files with the email of the service account created above. The service account requires **Editor** 
+access to both files.
 
 **Note!** This feature expects that both log files are formatted according to the available Sun lab templates. 
-Otherwise, the parsing algorithm will not behave as expected, leading to runtime failure.
+Otherwise, the parsing algorithm will not behave as expected, leading to runtime failure. Additionally, both log files 
+have to be pre-filled in advance, as the processing code is not allowed to automatically generate new table (log) rows.
+**Tip!** Currently, we suggest pre-filling the data a month in-advance. Since most experiments last for at most a month,
+this usually covers the entire experiment period for any animal.
 
 ### Mesoscope-VR Assembly:
 ***This section is currently a placeholder. Since we are actively working on the final Mesoscope-VR design, it will be 
 populated once we have a final design implementation.***
 
+The Mesoscope-VR assembly mostly consists of two types of components. First, it includes custom components manufactured 
+via 3D-printing or machining (for metalwork). Second, it consists of generic components available from vendors such as 
+ThorLabs, which are altered in workshops to fit the specific requirements of the Mesoscope-VR system. The blueprints and
+CAD files for all components of the Mesoscope-VR systems, including CAD renders of the assembled system, are available 
+[here](https://drive.google.com/drive/folders/1Oz2qWAg3HkMqw6VXKlY_c3clcz-rDBgi?usp=sharing).
 ___
 
-## Data Structure and Management
+## Acquired Data Structure and Management
 
 The library defines a fixed structure for storing all acquired data which uses a 4-level directory tree hierarchy: 
-**root**, **project**, **animal**, and **session**.
+**root** (volume), **project**, **animal**, and **session**. This structure is reused by all acquisition systems, and 
+it is maintained across all data acquisition and long-term storage machines. After each data acquisition runtime, all 
+raw data will be found under the **root/project/animal/session/raw_data** directory stored on one or more machines 
+mentioned below. After each data processing pipeline runtime, all processed data generated by that pipeline will be 
+found under the **root/project/animal/session/processed_data**.
 
-Currently, our pipeline uses a total of four computers when working with data. **VRPC** and **ScanImagePC** are used to 
-acquire and preprocess the data. After preprocessing, the data is moved to the **BioHPC server** and the 
-**Synology NAS** for long-term storage and preprocessing. All data movement is performed over 10-Gigabit local networks 
-within the lab and broader Cornell infrastructure.
+Currently, each data acquisition system in the lab uses at least three machines: 
+1. The **main data acquisition PC** is used to acquire and preprocess the data. For example, the *VRPC* of the 
+   *Mesoscope-VR* system is the main data acquisition PC for that system. This PC is sued to both **acquire** the data 
+   and, critically, to **preprocess** the data before it is moved to the long-term storage destination.
+2. The **BioHPC compute server** is the main long-term storage destination and the machine used to process and 
+   analyze the data. This is the high-performance computing server owned by the lab and optionally extendable by renting
+   additional nodes from Cornell’s BioHPC cluster. The BioHPC server stores both the preprocessed raw data and the 
+   processed data generated by all Sun lab processing pipelines.
+3. The **Synology NAS** is the back-up 'cold' long-term storage destination. It only stores the raw data and is 
+   physically located in a different building from the main BioHPC compute server to provide data storage redundancy. It
+   is only used to back up raw data and is generally not intended to be accessed unless the main data storage becomes 
+   compromised for any reason.
 
-***Critical!*** Although this library primarily operates the VRPC, it expects the root data directories for all other 
-PCs used for data acquisition or storage in the lab to be **mounted to the VRPC filesystem using the SMB3 protocol**. 
-In turn, this allows the library to maintain the same data hierarchies across all storage machines.
+***Critical!*** Each data acquisition system is designed to **mount the BioHPC and the NAS to the main acquisition PC 
+filesystem using the SMB3 protocol**. Therefore, each data acquisition system operates on the assumption that all 
+storage component filesystems are used contiguously and can be freely accessed by the main acquisition PC OS.
 
-Generally, the library tries to maintain at least two copies of data for long-term storage: one on the NAS and the other
-on the BioHPC server. Moreover, until `sl-purge` (see below) command is used to clear the VRPC storage, an additional 
-copy of the acquired data is also stored on the VRPC for each recorded session. While this design achieves high data 
-integrity (and redundancy), we **highly encourage** all lab members to manually back up critical data to external 
-SSD / HDD drives.
+***Note!*** The library tries to maintain at least two copies of data for long-term storage: one on the NAS and the 
+other on the BioHPC server. It is configured to purge redundant data from the data acquisition system machines if
+the data has been **safely** moved to the long-term storage destinations. The integrity of the moved data is verified
+using xxHash-128 checksum before the data is removed from the data-acquisition system.
 
-### Root Directory
-When a training, experiment, or maintenance runtime command from this library is called for the first time, the library 
-asks the user to provide the path to the root project directory on the VRPC. The data for all projects after this point 
-is stored in that directory. This directory is referred to as the local **root** directory. Moreover, each
-project can be configured with paths to the root directories on all other computers used for data acquisition or 
-storage (see below). However, it is expected that all projects in the lab use the same root directories for all 
-computers.
+### Root Directory (Volume)
+All data acquisition systems, the Synology NAS and the BioHPC server keep **ALL** Sun lab projects in the same **root** 
+directory. The BioHPC server uses **two roots**, one for the raw data and the other for the **processed data**. This 
+separation is due to the BioHPC server using both fast NVME drives and slow HDD drives to optimize storage cost against 
+processing performance. The exact location and name of the root directory on each machine is arbitrary, but is expected 
+to either change very infrequently or not at all. 
 
-### Project directory
-When a new --project (-p) argument value is provided to any runtime command, the library generates a new **project**
-directory under the static **root** directory. The project directory uses the project name provided via the command
-argument as its name. As part of this process, a **configuration** subdirectory is also created under the 
-**project** directory.
+### Project Directory
+When a new project is created, a **project** directory **named after the project** is created under the **root** 
+directory of the main data acquisition machine, the Synology NAS, and both the raw and processed data BioHPC volumes. 
+Depending on the host machine, this project directory may contain further subdirectories. For example, most data 
+acquisition systems also create a **configuration** subdirectory under the root project directory.
 
-***Critical!*** Inside the **configuration** subdirectory, the library automatically creates a 
-**project_configuration.yaml** file. Open that file with a text editor and edit the fields in the file to specify the 
-project configuration. Review the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
-**ProjectConfiguration** class to learn more about the purpose of each configuration file field.
+### Animal Directory
+When the library is used to acquire data for a new animal, it generates a new **animal** directory under the **root** 
+and **project** directory combination. The directory uses the ID of the animal, provided via the command argument as its
+name. Depending on the host machine, this animal directory may contain further subdirectories. For example, most data 
+acquisition systems also create a **persistent_data** subdirectory under the root animal directory, which is used to 
+store data that is reused between data acquisition sessions.
 
-Together with the **project_configuration.yaml**, the library also creates an example **default_experiment.yaml**
-file. Each experiment that needs to be carried out as part of this project needs to have a dedicated .yaml file, named
-after the experiment. For example, to run the 'default_experiment,' the library uses the configurations stored in 
-the 'default_experiment.yaml' file. You can use the default_experiment.yaml as an example for writing additional 
-experiment configurations. Review the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the 
-**ExperimentConfiguration** and **ExperimentState** classes to learn more about the purpose of each field inside the 
-experiment configuration .yaml file.
+***Critical!*** Current Sun lab convention stipulates that all animal IDs should be numeric. While some library 
+components do accept strings as inputs, it is expected that all animal IDs only consist of positive numbers. Failure to
+adhere to this naming convention can lead to runtime errors and unexpected behavior of all library components!
 
-### Animal directory
-When a new --animal (-a) argument value is provided to any runtime command, the library generates a new **animal**
-directory under the **root** and **project** directory combination. The directory uses the ID of the animal, 
-provided via the command argument as its name.
+### Session Directory
+Each time the library is used to acquire data, a new session directory is created under the **root**, **project** and 
+**animal** directory combination. The session name is derived from the current ***UTC*** timestamp, accurate 
+to ***microseconds***. Primarily, this naming format was chosen to make all sessions acquired by the same acquisition 
+system have unique and chronologically sortable names. The session name format follows the order of 
+**YYYY-MM-DD-HH-MM-SS-US**.
 
-Under each animal directory, two additional directories are created. First, the **persistent_data** directory, which
-is used to store the information that has to stay on the VRPC when the acquired data is transferred from the VRPC to 
-other destinations. Second, the **metadata** directory, which is used to store information that does not change between
-sessions, such as the information about the surgical procedures performed on the animal.
+### Raw Data and Processed Data:
+All data acquired by this library is stored under the **raw_data** subdirectory, generated for each session. Overall, 
+an example path to the acquired (raw) data can therefore look like this: 
+`/media/Data/Experiments/Template/666/2025-11-11-05-03-234123/raw_data/`. 
 
-### Session directory
-When any training or experiment runtime command is called, a new session directory is created under the **root**, 
-**project** and **animal** directory combination. The session name is derived from the current UTC timestamp, accurate 
-to microseconds. Together with other runtime controls, this makes it impossible to have sessions with duplicate names 
-and ensures all sessions can always be sorted chronologically.
+Similarly, our data processing pipelines generate new files and subdirectories under the **processed_data** 
+subdirectory, generated for each session. An example path to the processed_data directory can therefore look like this: 
+`server/sun_data/Template/666/2025-11-11-05-03-234123/processed_data`.
 
-Since the same directory tree is reused for data processing, all data acquired by this library is stored under the 
-**raw_data** subdirectory, generated for each session. Overall, an example path to the acquired data can therefore 
-look like this: `/media/Data/Experiments/TestMice/666/2025-11-11-05-03-234123/raw_data`. Our data processing pipelines 
-generate new files and subdirectories under the **processed_data** directory using the same **root**, **project**, 
-**animal**, and **session** combination, e.g.`server/sun_data/TestMice/666/2025-11-11-05-03-234123/processed_data`.
+***Note!*** This lab treats **both** newly acquired and preprocessed data as **raw**. This is because preprocessing 
+**does not in any way change the information of the data**. Instead, preprocessing uses lossless compression to more 
+efficiently package the data for transmission and can at any time be converted back to the original format. Processing 
+the data, on the other hand, generates additional data and / or modifies the processed data values in ways that may not 
+necessarily be reversible. Therefore, all Sun lab data pipelines are designed to ensure the safety of raw data under all
+circumstances.
 
-### Raw Data contents
-After acquisition and preprocessing, the **raw_data** folder will contain the following files and subdirectories:
-1. **zaber_positions.yaml**: Stores the snapshot of the HeadBar and LickPort motor positions taken at the end of the 
-   runtime session.
-2. **hardware_configuration.yaml**: Stores the snapshot of some configuration parameters used by the hardware module 
-   interfaces during runtime.
-3. **session_data.yaml**: Stores the paths and other data-management-related information used during runtime to save and
-   preprocess the acquired data.
-4. **session_descriptor.yaml**: Stores session-type-specific information, such as the training task parameters or 
-   experimenter notes. For experiment runtimes, this file is co-opted to store the Mesoscope objective positions.
-5. **ax_checksum.txt**: Stores an xxHash-128 checksum used to verify data integrity when it is transferred to the 
-   long-term storage destination.
-6. **behavior_data_log**: Stores compressed .npz log files. All non-video data acquired by the VRPC during runtime is 
-   stored in these log files. This includes all messages sent or received by each microcontroller and the timestamps 
-   for the frames acquired by each camera.
-7. **camera_frames** Stores the behavior videos recorded by each of the cameras.
-8. **mesoscope_frames**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory 
-   will be empty for training sessions, as they do not acquire Mesoscope data.
+### Shared Raw Data
 
-### ScanImagePC
+The section below briefly lists the data acquired by **all** Sun lab data acquisition systems. Note, each acquisition 
+system also generates **system-specific** data, which is listed under acquisition-system-specific sections available 
+after this section.
 
-The ScanImagePC uses a modified directory structure. First, under its **root** directory, there has to be a 
-**mesoscope_frames** directory, where ***All*** ScanImage data is saved during each session runtime. During 
-preprocessing, the library automatically empties this directory, allowing the same directory to be (re)used by all 
-experiment sessions.
+**Note!** For information about the **processed** data, see our 
+[main data processing library](https://github.com/Sun-Lab-NBB/sl-forgery).
 
-Under the same **root** directory, the library also creates a **persistent_data** directory. That directory follows the 
-same hierarchy (**project** and **animal**) as the VRPC. Like the VRPC’s **persistent_data** directory, it is used to 
-keep the data that should not be removed from the ScanImagePC even after all data acquired for a particular session is 
-moved over for long-term storage.
+After acquisition and preprocessing, the **raw_data** folder of each acquisition system will, as a minimum, contain the 
+following files and subdirectories:
+1. **ax_checksum.txt**: Stores the xxHash-128 checksum used to verify data integrity when it is transferred to the 
+   long-term storage destination. The checksum is generated before the data leaves the main data acquisition system PC
+   and, therefore, accurately captures the final state of the acquired and preprocessed data.
+2. **hardware_state.yaml**: Stores the snapshot of the dynamically calculated parameters used by the data acquisition 
+   system modules used during runtime. These parameters are recalculated at the beginning of each data acquisition 
+   system and are rounded and stored using the appropriate floating point type to minimize floating point rounding 
+   errors. This improves the quality of processed data by ensuring the processing and the data acquisition pipelines use
+   the same floating-point parameter values. This file is also used during data processing to determine which modules 
+   were used during runtime and, consequently, which data can be parsed from the .npz log files (see below).
+3. **project_configuration.yaml**: Stores the configuration parameters of the project for which the session was 
+   acquired. Critically, this includes the IDs of the Google sheets used to store the water restriction and the surgery
+   data for all animals used in the project.
+4. **session_data.yaml**: Stores information necessary to maintain the same session data structure across all machines 
+   used during data acquisition and long-term storage. This file is used by all lab libraries as an entry point for 
+   working with session’s data. The file also includes all available information about the identity and purpose of the 
+   session and can be used by human experimenters to identify the session.
+5. **session_descriptor.yaml**: Stores session-type-specific information, such as the training task parameters or 
+   experimenter notes. The contents of the file are overall different for each session type, although some fields are 
+   reused by all sessions. The contents for this file are partially written by the library and, partially, by the 
+   experimenter.
+6. **surgery_metadata.yaml**: Stores the data on the surgical intervention(s) performed on the animal that participated 
+   in the session. This data is extracted from the **surgery log** Google Sheet and, for most animals, should be the 
+   same across all sessions.
+7. **system_configuration.yaml**: Stores the configuration parameters of the data acquisition system that generated the
+   session data. This is a snapshot of **all** dynamically addressable configuration parameters used by the system. 
+   When combined with the assembly instructions and the static code of the appropriate sl-experiment library version, it
+   allows completely replicating the data acquisition system used to acquire the session data.
+8. **behavior_data**: Stores compressed .npz log files that contain all non-video behavior data acquired by the system. 
+   This includes all messages sent or received by each microcontroller, the timestamps for the frames acquired by 
+   each camera and, often, the main brain activity recording device (e.g.: Mesoscope). This also includes data on the 
+   flow of each experiment or training session (trials, conditions, progression, etc.). Although the exact content of 
+   the behavior data folder can differ between acquisition systems, all systems used in the lab generate some form of 
+   non-video behavior data.
+9. **camera_data**: Stores the behavior videos recorded by video cameras used by the acquisition system. While not 
+   technically required, all Sun lab data acquisition systems use one or more cameras to acquire behavior videos, so 
+   this directory will be present and not empty for all lab projects.
+10. **experiment_configuration.yaml**: This file is only created for **experiment** sessions. It stores the 
+   configuration of the experiment task performed by the animal during runtime. The contents of the file differ for each
+   data acquisition system, but each system generates a version of this file. The file contains enough information to 
+   fully replicate the experiment runtime on the same acquisition system.
+11. **telomere.bin**: This marker is used to communicate whether the session data is **complete**. Incomplete sessions
+   appear due to session acquisition runtime being unexpectedly interrupted. This is very rare and is typically the 
+   result of emergencies, such as sudden power loss or other unforeseen events. Incomplete sessions are automatically 
+   excluded from automated data processing and require manual user intervention to assess the usability of the session.
+   This marker file is created **exclusively** as part of session data preprocessing, based on the value of the 
+   **session_descriptor.yaml** file 'incomplete' field (see above).
+12. **integrity_verification_tracker.yaml**: This tracker file is used internally to run and truck the outcome of the 
+   remote data verification procedure. This procedure runs as part of moving the data to the long-term storage 
+   destination to ensure the data is transferred intact. Users can optionally check the status of the verification by 
+   accessing the data stored inside the file. **Note!** This file is added **only!** to the raw_data folder stored on
+   the BioHPC server.
 
-**Note!** For each runtime that uses the mesoscope, the library requires the user to generate a screenshot of the 
-cranial window and the dot-alignment window. The easiest way to make this work is to reconfigure the default Windows 
-screenshot directory (ScanImagePC uses Windows OS) to be the root ScanImagePC data directory. This way, hitting 
-'Windows+PrtSc' will automatically generate the .png screenshot under the ScanImagePc root directory, which is the 
-expected location used by this library.
+### Mesoscope-VR System Data
+
+The Mesoscope-VR system generates the following files and directories, in addition to those discussed in the shared 
+raw data section:
+1. **mesoscope_data**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory 
+   will be empty for training sessions, as they do not acquire Mesoscope data. As part of preprocessing, this folder 
+   is augmented to include the ops.json file, which is used by the sl-suite2p library to process the cell activity data
+   acquired by the Mesoscope. **Note!** This file is only created for window checking and experiment sessions.
+2. **zaber_positions.yaml**: Stores the snapshot of the positions used by the HeadBar, LickPort, and Wheel motor groups,
+   taken at the end of the session’s data acquisition. All positions are stored in native motor units. This file is 
+   created for all session types supported by the Mesoscope-VR system.
+3. **mesoscope_positions.yaml**: Stores the snapshot of the mesoscope objective position, taken at the end of the 
+   session’s data acquisition. **Note!** This file relies on the experimenter updating the stored positions if they 
+   changed between runtimes. It is only created for window checking and experiment sessions.
+4. **window_screenshot.png**: Stores the screenshot of the ScanImagePC screen. The screenshot should contain the image
+   of the red-dot alignment, the view of the target cell layer, and the information about the position of the mesoscope
+   and the data acquisition parameters. Primarily, the screenshot is used by experimenters to quickly reference the 
+   imaging quality from each experiment session. **Note!** This file is only created for window checking and experiment
+   sessions.
 
 --- 
 
-## Usage
+## Acquiring Data in the Sun Lab
 
 All user-facing library functionality is realized through a set of Command-Line Interface (CLI) commands automatically 
 exposed when the library is pip-installed into a python environment. Some of these commands take additional arguments 
@@ -322,11 +454,60 @@ that allow further configuring their runtime. Use `--help` argument when calling
 see the list of supported arguments together with their descriptions and default values.
 
 To use any of the commands described below, activate the python environment where the libray is installed, e.g., with 
-`conda activate myenv` and type one of the commands described below.
+`conda activate MYENV` and type one of the commands described below.
 
 ***Warning!*** Most commands described below use the terminal to communicate important runtime information to the user 
 or request user feedback. **Make sure you carefully read every message printed to the terminal during runtime**. 
-Failure to do so may damage the equipment or harm the animal.
+Failure to do so may damage the equipment or harm the animal!
+
+### Step 0: Configuring the Data Acquisition System
+
+Before acquiring data, each acquisition system has to be configured. This step is done in addition to assembling 
+the system and installing the required hardware components. Typically, this only needs to be done when the acquisition 
+system configuration or hardware changes, so most lab users can safely skip this step.
+
+Use `sl-create-system-config` command to generate the system configuration file. As part of its runtime, the command 
+configures the host machine to remember the path to the generated configuration file, so all future sl-experiments 
+runtimes on that machine will automatically load and use the appropriate acquisition-system configuration parameters.
+
+***Note!*** Each acquisition system uses unique configuration parameters. Additionally, we assume that any machine (PC)
+can only be used by a single data-acquisition system (is permanently a part of that acquisition system). Only the 
+**main** PC of the data acquisition system (e.g.: the VRPC of the Mesoscope-VR system) that runs the sl-experiment 
+library should be configured via this command.
+
+For information about the available system configuration parameters, read the *API documentation* of the appropriate 
+data-acquisition system available from the [sl-shared-assets](https://github.com/Sun-Lab-NBB/sl-shared-assets) library.
+
+Additionally, since every data acquisition system requires access to the BioHPC server for long-term data storage, it 
+needs to be provided with server access credentials. The credentials are stored inside the 'server_credentials.yaml'
+file, which is generated by using the `sl-create-server-credentials` command. **Note!** The path to the generated and
+filled credential file has to be provided by editing the acquisition-system configuration file created via the command 
+discussed above.
+
+### Step 1: Creating a Project
+
+All data acquisition sessions require a valid project to run. To create a new project, use the `sl-create-project`
+command. This command can only be called on the main PC of a properly configured data-acquisition system (see Step 0 
+above). As part of its runtime, this command generates the root project directory on all machines that make up the 
+data acquisition systems and long-term storage destinations.
+
+### Step 2: Creating an Experiment
+
+All projects that involve scientific experiments also need to define at least one **experiment configuration**. 
+Experiment configurations are unique for each data acquisition system and are stored inside .yaml files named after the
+experiment. To generate a new experiment configuration file, use the `sl-create-experiment` command. This command 
+generates a **precursor** experiment configuration file inside the **configuration** subdirectory, stored under the root
+project directory on the main PC of the data acquisition system.
+
+For information about the available experiment configuration parameters in the precursor file, read the 
+*API documentation* of the appropriate data-acquisition system available from the 
+[sl-shared-assets](https://github.com/Sun-Lab-NBB/sl-shared-assets) library.
+
+### Step 3: Maintaining the Acquisition System
+
+### Step 4: Acquiring Data
+
+### Step 5: Preprocessing and Managing Data
 
 ### sl-crc
 This command takes in a string-value and returns a CRC-32 XFER checksum of the input string. This is used to generate a 

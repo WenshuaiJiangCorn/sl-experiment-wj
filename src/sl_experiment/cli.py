@@ -4,27 +4,43 @@ from this library through the terminal."""
 from pathlib import Path
 
 import click
-
-from .experiment import (
-    run_train_logic,
-    lick_training_logic,
-    run_experiment_logic,
-    vr_maintenance_logic,
+from sl_shared_assets import (
+    SessionData,
+    ExperimentState,
+    ProjectConfiguration,
+    MesoscopeSystemConfiguration,
+    MesoscopeExperimentConfiguration,
+    get_system_configuration_data,
+    set_system_configuration_file,
 )
-from .data_classes import SessionData, ProjectConfiguration, replace_root_path
-from .zaber_bindings import CRCCalculator, discover_zaber_devices
-from .data_preprocessing import purge_redundant_data, preprocess_session_data
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+
+from .mesoscope_vr import (
+    CRCCalculator,
+    experiment_logic,
+    maintenance_logic,
+    run_training_logic,
+    lick_training_logic,
+    purge_failed_session,
+    purge_redundant_data,
+    window_checking_logic,
+    discover_zaber_devices,
+    preprocess_session_data,
+)
 
 
 @click.command()
 @click.option(
-    "--string", "-i", prompt="Enter the string to be checksummed", help="The string to calculate the CRC checksum for."
+    "-i",
+    "--input_string",
+    prompt="Enter the string to be checksummed: ",
+    help="The string to calculate the CRC checksum for.",
 )
-def calculate_crc(string: str) -> None:
+def calculate_crc(input_string: str) -> None:
     """Calculates the CRC32-XFER checksum for the input string."""
     calculator = CRCCalculator()
-    crc_checksum = calculator.string_checksum(string)
-    click.echo(f"The CRC32-XFER checksum for the input string '{string}' is: {crc_checksum}")
+    crc_checksum = calculator.string_checksum(input_string)
+    click.echo(f"The CRC32-XFER checksum for the input string '{input_string}' is: {crc_checksum}.")
 
 
 @click.command()
@@ -34,11 +50,218 @@ def calculate_crc(string: str) -> None:
     is_flag=True,
     show_default=True,
     default=False,
-    help="Determines whether to display errors encountered when connecting to all evaluated serial ports.",
+    help="Determines whether to display errors encountered when connecting to evaluated serial ports.",
 )
 def list_devices(errors: bool) -> None:
     """Displays information about all Zaber devices available through USB ports of the host-system."""
     discover_zaber_devices(silence_errors=not errors)
+
+
+@click.command()
+@click.option(
+    "-od",
+    "--output_directory",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    required=True,
+    help="The absolute path to the directory where to store the generated system configuration file.",
+)
+@click.option(
+    "-as",
+    "--acquisition_system",
+    type=str,
+    show_default=True,
+    required=True,
+    default="mesoscope-vr",
+    help=(
+        "The type (name) of the data acquisition system for which to generate the configuration file. Note, currently, "
+        "only the following types are supported: mesoscope-vr."
+    ),
+)
+def generate_system_configuration_file(output_directory: str, acquisition_system: str) -> None:
+    """Generates a precursor system configuration file for the target acquisition system and configures all local
+    Sun lab libraries to use that file to load the acquisition system configuration data.
+
+    This command is typically used when setting up a new data acquisition system in the lab. The system configuration
+    only needs to be specified on the machine (PC) that runs the sl-experiment library and manages the acquisition
+    runtime if the system uses multiple machines (PCs). Once the system configuration .yaml file is created via this
+    command, editing the configuration parameters in the file will automatically take effect during all following
+    runtimes.
+    """
+
+    # Verifies that the input path is a valid directory path and, if necessary, creates the directory specified by the
+    # path.
+    path = Path(output_directory)
+    if not path.is_dir():
+        message = (
+            f"Unable to generate the system configuration file for the system '{acquisition_system}'. The path to "
+            f"the output directory ({path}) is not a valid directory path."
+        )
+        console.error(message=message, error=ValueError)
+    else:
+        ensure_directory_exists(path)
+
+    # Mesoscope
+    if acquisition_system.lower() == "mesoscope-vr":
+        file_name = "mesoscope_system_configuration.yaml"
+        file_path = path.joinpath(file_name)
+        system_configuration = MesoscopeSystemConfiguration()
+        system_configuration.save(file_path)
+        set_system_configuration_file(file_path)
+        message = (
+            f"Mesoscope-VR system configuration file: generated. Edit the configuration parameters stored inside the "
+            f"{file_name} file to match the state of the acquisition system and use context."
+        )
+        # noinspection PyTypeChecker
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # For unsupported system types, raises an error message
+    else:
+        message = (
+            f"Unable to generate the system configuration file for the system '{acquisition_system}'. The input "
+            f"acquisition system is not supported (not recognized). Currently, only the following acquisition "
+            f"systems are supported: mesoscope-vr."
+        )
+        console.error(message=message, error=ValueError)
+
+
+@click.command()
+@click.option(
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project to be created.",
+)
+@click.option(
+    "-sli",
+    "--surgery_log_id",
+    type=str,
+    required=True,
+    help="The 44-symbol alpha-numeric ID code used by the project's surgery log Google sheet.",
+)
+@click.option(
+    "-wli",
+    "--water_restriction_log_id",
+    type=str,
+    required=True,
+    help="The 44-symbol alpha-numeric ID code used by the project's water restriction log Google sheet.",
+)
+def generate_project_configuration_file(project: str, surgery_log_id: str, water_restriction_log_id: str) -> None:
+    """Generates a new project directory hierarchy and writes its configuration as a project_configuration.yaml file.
+
+    This command creates new Sun lab projects. Until a project is created in this fashion, all data-acquisition and
+    data-processing commands from sl-experiment and sl-forgery libraries targeting the project will not work. This
+    command is intended to be called on the main computer of the data-acquisition system(s) used by the project. Note,
+    this command assumes that the local machine (PC) is the main PC of the data acquisition system and has a valid
+    acquisition system configuration .yaml file.
+    """
+
+    # Queries the data acquisition configuration data. Specifically, this is used to get the path to the root
+    # directory where all projects are stored on the local machine.
+    system_configuration = get_system_configuration_data()
+    file_path = system_configuration.paths.root_directory.joinpath(
+        project, "configuration", "project_configuration.yaml"
+    )
+
+    # Generates the initial project directory hierarchy
+    ensure_directory_exists(file_path)
+
+    # Saves project configuration data as a .yaml file to the 'configuration' directory of the created project
+    configuration = ProjectConfiguration(
+        project_name=project, surgery_sheet_id=surgery_log_id, water_log_sheet_id=water_restriction_log_id
+    )
+    configuration.save(path=file_path.joinpath())
+    # noinspection PyTypeChecker
+    console.echo(message=f"Project {project} data structure and configuration file: generated.", level=LogLevel.SUCCESS)
+
+
+@click.command()
+@click.option(
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project for which to generate the new experiment configuration file.",
+)
+@click.option(
+    "-e",
+    "--experiment",
+    type=str,
+    required=True,
+    help="The name of the experiment. Note, the generated experiment configuration file will also use this name.",
+)
+@click.option(
+    "-sc",
+    "--state_count",
+    type=int,
+    required=True,
+    help="The total number of experiment and acquisition system state combinations in the experiment.",
+)
+def generate_experiment_configuration_file(project: str, experiment: str, state_count: int) -> None:
+    """Generates a precursor experiment configuration .yaml file for the target experiment inside the project's
+    configuration folder.
+
+    This command assists users in creating new experiment configurations, by statically resolving the structure (layout)
+    of the appropriate experiment configuration file for the acquisition system of the local machine (PC). Specifically,
+    the generated precursor will contain the correct number of experiment state entries initialized to nonsensical
+    default value. The user needs to manually edit the configuration file to properly specify their experiment runtime
+    parameters and state transitions before running the experiment. In a sense, this command acts as an 'experiment
+    template' generator.
+    """
+
+    # Resolves the acquisition system configuration. Uses the path to the local project directory and the project name
+    # to determine where to save the experiment configuration file
+    acquisition_system = get_system_configuration_data()
+    file_path = acquisition_system.paths.root_directory.joinpath(project, "configuration", f"{experiment}.yaml")
+
+    if not acquisition_system.paths.root_directory.joinpath(project).exists():
+        message = (
+            f"Unable to generate the experiment {experiment} configuration file for the project {project}. "
+            f"The target project does not exist on the local machine (PC). Use the "
+            f"'sl-create-project' CLI command to create the project before creating new experiment configuration(s). "
+        )
+        console.error(message=message, error=ValueError)
+        raise ValueError(message)  # Fall-back to appease mypy, should not be reachable
+
+    # Loops over the number of requested states and, for each, generates a precursor experiment state field inside the
+    # 'states' dictionary.
+    states = {}
+    for state in range(state_count):
+        states[f"state_{state + 1}"] = ExperimentState(
+            experiment_state_code=state + 1,  # Assumes experiment state sequences are 1-based
+            system_state_code=0,
+            state_duration_s=60,
+        )
+
+    # Depending on the acquisition system, packs state data into the appropriate experiment configuration class and
+    # saves it to the project's configuration folder as a .yaml file.
+    if acquisition_system.name == "mesoscope-vr":
+        experiment_configuration = MesoscopeExperimentConfiguration(experiment_states=states)
+
+    else:
+        message = (
+            f"Unable to generate the experiment {experiment} configuration file for the project {project}. "
+            f"The data acquisition system of the local machine (PC) is not supported (not recognized). Currently, only "
+            f"the following acquisition systems are supported: mesoscope-vr."
+        )
+        console.error(message=message, error=ValueError)
+        raise ValueError(message)  # Fall-back to appease mypy, should not be reachable
+
+    experiment_configuration.to_yaml(file_path=file_path)
+    # noinspection PyTypeChecker
+    console.echo(message=f"Experiment {experiment} configuration file: generated.", level=LogLevel.SUCCESS)
+
+
+@click.command()
+def maintain_acquisition_system() -> None:
+    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
+
+    This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
+    used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
+    unlocking the wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap
+    around the wheel surface (weekly to monthly).
+    """
+    maintenance_logic()
 
 
 @click.command()
@@ -102,6 +325,29 @@ def list_devices(errors: bool) -> None:
     default=20,
     help="The maximum time to run the training, in minutes.",
 )
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=1,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
+@click.option(
+    "-r",
+    "--restore_parameters",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        "Determines whether to load and use the same training parameters as used during the previous lick training "
+        "session of the target animal. Note, this only overrides the maximum and minimum reward delays, all other "
+        "parameters are not affected by this flag."
+    ),
+)
 def lick_training(
     user: str,
     animal: str,
@@ -111,6 +357,8 @@ def lick_training(
     maximum_delay: int,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
+    restore_parameters: bool,
 ) -> None:
     """Runs the lick training session for the specified animal and project combination.
 
@@ -127,31 +375,9 @@ def lick_training(
         maximum_reward_delay=maximum_delay,
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
+        maximum_unconsumed_rewards=unconsumed_rewards,
+        load_previous_parameters=restore_parameters,
     )
-
-
-@click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project whose configuration data should be used during VR maintenance. If the maintenance "
-    "runtime is used to save Zaber snapshots for new animals, the project also determines where the snapshots are "
-    "saved.",
-)
-def maintain_vr(project: str) -> None:
-    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
-
-    This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
-    used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
-    unlocking the wheel breaks, which is helpful when cleaning the wheel (after each session) and maintaining the wrap
-    around the wheel surface (weekly to monthly).
-
-    The interface also contains Zaber motors (HeadBar and LickPort) bindings to facilitate testing the quality of
-    implanted cranial windows before running training sessions for new animals.
-    """
-    vr_maintenance_logic(project_name=project)
 
 
 @click.command()
@@ -245,12 +471,45 @@ def maintain_vr(project: str) -> None:
     help="The maximum volume of water, in milliliters, that can be delivered during training.",
 )
 @click.option(
-    "-t",
     "--maximum_time",
     type=int,
     show_default=True,
-    default=20,
+    default=40,
     help="The maximum time to run the training, in minutes.",
+)
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=1,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
+@click.option(
+    "-mit",
+    "--maximum_idle_time",
+    type=float,
+    show_default=True,
+    default=0.3,
+    help=(
+        "The maximum time, in seconds, the animal is allowed to maintain speed that is below the speed threshold, to"
+        "still be rewarded. Set to 0 to disable allowing the animal to temporarily dip below running speed threshold."
+    ),
+)
+@click.option(
+    "-r",
+    "--restore_parameters",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        "Determines whether to load and use the same training parameters as used during the previous lick training "
+        "session of the target animal. Note, this only overrides the initial speed and duration thresholds, all other "
+        "parameters are not affected by this flag."
+    ),
 )
 def run_training(
     user: str,
@@ -264,18 +523,21 @@ def run_training(
     duration_step: float,
     maximum_volume: float,
     maximum_time: int,
+    unconsumed_rewards: int,
+    maximum_idle_time: int,
+    restore_parameters: bool,
 ) -> None:
     """Runs the run training session for the specified animal and project combination.
 
     Run training is the second phase of preparing the animal to run experiment runtimes in the lab, and is usually
     carried out over the five days following the lick training sessions. Primarily, this training is designed to teach
-    the anima how to run the wheel treadmill while being head-fixed and associate getting water rewards with running
+    the animal how to run the wheel treadmill while being head-fixed and associate getting water rewards with running
     on the treadmill. Over the course of training, the task requirements are adjusted to ensure the animal performs as
     many laps as possible during experiment sessions lasting ~60 minutes.
     """
 
     # Runs the training session.
-    run_train_logic(
+    run_training_logic(
         experimenter=user,
         project_name=project,
         animal_id=animal,
@@ -287,6 +549,9 @@ def run_training(
         increase_threshold=increase_threshold,
         maximum_water_volume=maximum_volume,
         maximum_training_time=maximum_time,
+        maximum_unconsumed_rewards=unconsumed_rewards,
+        maximum_idle_time=maximum_idle_time,
+        load_previous_parameters=restore_parameters,
     )
 
 
@@ -326,36 +591,71 @@ def run_training(
     required=True,
     help="The weight of the animal, in grams, at the beginning of the experiment session.",
 )
+@click.option(
+    "-ur",
+    "--unconsumed_rewards",
+    type=int,
+    show_default=True,
+    default=1,
+    help=(
+        "The maximum number of rewards that can be delivered without the animal consuming them, before reward delivery "
+        "is paused. Set to 0 to disable enforcing reward consumption."
+    ),
+)
 def run_experiment(
-    user: str,
-    project: str,
-    experiment: str,
-    animal: str,
-    animal_weight: float,
+    user: str, project: str, experiment: str, animal: str, animal_weight: float, unconsumed_rewards: int
 ) -> None:
     """Runs the requested experiment session for the specified animal and project combination.
 
-    Experiment runtimes are carried out after the lick and run training sessions. Unlike training runtimes, experiment
-    runtimes use the Virtual Reality (VR) system and rely on Unity game engine to resolve the experiment task logic
-    during runtime. Also, experiments use the Mesoscope to acquire the brain activity data, which is mostly handled by
-    the ScanImage software.
-
-    Unlike training CLIs, this CLI can be used to run a variety of experiments. Each experiment is configured via the
-    user-written configuration .yaml file, which should be stored inside the 'configuration' folder of the target
-    project. The experiments are discovered by name, allowing a single project to have multiple different experiments.
+    Experiment runtimes are carried out after the lick and run training sessions Unlike training session commands, this
+    command can be used to run different experiments. Each experiment runtime is configured via the user-defined
+    configuration .yaml file, which should be stored inside the 'configuration' folder of the target project. The
+    experiments are discovered by name, allowing a single project to have multiple different experiments. To create a
+    new experiment configuration, use the 'sl-create-experiment' CLI command.
     """
-    run_experiment_logic(
+    experiment_logic(
         experimenter=user,
         project_name=project,
         experiment_name=experiment,
         animal_id=animal,
         animal_weight=animal_weight,
+        maximum_unconsumed_rewards=unconsumed_rewards,
     )
 
 
 @click.command()
 @click.option(
-    "-s",
+    "-p",
+    "--project",
+    type=str,
+    required=True,
+    help="The name of the project to which the trained animal belongs.",
+)
+@click.option(
+    "-a",
+    "--animal",
+    type=str,
+    required=True,
+    help="The name of the animal undergoing the experiment session.",
+)
+def check_window(
+    project: str,
+    animal: str,
+) -> None:
+    """Runs the cranial window and surgery quality checking session for the specified animal and project combination.
+
+    Before the animals are fully inducted (included) into a project, the quality of the surgical intervention
+    (craniotomy and window implantation) is checked to ensure the animal will produce high-quality scientific data. As
+    part of this process, various parameters of the Mesoscope-VR data acquisition system are also calibrated to best
+    suit the animal. This command aggregates all steps necessary to verify and record the quality of the animal's window
+    and to generate customized Mesoscope-VR parameters for the animal.
+    """
+    window_checking_logic(project_name=project, animal_id=animal)
+
+
+@click.command()
+@click.option(
+    "-sp",
     "--session-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     required=True,
@@ -373,75 +673,47 @@ def preprocess_session(session_path: Path) -> None:
     Preprocessing should be carried out immediately after data acquisition to optimize the acquired data for long-term
     storage and distribute it to the NAS and the BioHPC cluster for further processing and storage.
     """
+
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
-    session_data = SessionData.from_path(path=session_path)  # Restores SessionData from the cache .yaml file.
+
+    # Restores SessionData from the cache .yaml file.
+    session_data = SessionData.load(session_path=session_path)
     preprocess_session_data(session_data)  # Runs the preprocessing logic.
 
 
 @click.command()
-@click.option(
-    "-p",
-    "--project",
-    type=str,
-    required=True,
-    help="The name of the project for which to purge the redundant data.",
-)
-@click.option(
-    "-u",
-    "--remove_ubiquitin",
-    is_flag=True,
-    show_default=True,
-    default=False,
-    help="Determines whether to remove ubiquitin-marked mesoscope_frames directories from the ScanImagePC.",
-)
-@click.option(
-    "-t",
-    "--remove_telomere",
-    is_flag=True,
-    show_default=True,
-    default=False,
-    help=(
-        "Determines whether to remove raw_data directories from the VRPC if their counterparts on the "
-        "BioHPC server contain telomere markers."
-    ),
-)
-def purge_data(project: str, remove_ubiquitin: bool, remove_telomere: bool) -> None:
-    """Depending on configuration, removes all redundant data directories for ALL projects from the ScanImagePC,
-    VRPC, or both.
+def purge_data() -> None:
+    """Removes all redundant data directories for ALL projects from the ScanImagePC and the VRPC.
 
-    This command should be used at least weekly to remove no longer necessary data from the PCs used during data
-    acquisition. Unless this function is called, our preprocessing pipelines will NOT remove the data, eventually
-    leading to both PCs running out of storage space. Note, despite the command taking in a project name, it removes
-    redundant data for all projects stored in the same root folder as the target project.
+    Redundant data purging is now executed automatically as part of data preprocessing. This command is primarily
+    maintained as a fall-back option if automated data purging fails for any reason. Data purging should be carried out
+    at least weekly to remove no longer necessary data from the PCs used during data acquisition.
     """
-
-    # Loads the target project's configuration
-    project_configuration = ProjectConfiguration.load(project_name=project)
-
-    # Purges requested data
-    purge_redundant_data(
-        remove_ubiquitin=remove_ubiquitin,
-        remove_telomere=remove_telomere,
-        local_root_path=Path(project_configuration.local_root_directory),
-        server_root_path=Path(project_configuration.server_root_directory),
-        mesoscope_root_path=Path(project_configuration.mesoscope_root_directory),
-    )
+    purge_redundant_data()
 
 
 @click.command()
 @click.option(
-    "-p",
-    "--path",
+    "-sp",
+    "--session-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     required=True,
-    prompt="Enter the path to the new local directory where to store all project subdirectories: ",
-    help="The path to the new local directory where to store all project subdirectories.",
+    prompt="Enter the path to the target session directory: ",
+    help="The path to the local session directory of the session to be removed.",
 )
-def replace_local_root_directory(path: str) -> None:
-    """Replaces the current local project root directory with the specified directory.
+def delete_session(session_path: Path) -> None:
+    """Removes ALL data of the target session from ALL data acquisition and long-term storage machines accessible to
+    the host-machine.
 
-    To ensure all projects are saved in the same location, this library statically resolves and saves the path to the
-    root directory in default user directory. Since this directory is typically hidden, this CLI can be used to
-    conveniently replace the local directory path, if necessary.
+    This is an EXTREMELY dangerous command that can potentially delete valuable data if not used well. This command is
+    intended exclusively for removing failed and test sessions from all computers used in Sun lab data acquisition
+    process. Never call this command unless you know what you are doing.
     """
-    replace_root_path(path=Path(path))
+    session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.
+
+    # Restores SessionData from the cache .yaml file.
+    session_data = SessionData.load(session_path=session_path)
+
+    # Removes all data of the target session from all data acquisition and long-term storage machines accessible to the
+    # host-computer
+    purge_failed_session(session_data)

@@ -8,23 +8,23 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "1.0.0"
+version = "2.0.0rc1"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
 authors = [
-    { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
-    { name = "Kushaan Gupta", email = "kg574@cornell.edu" },
-    { name = "Natalie Yeung", email = "nyy4@cornell.edu" },
-    { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
+    { name = "Ivan Kondratyev" },
+    { name = "Kushaan Gupta" },
+    { name = "Natalie Yeung" },
+    { name = "Katlynn Ryu" },
     { name = "Jasmine Si" }
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["ataraxis", "MQTT", "Serial", "communication", "interface", "unity", "microcontroller"]
+keywords = ["sunlab", "data", "acquisition", "ataraxis", "interface", "experiment", "mesoscope"]
 
 classifiers = [
     # Development status
@@ -35,38 +35,33 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
     "Programming Language :: Python :: 3.11",
-    # "Programming Language :: Python :: 3.12",
-    # "Programming Language :: Python :: 3.13",
     # Supported OS systems
     "Operating System :: POSIX :: Linux",
 ]
 
 # Runtime project dependencies. This overlaps with the 'condarun' optional list.
 dependencies = [
-    "zaber-motion>=7,<8",
-    "crc>=7,<8",
-    "tabulate>=0,<1",
-    "click>=8,<9",
-    "numpy>=2,<3",
-    "numba>=0,<1",
-    "scipy>=1,<2",
-    "matplotlib>=3,<4",
-    "ataraxis-time>=3,<4",
-    "ataraxis-base-utilities>=3,<4",
-    "ataraxis-data-structures>=3.1.1,<4",
-    "ataraxis-transport-layer-pc>=1,<2",
-    "ataraxis-communication-interface>=3.1.0,<4",
-    "ataraxis-video-system>=1.1.0,<2",
-    "tifffile>=2025,<2026",
-    "imagecodecs>=2024,<2025",
-    "tqdm>=4,<5",
-    "xxhash>=3,<4",
-    "google-api-python-client>=2,<3",
-    "polars>=1,<2",
-    "pyqt5>=5,<6",
-    "pyarrow>=19,<20",
-    "pynput>=1,<2",
-    "appdirs>=1,<2",
+    "zaber-motion==7.8.4",
+    "crc==7.1.0",
+    "tabulate==0.9.0",
+    "click==8.2.1",
+    "numpy==2.2.6",
+    "scipy==1.16.0",
+    "matplotlib==3.10.3",
+    "ataraxis-time==3.0.0",
+    "ataraxis-base-utilities==3.0.1",
+    "ataraxis-data-structures==3.1.1",
+    "ataraxis-transport-layer-pc==1.1.0",
+    "ataraxis-communication-interface==3.2.1",
+    "ataraxis-video-system==1.1.0",
+    "tifffile==2025.6.11",
+    "tqdm==4.67.1",
+    "google-api-python-client==2.173.0",
+    "pyqt6==6.9.1",
+    "pytz==2025.2",
+    "importlib_metadata==8.7.0",
+    "natsort==8.4.0",
+    "sl-shared-assets==3.0.0rc1",
 ]
 
 [project.urls]
@@ -81,28 +76,24 @@ Documentation = "https://sl-experiment-api-docs.netlify.app/"
 # (OSX ARM64, WIN AMD64, LIN AMD64). This specification is used by ataraxis-automation to resolve as many
 # project dependencies with conda over pip as possible.
 condarun = [
-    "numpy>=2,<3",
-    "numba>=0,<1",
-    "scipy>=1,<2",
-    "tifffile>=2025,<2026",
-    "imagecodecs>=2024,<2025",
-    "tqdm>=4,<5",
-    "matplotlib>=3,<4",
-    "zaber-motion>=7,<8",
-    "tabulate>=0,<1",
-    "click>=8,<9",
-    "google-api-python-client>=2,<3",
-    "polars>=1,<2",
-    "pyarrow>=19,<20",
-    "pynput>=1,<2",
-    "appdirs>=1,<2",
+    "numpy==2.2.6",
+    "tifffile==2025.6.11",
+    "tqdm==4.67.1",
+    "matplotlib==3.10.3",
+    "zaber-motion==7.8.4",
+    "tabulate==0.9.0",
+    "click==8.2.1",
+    "google-api-python-client==2.173.0",
+    "appdirs==1.4.4",
+    "importlib_metadata==8.7.0",
+    "pytz==2025.2",
+    "natsort==8.4.0",
 ]
 
 # Dependencies known to be installable with conda for all development platforms (OSX ARM64, WIN AMD64, LIN AMD64).
 conda = [
     # Documentation
     "sphinx>=8,<9",
-    "importlib_metadata>=8,<9",
     "sphinx-rtd-theme>=3,<4",
     "sphinx-click>=6,<7",
     "sphinx-autodoc-typehints>=3,<4",
@@ -117,12 +108,6 @@ conda = [
     # Distribution
     "twine>=6,<7",
     "grayskull>=2,<3",
-
-    # Types:
-    "types-appdirs>=1,<2",
-    "types-tqdm>=4,<5",
-    "types-tabulate>=0,<1",
-    "scipy-stubs>=1,<2",
 ]
 
 # Dependencies known to not be installable with conda for at least one supported development platform
@@ -134,8 +119,11 @@ noconda = [
     "uv>=0,<1",
 
     # Types:
-    "types-pynput>=1,<2",
     "google-api-python-client-stubs>=1,<2",
+    "types-tqdm>=4,<5",
+    "types-tabulate>=0,<1",
+    "scipy-stubs>=1,<2",
+    "types-pytz>=2025,<2026",
 
     # Documentation
     "sphinx-rtd-dark-mode>=1,<2",
@@ -144,7 +132,7 @@ noconda = [
     "build>=1,<2",
 
     # Automation
-    "ataraxis-automation>=4,<5",
+    "ataraxis-automation>=5,<6",
 ]
 
 # A shorthand specification that installs tox and all packages required for development tasks. This specification can
@@ -160,13 +148,17 @@ dev = [
 [project.scripts]
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
-sl-maintain-vr = "sl_experiment.cli:maintain_vr"
+sl-create-system-config = "sl_experiment.cli:generate_system_configuration_file"
+sl-create-project = "sl_experiment.cli:generate_project_configuration_file"
+sl-create-experiment = "sl_experiment.cli:generate_experiment_configuration_file"
+sl-maintain = "sl_experiment.cli:maintain_acquisition_system"
 sl-lick-train = "sl_experiment.cli:lick_training"
 sl-run-train = "sl_experiment.cli:run_training"
 sl-experiment = "sl_experiment.cli:run_experiment"
-sl-process = "sl_experiment.cli:preprocess_session"
+sl-check-window = "sl_experiment.cli:check_window"
+sl-preprocess = "sl_experiment.cli:preprocess_session"
 sl-purge = "sl_experiment.cli:purge_data"
-sl-replace-root = "sl_experiment.cli:replace_root_path"
+sl-delete-session-data = "sl_experiment.cli:delete_session"
 
 # Specifies files that should not be included in the source-code distribution but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]
@@ -174,7 +166,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/sl_experiment", "examples"]
+packages = ["src/sl_experiment"]
 
 # Ruff Configuration.
 [tool.ruff]

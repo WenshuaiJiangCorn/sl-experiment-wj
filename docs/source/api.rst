@@ -17,8 +17,20 @@ Command Line Interfaces
    :prog: sl-devices
    :nested: full
 
-.. click:: sl_experiment.cli:maintain_vr
-   :prog: sl-maintain-vr
+.. click:: sl_experiment.cli:generate_system_configuration_file
+   :prog: sl-create-system-config
+   :nested: full
+
+.. click:: sl_experiment.cli:generate_project_configuration_file
+   :prog: sl-create-project
+   :nested: full
+
+.. click:: sl_experiment.cli:generate_experiment_configuration_file
+   :prog: sl-create-experiment
+   :nested: full
+
+.. click:: sl_experiment.cli:maintain_acquisition_system
+   :prog: sl-maintain
    :nested: full
 
 .. click:: sl_experiment.cli:lick_training
@@ -33,84 +45,32 @@ Command Line Interfaces
    :prog: sl-experiment
    :nested: full
 
+.. click:: sl_experiment.cli:check_window
+   :prog: sl-check-window
+   :nested: full
+
 .. click:: sl_experiment.cli:preprocess_session
-   :prog: sl-experiment
+   :prog: sl-preprocess
    :nested: full
 
 .. click:: sl_experiment.cli:purge_data
-   :prog: sl-experiment
+   :prog: sl-purge
    :nested: full
 
-.. click:: sl_experiment.cli:replace_local_root_directory
-   :prog: sl-experiment
+.. click:: sl_experiment.cli:delete_session
+   :prog: sl-delete-session-data
    :nested: full
 
-Experiment Interfaces
-=====================
-.. automodule:: sl_experiment.experiment
+Mesoscope-VR Acquisition System
+===============================
+.. automodule:: sl_experiment.mesoscope_vr
    :members:
    :undoc-members:
    :show-inheritance:
 
-Ataraxis Binding Classes
-========================
-.. automodule:: sl_experiment.binding_classes
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Runtime Data Visualizers
-========================
-.. automodule:: sl_experiment.visualizers
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Zaber Interfaces
-================
-.. automodule:: sl_experiment.zaber_bindings
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-AXMC Module Interfaces
-======================
-.. automodule:: sl_experiment.module_interfaces
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Google Sheet Tools
-==================
-.. automodule:: sl_experiment.google_sheet_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Packaging Tools
-===============
-.. automodule:: sl_experiment.packaging_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Transfer Tools
-==============
-.. automodule:: sl_experiment.transfer_tools
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Data Preprocessing Tools
-========================
-.. automodule:: sl_experiment.data_preprocessing
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Configuration and Data Storage Classes
-======================================
-.. automodule:: sl_experiment.data_classes
+Shared Acquisition Tools And Assets
+===================================
+.. automodule:: sl_experiment.shared_components
    :members:
    :undoc-members:
    :show-inheritance:

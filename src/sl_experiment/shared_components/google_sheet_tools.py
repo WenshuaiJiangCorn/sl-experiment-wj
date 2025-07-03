@@ -11,17 +11,54 @@ from datetime import (
     datetime,
     timezone,
 )
-from dataclasses import dataclass
 
-from ataraxis_base_utilities import console
-from ataraxis_data_structures import YamlConfig
+import pytz
+from sl_shared_assets import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
+from ataraxis_base_utilities import LogLevel, console
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
-from .data_classes import DrugData, ImplantData, SubjectData, SurgeryData, InjectionData, ProcedureData
-
 # Stores schemas for supported date formats.
 _supported_date_formats: set[str] = {"%m-%d-%y", "%m-%d-%Y", "%m/%d/%y", "%m/%d/%Y"}
+
+# Defines all headers (columns) that must exist in a validly formatted Surgery log Google Sheet
+_required_surgery_headers: set[str] = {
+    # Subject Data headers
+    "id",
+    "ear punch",
+    "sex",
+    "genotype",
+    "dob",
+    "weight (g)",
+    "cage #",
+    "location housed",
+    "status",
+    # Procedure Data headers
+    "date",
+    "start",
+    "end",
+    "surgeon",
+    "protocol",
+    "surgery notes",
+    "post-op notes",
+    "surgery quality",
+    # Drug Data headers (required)
+    "lrs (ml)",
+    "ketoprofen (ml)",
+    "buprenorphine (ml)",
+    "dexamethasone (ml)",
+    # Updating surgery quality:
+    "surgery quality",
+}
+
+_required_water_restriction_headers: set[str] = {
+    "date",
+    "weight (g)",
+    "given by:",
+    "water given (ml)",
+    "behavior",
+    "time",
+}
 
 
 def _convert_date_time_to_timestamp(date: str, time: str) -> int:
@@ -190,46 +227,61 @@ def _replace_empty_values(row_data: list[str]) -> list[str | None]:
 
 
 class SurgerySheet:
-    """Encapsulates the access to the target Google Sheet that contains lab surgery logs.
+    """Encapsulates the access to the target Google Sheet that contains shared lab surgery logs.
 
     This class uses Google Sheets API to connect to and extract the data stored in the surgery log Google Sheet file.
     It functions as the central access point used to extract surgery data for each animal and project combination and
     save it as a .yaml file alongside other recorded training or experiment data.
 
+    The class is explicitly designed to work with the data of a single animal, which matches the case of how the class
+    is used during data acquisition in the lab. It carries out all necessary checks at instantiation to ensure correct
+    operation of all methods. Make sure the class is instantiated early in the session initialization hierarchy to abort
+    the runtime if necessary.
+
     Notes:
         This class is purpose-built to work with the specific surgery log format used in the Sun lab. If the target
         sheet or project tab layout does not conform to expectations, this class will likely not behave as intended.
 
+        Since version 2.0.0 this class is also used to write the Surgery Quality column value as the result of
+        running the "window checking" session.
+
     Args:
         project_name: The name of the project whose data should be parsed by the class instance. It is expected that the
             target sheet stores all Sun Lab projects as individual tabs.
+        animal_id: The numeric ID of the animal whose data should be parsed by the class instance. It is expected that
+            all animals use numeric IDs (either project-specific or unique across all projects) as 'names'.
         credentials_path: The path to the JSON file containing the service account credentials for accessing the Google
             Sheet.
         sheet_id: The ID of the Google Sheet containing the surgery data.
 
     Attributes:
         _project_name: Stores the target project name.
+        _animal_id: Stores the target animal ID.
         _sheet_id: Stores the ID of the target Google Sheet.
         _service: The Google Sheets API service instance used to fetch data from the target Google Sheet.
         _headers: A dictionary that uses headers (column names) as keys and Google Sheet column names (A, B, etc.) as
             values. This dictionary stores all user-defined headers used by the target Google Sheet tab.
         _animals: Stores all animal IDs (names) whose data is stored in the target Google Sheet tab.
+
+    Raises:
+        ValueError: If the sheet is not formatted correctly or does not contain expected data.
     """
 
     def __init__(
         self,
         project_name: str,
+        animal_id: int,
         credentials_path: Path,
         sheet_id: str,
     ):
         # Saves ID data to be reused during later instance method calls.
         self._project_name = project_name
+        self._animal_id = animal_id
         self._sheet_id = sheet_id
 
-        # Generates the credentials' object to access the target Google Sheet. Since we are only reading the data from
-        # the surgery log, we can use the 'readonly' access mode for added file safety.
+        # Generates the credentials' object to access the target Google Sheet.
         credentials = Credentials.from_service_account_file(  # type: ignore
-            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets.readonly",)
+            filename=str(credentials_path), scopes=("https://www.googleapis.com/auth/spreadsheets",)
         )
 
         # Uses the credentials' object to build the access service for the target Google Sheet. This service is then
@@ -249,10 +301,10 @@ class SurgerySheet:
         header_values = headers.get("values", [[]])[0]
         if not header_values:
             message = (
-                f"Unable to parse the surgery data for the project {project_name} Google Sheet. The first row of the "
-                f"target tab appears to be empty. Instead, the first row should contain the column headers."
+                f"Unable to parse the surgery data for the project {project_name} and animal {animal_id}. The first "
+                f"row of the target tab appears to be empty. Instead, the first row should contain the column headers."
             )
-            console.error(message, error=RuntimeError)
+            console.error(message, error=ValueError)
 
         # Creates a dictionary mapping header values to Google Sheet column letters
         self._headers: dict[str, str] = {}
@@ -260,6 +312,21 @@ class SurgerySheet:
             # Converts column index to column letter (0 -> A, 1 -> B, etc.)
             column_letter = _convert_index_to_column_letter(i)
             self._headers[str(header).strip().lower()] = column_letter
+
+        # Checks for missing headers (column names)
+        missing_headers = []
+        for required_header in _required_surgery_headers:
+            if required_header.lower() not in self._headers:
+                missing_headers.append(required_header)
+
+        # If any required headers are missing, raises an error with a detailed message
+        if missing_headers:
+            missing_headers_str = ", ".join([f"'{h}'" for h in sorted(missing_headers)])
+            message = (
+                f"Unable to parse the surgery data for the project {project_name} and animal {animal_id}. "
+                f"The following required headers are missing from the surgery log Google Sheet: {missing_headers_str}."
+            )
+            console.error(message, error=ValueError)
 
         # Retrieves all animal names (IDs) from the 'ID' column. Each ID is z-filled to a triple-digit string for
         # sorting to behave predictably. This data is stored as a tuple of IDs.
@@ -278,44 +345,40 @@ class SurgerySheet:
         self._animals: tuple[str, ...] = tuple([str(animal_id).zfill(5) for animal_id in id_list])
         if len(self._animals) == 0:
             message = (
-                f"Unable to parse the surgery data for the project {project_name} Google Sheet. The ID column of the "
-                f"sheet contains no data, indicating that the log does not contain any animals."
+                f"Unable to parse the surgery data for the project {project_name} and animal {animal_id}. The ID "
+                f"column of the sheet contains no data, indicating that the log does not contain any animals."
             )
-            console.error(message, error=RuntimeError)
+            console.error(message, error=ValueError)
+
+        # Converts input animal ID to the same format as IDs stored in the id_list generated above for comparison
+        formatted_id = str(self._animal_id).zfill(5)
+
+        # Checks if the animal ID exists in the tuple of all known animal IDs. If not, raises an error.
+        if formatted_id not in self._animals:
+            message = (
+                f"Unable to parse the surgery data for the project {project_name} and animal {animal_id}. The "
+                f"specified animal ID is not contained in the 'ID' column of the parsed Google Sheet."
+            )
+            console.error(message=message, error=ValueError)
 
     def __del__(self) -> None:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
-    def extract_animal_data(self, animal_id: int) -> SurgeryData:
+    def extract_animal_data(self) -> SurgeryData:
         """Extracts the surgery data for the target animal and returns it as a SurgeryData object.
 
-        Primarily, this method is used by the SessionData class to extract and store the surgery data for each animal in
-        its persistent 'metadata' folder. This ensures that all data relevant for analysis is kept in the same place.
-
-        Args:
-            animal_id: The numeric ID of the animal whose data should be parsed by this method. It is expected that all
-                animals use numeric IDs (either project-specific or unique across all projects) as 'names'.
+        This method is used by all acquisition systems at the beginning of each data acquisition session to extract and
+        cache the surgery intervention data of the processed animal.
 
         Returns:
-            A fully configured SurgeryData instance that stores the extracted data. Use the 'to_yaml' method of the
-            returned instance to save the data to disk as a .yaml file.
+            A fully configured SurgeryData instance that stores the extracted data.
         """
-        # Converts input ID to the same format as stored IDs for comparison
-        formatted_id = str(animal_id).zfill(5)
-
-        # Checks if the animal ID exists in the tuple of animal IDs generated at class initialization. If not, raises an
-        # error
-        if formatted_id not in self._animals:
-            message = (
-                f"Unable to extract the surgery data for the project {self._project_name} and animal {animal_id}. The "
-                f"specified animal ID is not contained in the 'ID' column of the parsed Google Sheet."
-            )
-            console.error(message=message, error=ValueError)
 
         # Finds the index of the target animal in the ID value tuple to determine the row number to parse from the
-        # sheet. The index is modified by 2 because: +1 for 0-indexing to 1-indexing, +1 to account for the header row
-        animal_index = self._animals.index(formatted_id)
+        # sheet. The index is modified by 2 because: +1 for 0-indexing to 1-indexing conversion, +1 to account for the
+        # header row
+        animal_index = self._animals.index(str(self._animal_id).zfill(5))
         row_number = animal_index + 2
 
         # Retrieves the entire row of data for the target animal
@@ -363,10 +426,11 @@ class SurgerySheet:
             protocol=animal_data["protocol"],
             surgery_notes=animal_data["surgery notes"],
             post_op_notes=animal_data["post-op notes"],
+            surgery_quality=animal_data["surgery quality"],
         )
 
         # Drug Data. Since early surgery log versions did not use drug / injection / implant codes, code parsing has
-        # fall-back default values (o). A code value of 0 should be interpreted as not having a code.
+        # fall-back default values (0). A code value of 0 should be interpreted as not having a code.
         drug_data = DrugData(
             lactated_ringers_solution_volume_ml=animal_data["lrs (ml)"],
             lactated_ringers_solution_code=animal_data.get("lrs code", 0),
@@ -379,7 +443,7 @@ class SurgerySheet:
         )
 
         # Determines the number of implants and injections performed during the processed surgery. This is based on the
-        # assumption that all implants and injections are named like 'Implant1', 'Injection2_location', etc.:
+        # assumption that all implants and injections are named like 'Implant1', 'Injection2_location', etc.
 
         # Compiles the regex pattern once for efficiency
         digit_pattern = re.compile(r"\d+")
@@ -466,16 +530,72 @@ class SurgerySheet:
         )
         return surgery_data
 
-    @property
-    def animals(self) -> tuple[str, ...]:
-        """Returns a tuple of animal IDs whose data is stored inside the managed project tab of the target Google
-        Sheet."""
-        return self._animals
+    def update_surgery_quality(self, quality: int) -> None:
+        """Updates the surgery quality value for the specified animal.
 
-    @property
-    def headers(self) -> tuple[str, ...]:
-        """Returns a tuple of headers (column names) used by the managed project tab of the target Google Sheet."""
-        return tuple(self._headers.keys())
+        This method is used to write an integer value to the 'Surgery Quality' column for the specified animal.
+        The value represents the quality assessment of the surgical intervention performed on the animal, typically
+        made after the first pre-training imaging session ("window checking" session).
+
+        Args:
+            quality: The integer value representing the surgery quality to be written. The value reflects the quality
+                of the animal for scientific data acquisition: 0 means unusable, 1 means usable for testing (but not
+                publications), 2 means publication-grade quality.
+        """
+        # Finds the column for "surgery quality"
+        quality_column = self._get_column_id("surgery quality")
+
+        # Finds the index of the target animal in the ID value tuple
+        animal_index = self._animals.index(str(self._animal_id).zfill(5))
+        row_number = animal_index + 2  # +2 to account for header row and 0-indexing
+
+        # Writes the quality value to the appropriate cell
+        cell_range = f"{quality_column}{row_number}"
+        body = {"values": [[quality]]}
+        self._service.spreadsheets().values().update(
+            spreadsheetId=self._sheet_id,
+            range=f"'{self._project_name}'!{cell_range}",
+            valueInputOption="USER_ENTERED",
+            body=body,  # type: ignore
+        ).execute()
+
+        # Transforms the column letter and the row index to the format necessary to apply formatting to the newly
+        # written value.
+        col_index = 0
+        for char in quality_column.upper():  # type: ignore
+            col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+        col_index -= 1  # Convert to 0-based index
+        row_index_zero_based = row_number - 1
+
+        # Gets the sheet ID for the project tab
+        sheet_metadata = self._service.spreadsheets().get(spreadsheetId=self._sheet_id).execute()
+        sheet_id = None
+        for sheet in sheet_metadata.get("sheets", []):
+            if sheet["properties"]["title"] == self._project_name:
+                sheet_id = sheet["properties"]["sheetId"]
+                break
+
+        if sheet_id is not None:
+            # Applies center alignment formatting to the cell
+            requests = [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_index_zero_based,
+                            "endRowIndex": row_index_zero_based + 1,
+                            "startColumnIndex": col_index,
+                            "endColumnIndex": col_index + 1,
+                        },
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+                        "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                    }
+                }
+            ]
+            self._service.spreadsheets().batchUpdate(
+                spreadsheetId=self._sheet_id,
+                body={"requests": requests},  # type: ignore
+            ).execute()
 
     def _get_column_id(self, column_name: str) -> str | None:
         """Returns the Google Sheet column ID (letter) for the given column name.
@@ -497,13 +617,18 @@ class SurgerySheet:
             return None
 
 
-class WaterSheetData:
-    """Encapsulates and provides access to the target Google Sheet that contains project water-restriction data.
+class WaterSheet:
+    """Encapsulates the access to the target Google Sheet that contains project water-restriction data.
 
     This class uses Google Sheets API to connect to and update the data stored in the water restriction log Google Sheet
     file. It functions as the central access point used to update the water restriction data for each animal after
-    training and experiment sessions. Primarily, this is used as a convenience and data synchronization feature that
-    allows experimenters to synchronize runtime data with the Google Sheet tracker, instead of entering it manually.
+    training and experiment sessions. Primarily, this is used as a convenience feature that allows experimenters to
+    synchronize runtime data with the Google Sheet tracker, instead of entering it manually.
+
+    The class is explicitly designed to work with the data of a single data acquisition session and animal, which
+    matches the case of how the class is used during data acquisition in the lab. It carries out all necessary checks at
+    instantiation to ensure correct operation of all methods. Make sure the class is instantiated early in the session
+    initialization hierarchy to abort the runtime if necessary.
 
     Notes:
         This class is purpose-built to work with the specific water restriction log format used in the Sun lab. If the
@@ -515,6 +640,9 @@ class WaterSheetData:
 
     Args:
         animal_id: The ID of the animal whose data will be written by this class instance.
+        session_date: The date of the session whose data will be written by this class instance. Date is used as the
+            'id' of each session in the format YYYY-MM-DD-HH-MM-SS-US, so setting this to session name (id) is the
+            expected behavior.
         credentials_path: The path to the JSON file containing the service account credentials for accessing the Google
             Sheet.
         sheet_id: The ID of the Google Sheet containing the water restriction data for the target project.
@@ -523,16 +651,23 @@ class WaterSheetData:
     Attributes:
         _sheet_id: Stores the ID of the target Google Sheet.
         _service: The Google Sheets API service instance used to write data to the target Google Sheet.
+
         _animals: Stores all animal IDs (names) whose data is stored in the target Google Sheet.
         _headers: A dictionary that uses headers (column names) as keys and Google Sheet column names (A, B, etc.) as
             values. This dictionary stores all user-defined headers used by the target Google Sheet tab (animal tab).
         _sheet_id_numeric: The numeric ID of the tab that stores the data for the managed animal. This is used to write
          the data to the target animal's tab.
+         _current_time: Stores the time (HH:MM) of the session.
+         _session_row_index: Stores the index of the Google Sheet row where to write the managed session's data.
+
+    Raises:
+        ValueError: If the sheet is not formatted correctly or does not contain expected data.
     """
 
     def __init__(
         self,
         animal_id: int,
+        session_date: str,
         credentials_path: Path,
         sheet_id: str,
     ):
@@ -578,10 +713,11 @@ class WaterSheetData:
         # appropriately.
         if len(self._animals) == 0:
             message = (
-                "Unable to parse animal IDs from the Google Sheet tab data. No tabs with digit-only names found, "
-                "indicating that the target Google Sheet file does not contain any animal data."
+                f"Unable to interface with the water restriction log file for the animal with id {self._animal_id}. No "
+                f"tabs with digit-only names found, indicating that the target Google Sheet file does not contain any "
+                f"animal data."
             )
-            console.error(message, error=RuntimeError)
+            console.error(message, error=ValueError)
 
         # Otherwise, if the target animal ID is not in the extracted IDs list, raises an error.
         if str(self._animal_id).zfill(5) not in self._animals:
@@ -590,7 +726,7 @@ class WaterSheetData:
                 f"The target Google Sheet only contains the tabs for animals with IDs: "
                 f"{[int(animal) for animal in sorted(self._animals)]}."
             )
-            console.error(message, error=RuntimeError)
+            console.error(message, error=ValueError)
 
         # Retrieves all values stored in the second row of the Google Sheet tab with the name that matches the target
         # animal ID. Note, this is in contrast to the Surgery data log, where the headers are stored in the first sheet
@@ -606,11 +742,11 @@ class WaterSheetData:
         header_values = headers.get("values", [[]])[0]
         if not header_values:
             message = (
-                f"Unable to parse the water restriction header data from the Google Sheet for the animal "
-                f"{self._animal_id}. The second row of the target tab appears to be empty. Instead, the second row "
-                f"should contain the column headers."
+                f"Unable to interface with the water restriction log file for the animal with id {self._animal_id}. "
+                f"The second row of the target tab appears to be empty. Instead, the second row should contain the "
+                f"column headers."
             )
-            console.error(message, error=RuntimeError)
+            console.error(message, error=ValueError)
 
         # Creates a dictionary mapping header values to Google Sheet column letters
         self._headers: dict[str, str] = {}
@@ -619,12 +755,47 @@ class WaterSheetData:
             column_letter = _convert_index_to_column_letter(i)
             self._headers[str(header).strip().lower()] = column_letter
 
+        # Checks for missing headers (column names)
+        missing_headers = []
+        for required_header in _required_water_restriction_headers:
+            if required_header.lower() not in self._headers:
+                missing_headers.append(required_header)
+
+        # If any required headers are missing, raises an error
+        if missing_headers:
+            missing_headers_str = ", ".join([f"'{h}'" for h in sorted(missing_headers)])
+            message = (
+                f"Unable to interface with the water restriction log file for the animal with id {self._animal_id}. "
+                f"The following required headers are missing from the water restriction log Google Sheet: "
+                f"{missing_headers_str}."
+            )
+            console.error(message, error=ValueError)
+
+        # Parses the session's date and converts it into the format used in the log files
+        dt = datetime.strptime(session_date, "%Y-%m-%d-%H-%M-%S-%f")
+        dt = dt.replace(tzinfo=pytz.UTC)  # Marks the datetime as UTC
+
+        # Session timestamps are in UTC, but our log uses eastern time for user convenience. Converts the date to
+        # ET
+        eastern = pytz.timezone("US/Eastern")
+        dt_eastern = dt.astimezone(eastern)
+
+        # Formats the date to appear the same way as used in the log file
+        formatted_date = dt_eastern.strftime("%-m/%-d/%y")
+
+        # Formats the session's start time in the same way as used in the log file and saves it to class attribute.
+        self._current_time = dt_eastern.strftime("%H:%M")
+
+        # Finds the row inside the water restriction log file with session's date. This assumes that the log file is
+        # pre-filled with dates. If not, this method will enter a loop to prompt the user to resolve the date issue.
+        self._session_row_index = self._find_date_row(formatted_date)
+
     def __del__(self) -> None:
         """Terminates the Google Sheets API service when the class is garbage-collected."""
         self._service.close()
 
-    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_name: str) -> None:
-        """Updates the water restriction log for the managed animal with today's training or experiment data.
+    def update_water_log(self, mouse_weight: float, water_ml: float, experimenter_id: str, session_type: str) -> None:
+        """Updates the water restriction log for the managed animal's training or experiment data.
 
         This method is used at the end of each BehaviorTraining or MesoscopeExperiment runtime to update the water
         restriction log with the runtime data. Primarily, this is used to keep a record of behavior interventions and to
@@ -641,25 +812,18 @@ class WaterSheetData:
             water_ml: The combined volume of water, in milliliters, given to the animal automatically (during runtime)
                 and manually (by the experimenter, after runtime).
             experimenter_id: The ID of the experimenter running the training or experiment session.
-            session_name: The name (type) of the training or experiment session. This is written to the 'behavior'
+            session_type: The type of the training or experiment session. This is written to the 'behavior'
                 column to describe the type of activity performed by the animal during runtime.
         """
-        # Gets today's date
-        today = datetime.now().strftime("%-m/%-d/%y")
-
-        # Finds the row inside the water restriction log file with today's date. This assumes that the log file is
-        # pre-filled with dates.
-        row_index = self._find_date_row(today)
-
-        # Gets the current time in the same format as used in row 3 (baseline row)
-        current_time = datetime.now().strftime("%H:%M")
-
-        # Writes each value to the appropriate column, using the same formatting as used in row 3
+        # Writes each value to the appropriate column, using the same formatting as used in row 3. Since the sheet
+        # is checked for validity and the session row index is discovered at class instantiation, this is a fairly
+        # simple writing procedure.
+        row_index = self._session_row_index
         self._write_value("weight (g)", row_index, mouse_weight)
         self._write_value("given by:", row_index, experimenter_id)
         self._write_value("water given (ml)", row_index, water_ml)
-        self._write_value("behavior", row_index, session_name)
-        self._write_value("time", row_index, current_time)
+        self._write_value("behavior", row_index, session_type)
+        self._write_value("time", row_index, self._current_time)
 
     def _find_date_row(self, target_date: str) -> int:
         """Finds the row index inside the manged water restriction log file containing the target date.
@@ -678,30 +842,42 @@ class WaterSheetData:
         # Gets the date column letter
         date_column = self._headers["date"]
 
-        # Retrieves all dates from the date column (row 3 and below)
-        date_data = (
-            self._service.spreadsheets()
-            .values()
-            .get(spreadsheetId=self._sheet_id, range=f"'{self._animal_id}'!{date_column}3:{date_column}")
-            .execute()
-        )
-        date_values = date_data.get("values", [])
-
-        # Finds the row with the target date
-        row_index = -1
-        for i, date_cell in enumerate(date_values):
-            # Checks if the cell has a value matching the target date
-            if date_cell and date_cell[0] == target_date:
-                # Adds 3 to account for 0-indexing and the fact we started from row 3
-                row_index = i + 3
-                break
-        else:
-            message = (
-                f"No row found for date {target_date} in the water restriction log file for the animal "
-                f"{self._animal_id}. The water restriction log must be pre-filled with dates at least up to today's "
-                f"date for this class to function."
+        while True:
+            # Retrieves all dates from the date column (row 3 and below)
+            date_data = (
+                self._service.spreadsheets()
+                .values()
+                .get(spreadsheetId=self._sheet_id, range=f"'{self._animal_id}'!{date_column}3:{date_column}")
+                .execute()
             )
-            console.error(message, error=ValueError)
+            date_values = date_data.get("values", [])
+
+            # Finds the row with the target date
+            row_index = -1
+            for i, date_cell in enumerate(date_values):
+                # Checks if the cell has a value matching the target date
+                if date_cell and date_cell[0] == target_date:
+                    # Adds 3 to account for 0-indexing and the fact we started from row 3
+                    row_index = i + 3
+                    break
+            else:
+                message = (
+                    f"Unable to find the row for the target date {target_date} inside the water restriction log "
+                    f"sheet. This indicates that the log has not been filled with dates up to the requested date. "
+                    f"Modify the sheet to contain the required date and try again."
+                )
+                console.echo(message=message, level=LogLevel.WARNING)
+                response = input("Enter anything to retry. Enter 'a' to abort: ").lower()
+                if response == "a":
+                    message = (
+                        f"No row found for date {target_date} in the water restriction log file for the animal "
+                        f"{self._animal_id}. The water restriction log must be pre-filled with dates at least up to "
+                        f"the requested date."
+                    )
+                    console.error(message, error=ValueError)  # Aborts with an error
+                    raise ValueError(message)  # Fallback to appease mypy, should not be reachable.
+                continue  # Cycles the while loop if the user chooses to retry
+            break  # Breaks the while loop if the row is found
 
         return row_index
 
@@ -765,13 +941,3 @@ class WaterSheetData:
             spreadsheetId=self._sheet_id,
             body={"requests": requests},  # type: ignore
         ).execute()
-
-    @property
-    def animals(self) -> tuple[str, ...]:
-        """Returns a tuple of animal IDs whose data is stored inside the target Google Sheet."""
-        return self._animals
-
-    @property
-    def headers(self) -> tuple[str, ...]:
-        """Returns a tuple of headers (column names) used by the managed animal tab of the target Google Sheet."""
-        return tuple(self._headers.keys())
