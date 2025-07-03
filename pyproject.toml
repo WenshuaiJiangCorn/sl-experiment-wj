@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "2.0.0"
+version = "2.0.0rc1"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -24,7 +24,7 @@ maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["sunlab", "data", "acquisition", "ataraxis", "interface"]
+keywords = ["sunlab", "data", "acquisition", "ataraxis", "interface", "experiment", "mesoscope"]
 
 classifiers = [
     # Development status
@@ -61,7 +61,7 @@ dependencies = [
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
     "natsort==8.4.0",
-    "sl-shared-assets==2.0.1",
+    "sl-shared-assets==3.0.0rc1",
 ]
 
 [project.urls]

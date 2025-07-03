@@ -220,11 +220,13 @@ class MesoscopeData:
         session = session_data.session_name
 
         # Instantiates additional path data classes
+        # noinspection PyArgumentList
         self.vrpc_persistent_data = _VRPCPersistentData(
             session_type=session_data.session_type,
             persistent_data_path=system_configuration.paths.root_directory.joinpath(project, animal, "persistent_data"),
         )
 
+        # noinspection PyArgumentList
         self.scanimagepc_data = _ScanImagePCData(
             session_name=session,
             meso_data_path=system_configuration.paths.mesoscope_directory,
@@ -233,6 +235,7 @@ class MesoscopeData:
             ),
         )
 
+        # noinspection PyArgumentList
         self.destinations = _VRPCDestinations(
             nas_raw_data_path=system_configuration.paths.nas_directory.joinpath(project, animal, session, "raw_data"),
             server_raw_data_path=system_configuration.paths.server_storage_directory.joinpath(

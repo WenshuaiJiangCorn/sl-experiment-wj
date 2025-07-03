@@ -48,8 +48,8 @@ class _MesoscopeExperiment:
         Calling this initializer only instantiates a minimal subset of all Mesoscope-VR assets. Use the start() method
         before issuing other commands to properly initialize all required runtime assets and remote processes.
 
-        This class statically reserves the id code '1' to label its log entries. Make sure no other Ataraxis class, such
-        as MicroControllerInterface or VideoSystem, uses this id code.
+        This class statically reserves the id code '1' to label its log entries. Make sure no other Ataraxis class,
+        such as MicroControllerInterface or VideoSystem, uses this id code.
 
     Args:
         experiment_configuration: An initialized MesoscopeExperimentConfiguration instance that specifies experiment
@@ -65,7 +65,7 @@ class _MesoscopeExperiment:
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session.
         _session_data: Stores the SessionData instance of the managed session.
         _mesoscope_data: Stores the MesoscopeData instance of the managed session.
-        vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
+        _vr_state: Stores the current state of the VR system. The MesoscopeExperiment updates this value whenever it is
             instructed to change the VR system state.
         _experiment_state: Stores the user-defined experiment state. Experiment states are defined by the user and
             are expected to have unique meaning for each project and, potentially, experiment.
@@ -78,7 +78,9 @@ class _MesoscopeExperiment:
         _previous_licks: Stores the number of detected licks, used during the last communication cycle between this
             class and Unity.
         _cue_sequence: Stores the Virtual Reality wall cue sequence used by the currently active Unity VR runtime.
-        _unconsumed_count: Tracks the number of rewards delivered to the animal without the animal consuming them.
+        _unconsumed_reward_count: Tracks the number of rewards delivered to the animal without the animal
+            consuming them.
+        unity_terminated: Tracks whether a termination message has been received from Unity.
         _unity_termination_topic: Stores the MQTT topic used by Unity game engine to announce when it terminates the
             game state.
         _cue_sequence_topic: Stores the MQTT topic used by Unity game engine to respond to the request of the VR wall
@@ -89,7 +91,6 @@ class _MesoscopeExperiment:
             'must lick' to true).
         _enable_guidance_topic: Stores the MQTT topic used to switch the virtual task into guided mode (sets
             'must lick' to false).
-        unity_terminated: Tracks whether a termination message has been received from Unity.
         _logger: A DataLogger instance that collects behavior log data from all sources: microcontrollers, video
             cameras, and the MesoscopeExperiment instance.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
@@ -108,7 +109,7 @@ class _MesoscopeExperiment:
         session_data: SessionData,
         session_descriptor: MesoscopeExperimentDescriptor,
     ) -> None:
-        # Creates the _started flag first to avoid leaks if the initialization method fails.
+        # Creates the _started flag first to avoid memory leaks if the initialization method fails.
         self._started: bool = False
 
         # Caches SessionDescriptor and MesoscopeExperimentConfiguration instances to class attributes.
@@ -127,7 +128,7 @@ class _MesoscopeExperiment:
 
         # Defines other flags used during runtime:
         # VR and Experiment states are initialized to 0 (idle state) by default.
-        self.vr_state: int = 0
+        self._vr_state: int = 0
         self._experiment_state: int = 0
         self._source_id: np.uint8 = np.uint8(1)  # Reserves logging source ID code 1 for this class
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
@@ -136,8 +137,12 @@ class _MesoscopeExperiment:
         self._previous_position: float = 0.0
         self._previous_licks: int = 0
         self._cue_sequence: NDArray[np.uint8] = np.zeros(shape=(0,), dtype=np.uint8)
-        self._unconsumed_count: int = 0
+        self._unconsumed_reward_count: int = 0
+
+        # Initializes additional tracker variables used to detect and handle unexpected Unity game engine and Mesoscope
+        # frame acquisition shutdown events.
         self.unity_terminated: bool = False
+        self.mesoscope_terminated: bool = False
 
         # Stores the names of MQTT topics that need to be monitored for incoming messages sent by Unity game engine.
         self._unity_termination_topic: str = "Gimbl/Session/Stop"
@@ -1045,7 +1050,7 @@ class _MesoscopeExperiment:
         Args:
             new_state: The byte-code for the newly activated VR state.
         """
-        self.vr_state = new_state  # Updates the VR state
+        self._vr_state = new_state  # Updates the VR state
 
         # Logs the VR state update. Uses header-code 1 to indicate that the logged value is the VR state-code.
         log_package = LogPackage(
@@ -1080,7 +1085,7 @@ class _MesoscopeExperiment:
         automatically upon entry into the reward zone.
 
         Notes:
-            The boolean 'enable guidance' state is inverse of the Unities 'must lick' toggle. Therefore, if
+            The boolean 'enable guidance' state is inverse of the Unities 'must-lick' toggle. Therefore, if
             guidance is True, Must Lick is False.
 
         Args:
@@ -1165,7 +1170,7 @@ class _MesoscopeExperiment:
 
             # Whenever the animal licks the water delivery tube, it is consuming any available rewards. Resets the
             # unconsumed count whenever new licks are detected.
-            self._unconsumed_count = 0
+            self._unconsumed_reward_count = 0
 
             self._unity.send_data(topic=self._microcontrollers.lick.mqtt_topic, payload=None)
 
@@ -1178,7 +1183,7 @@ class _MesoscopeExperiment:
             # Uses the reward volume specified during startup (5.0) or via the UI (Anything from 1 to 20).
             if topic == self._microcontrollers.valve.mqtt_topic:
                 # Only delivers water rewards if the current unconsumed count value is below the user-defined threshold.
-                if self._unconsumed_count < self.descriptor.maximum_unconsumed_rewards:
+                if self._unconsumed_reward_count < self.descriptor.maximum_unconsumed_rewards:
                     self._microcontrollers.deliver_reward(ignore_parameters=True)
 
                 # Otherwise, simulates water reward by sounding the buzzer without delivering any water
@@ -2989,7 +2994,7 @@ def experiment_logic(
                     console.echo(message=message, level=LogLevel.WARNING)
 
                     # Switches the runtime control system to the 'idle' state, unless it is already in that state.
-                    if runtime.vr_state != 0:
+                    if runtime._vr_state != 0:
                         runtime.idle()
 
                     # Caches valve data to discard any valve data accumulated during the idle period.

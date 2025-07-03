@@ -554,6 +554,10 @@ class MicroControllerInterfaces:
             module_interfaces=(self.wheel_encoder,),
         )
 
+    def __del__(self) -> None:
+        """Ensures that all hardware resources are released when the object is garbage-collected."""
+        self.stop()
+
     def start(self) -> None:
         """Starts MicroController communication processes and configures all hardware modules to use the runtime
         parameters loaded from the acquisition system configuration file.
@@ -1094,6 +1098,10 @@ class VideoSystems:
             quantization_parameter=self._system_configuration.cameras.body_camera_quantization_parameter,
         )
 
+    def __del__(self) -> None:
+        """Ensures all hardware resources are released when the class is garbage-collected."""
+        self.stop()
+
     def start_face_camera(self) -> None:
         """Starts face camera frame acquisition.
 
@@ -1210,3 +1218,5 @@ class VideoSystems:
         """Returns the path to the compressed .npz archive that stores the data logged by the right body camera during
         runtime."""
         return self._right_camera.log_path
+
+class Mesoscope
