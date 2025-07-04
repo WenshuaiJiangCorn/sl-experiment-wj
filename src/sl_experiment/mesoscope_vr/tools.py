@@ -270,7 +270,7 @@ class RuntimeControlUI:
 
     def __init__(self) -> None:
         self._data_array = SharedMemoryArray.create_array(
-            name="runtime_control_ui", prototype=np.zeros(shape=12, dtype=np.int32), exist_ok=True
+            name="runtime_control_ui", prototype=np.zeros(shape=11, dtype=np.int32), exist_ok=True
         )
 
         # Starts the UI process
@@ -340,6 +340,18 @@ class RuntimeControlUI:
         finally:
             self._data_array.disconnect()
 
+    def set_pause_state(self, paused: bool) -> None:
+        """Sets the runtime pause state from outside the UI.
+
+        This method is used to synchronize the remote GUI with the main runtime process if the runtime process enters
+        the paused state. Typically, this happens when a major external component, such as the Mesoscope or Unity
+        unexpectedly terminates its runtime.
+
+        Args:
+            paused: Determines the externally assigned GUI pause state.
+        """
+        self._data_array.write_data(index=5, data=np.int32(1 if paused else 0))
+
     @property
     def exit_signal(self) -> bool:
         """Returns True if the user has requested the runtime to gracefully abort.
@@ -374,12 +386,7 @@ class RuntimeControlUI:
 
     @property
     def pause_runtime(self) -> bool:
-        """Returns True if the user has requested the acquisition system to pause the current runtime.
-
-        Notes:
-            Unlike most other flags,t he state of this flag does NOT change when it is accessed. Instead, the UI flips
-            it between True and False to pause and resume the managed runtime.
-        """
+        """Returns True if the user has requested the acquisition system to pause the current runtime."""
         return bool(self._data_array.read_data(index=5, convert_output=True))
 
     @property
@@ -408,25 +415,18 @@ class RuntimeControlUI:
 
     @property
     def reward_volume(self) -> int:
-        """Returns the current user-defined water reward volume value.
-
-        Querying this property allows dynamically configuring the Mesoscope-VR system to use the user-defined volume of
-        water each time it rewards the animal.
-        """
+        """Returns the current user-defined water reward volume value."""
         return int(self._data_array.read_data(index=8, convert_output=True))
 
     @property
     def enable_guidance(self) -> bool:
-        """Returns True if the user has enabled lick guidance mode.
-
-        Querying this property dynamically configures the VR task to either require the animal to lick to receive
-        rewards or to automatically dispense water as the animal enters the reward zone.
-
-        Notes:
-            Unlike most other flags, the state of this flag does NOT change when it is accessed. Instead, the UI flips
-            it between True and False to enable and disable guidance.
-        """
+        """Returns True if the user has enabled lick guidance mode."""
         return bool(self._data_array.read_data(index=9, convert_output=True))
+
+    @property
+    def show_reward(self) -> bool:
+        """Returns True if reward zone collision boundary should be shown/displayed, False if it should be hidden."""
+        return bool(self._data_array.read_data(index=10, convert_output=True))
 
 
 class _ControlUIWindow(QMainWindow):
@@ -444,6 +444,7 @@ class _ControlUIWindow(QMainWindow):
         _speed_modifier: The current user-defined modifier to apply to the running speed threshold.
         _duration_modifier: The current user-defined modifier to apply to the running epoch duration threshold.
         _guidance_enabled: A flag indicating whether lick guidance mode is enabled or not.
+        _show_reward: A flag indicating whether reward zone collision boundary should be shown/displayed to the animal.
     """
 
     def __init__(self, data_array: SharedMemoryArray):
@@ -455,6 +456,7 @@ class _ControlUIWindow(QMainWindow):
         self._speed_modifier: int = 0
         self._duration_modifier: int = 0
         self._guidance_enabled: bool = False
+        self._show_reward: bool = True
 
         # Configures the window title
         self.setWindowTitle("Mesoscope-VR Control Panel")
@@ -509,8 +511,16 @@ class _ControlUIWindow(QMainWindow):
         self.guidance_btn.clicked.connect(self._toggle_guidance)
         self.guidance_btn.setObjectName("guidanceButton")
 
+        # Show / Hide Reward Collision Boundary
+        self._data_array.write_data(index=10, data=np.int32(0))  # Defaults to not showing reward collision boundary
+        self.reward_visibility_btn = QPushButton("👁️ Show Reward")
+        self.reward_visibility_btn.setToolTip("Toggles reward collision boundary visibility on or off.")
+        # noinspection PyUnresolvedReferences
+        self.reward_visibility_btn.clicked.connect(self._toggle_reward_visibility)
+        self.reward_visibility_btn.setObjectName("showRewardButton")
+
         # Configures the buttons to expand when UI is resized, but use a fixed height of 35 points
-        for btn in [self.exit_btn, self.pause_btn, self.guidance_btn]:
+        for btn in [self.exit_btn, self.pause_btn, self.guidance_btn, self.reward_visibility_btn]:
             btn.setMinimumHeight(35)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             runtime_control_layout.addWidget(btn)
@@ -961,6 +971,29 @@ class _ControlUIWindow(QMainWindow):
                         background-color: #7f8c8d;
                         border-color: #6c7b7d;
                     }}
+                    QPushButton#hideRewardButton {{
+                        background-color: #e74c3c;
+                        color: white;
+                        border-color: #c0392b;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#hideRewardButton:hover {{
+                        background-color: #c0392b;
+                        border-color: #a93226;
+                    }}
+                    
+                    QPushButton#showRewardButton {{
+                        background-color: #27ae60;
+                        color: white;
+                        border-color: #229954;
+                        font-weight: bold;
+                    }}
+                    
+                    QPushButton#showRewardButton:hover {{
+                        background-color: #229954;
+                        border-color: #1e8449;
+                    }}
                 """)
 
     def _setup_monitoring(self) -> None:
@@ -971,14 +1004,28 @@ class _ControlUIWindow(QMainWindow):
         """
         self.monitor_timer = QTimer(self)
         # noinspection PyUnresolvedReferences
-        self.monitor_timer.timeout.connect(self._check_termination)
+        self.monitor_timer.timeout.connect(self._check_external_state)
         self.monitor_timer.start(100)  # Checks every 100 ms
 
-    def _check_termination(self) -> None:
-        """Checks for the runtime termination signal and, if it has been received, terminates the runtime."""
+    def _check_external_state(self) -> None:
+        """Checks the state of externally addressable SharedMemoryArray values and acts on received state updates.
+
+        This method monitors certain values of the communication array to receive messages from the main runtime
+        process. Primarily, this functionality is used to gracefully terminate the GUI from the main runtime process.
+        """
         try:
+
+            # If the termination flag has been set to 1, terminates the GUI process
             if self._data_array.read_data(index=0, convert_output=True) == 1:
                 self.close()
+
+            # Checks for external pause state changes and, if necessary, updates the GUI to reflect the current
+            # runtime state (running or paused).
+            external_pause_state = bool(self._data_array.read_data(index=5, convert_output=True))
+            if external_pause_state != self._is_paused:
+                # External pause state changed, update UI accordingly
+                self._is_paused = external_pause_state
+                self._update_pause_ui()
         except:
             self.close()
 
@@ -1054,23 +1101,8 @@ class _ControlUIWindow(QMainWindow):
     def _toggle_pause(self) -> None:
         """Toggles the runtime between paused and unpaused (active) states."""
         self._is_paused = not self._is_paused
-        if self._is_paused:
-            self._data_array.write_data(index=5, data=np.int32(1))
-            self.pause_btn.setText("▶️ Resume Runtime")
-            self.pause_btn.setObjectName("resumeButton")
-            self.runtime_status_label.setText("Runtime Status: ⏸️ Paused")
-            self.runtime_status_label.setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }")
-        else:
-            self._data_array.write_data(index=5, data=np.int32(0))
-            self.pause_btn.setText("⏸️ Pause Runtime")
-            self.pause_btn.setObjectName("pauseButton")
-            self.runtime_status_label.setText("Runtime Status: 🟢 Running")
-            self.runtime_status_label.setStyleSheet("QLabel { color: #27ae60; font-weight: bold; }")
-
-        # Refreshes styles after object name change
-        self.pause_btn.style().unpolish(self.pause_btn)  # type: ignore
-        self.pause_btn.style().polish(self.pause_btn)  # type: ignore
-        self.pause_btn.update()  # Force update to apply new styles
+        self._data_array.write_data(index=5, data=np.int32(1 if self._is_paused else 0))
+        self._update_pause_ui()
 
     def _update_reward_volume(self) -> None:
         """Updates the reward volume in the data array in response to user modifying the GUI field value."""
@@ -1103,3 +1135,38 @@ class _ControlUIWindow(QMainWindow):
         self.guidance_btn.style().unpolish(self.guidance_btn)  # type: ignore
         self.guidance_btn.style().polish(self.guidance_btn)  # type: ignore
         self.guidance_btn.update()  # Forces update to apply new styles
+
+    def _update_pause_ui(self) -> None:
+        """Updates the pause UI elements based on the current _is_paused state."""
+        if self._is_paused:
+            self.pause_btn.setText("▶️ Resume Runtime")
+            self.pause_btn.setObjectName("resumeButton")
+            self.runtime_status_label.setText("Runtime Status: ⏸️ Paused")
+            self.runtime_status_label.setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }")
+        else:
+            self.pause_btn.setText("⏸️ Pause Runtime")
+            self.pause_btn.setObjectName("pauseButton")
+            self.runtime_status_label.setText("Runtime Status: 🟢 Running")
+            self.runtime_status_label.setStyleSheet("QLabel { color: #27ae60; font-weight: bold; }")
+
+        # Refresh styles after object name change
+        self.pause_btn.style().unpolish(self.pause_btn)  # type: ignore
+        self.pause_btn.style().polish(self.pause_btn)  # type: ignore
+        self.pause_btn.update()  # Forces update to apply new styles
+
+    def _toggle_reward_visibility(self) -> None:
+        """Toggles reward collision boundary visibility between shown and hidden states."""
+        self._show_reward = not self._show_reward
+        if self._show_reward:
+            self._data_array.write_data(index=10, data=np.int32(1))
+            self.reward_visibility_btn.setText("🙈 Hide Reward")
+            self.reward_visibility_btn.setObjectName("hideRewardButton")
+        else:
+            self._data_array.write_data(index=10, data=np.int32(0))
+            self.reward_visibility_btn.setText("👁️ Show Reward")
+            self.reward_visibility_btn.setObjectName("showRewardButton")
+
+        # Refresh styles after object name change
+        self.reward_visibility_btn.style().unpolish(self.reward_visibility_btn)  # type: ignore
+        self.reward_visibility_btn.style().polish(self.reward_visibility_btn)  # type: ignore
+        self.reward_visibility_btn.update()  # Force update to apply new styles

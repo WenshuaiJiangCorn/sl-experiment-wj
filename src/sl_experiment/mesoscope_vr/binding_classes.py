@@ -1218,5 +1218,3 @@ class VideoSystems:
         """Returns the path to the compressed .npz archive that stores the data logged by the right body camera during
         runtime."""
         return self._right_camera.log_path
-
-class Mesoscope
