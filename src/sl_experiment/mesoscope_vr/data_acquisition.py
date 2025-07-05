@@ -387,9 +387,9 @@ class _MesoscopeVRSystem:
                 # values.
                 self._get_cue_sequence()
 
-            # Configures the VR task to match GUI state
-            self._toggle_lick_guidance(enable_guidance=self._enable_guidance)
-            self._toggle_show_reward(show_reward=self._show_reward_zone_boundary)
+                # Configures the VR task to match GUI state
+                self._toggle_lick_guidance(enable_guidance=self._enable_guidance)
+                self._toggle_show_reward(show_reward=self._show_reward_zone_boundary)
 
             # Instructs the user to prepare the mesoscope for data acquisition.
             self._setup_mesoscope()
@@ -1533,6 +1533,10 @@ class _MesoscopeVRSystem:
             receives and parses exactly one message stored in the MQTTCommunication class buffer. Also, as part of each
             cycle the method sends updated distance and lick data to Unity.
         """
+
+        # Aborts early if this runtime does not use Unity.
+        if self._unity is None:
+            return
 
         # If the mouse has changed its position since the previous cycle, updates the position and sends the data to
         # Unity. Since Unity expects to be sent the delta (change) in mouse position, rather than the current absolute
