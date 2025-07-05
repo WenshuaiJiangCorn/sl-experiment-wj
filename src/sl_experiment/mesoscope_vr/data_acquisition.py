@@ -1613,6 +1613,16 @@ class _MesoscopeVRSystem:
                 self.unity_terminated = True
 
     def _ui_cycle(self):
+        """Queries the state of various GUI components and adjusts the runtime behavior accordingly.
+
+        This utility method cycles through various user-addressable runtime components and, depending on corresponding
+        UI states, executes the necessary functionality or updates associated parameters. In essence, calling this
+        method synchronizes the runtime with the state of the runtime control GUI.
+
+        Notes:
+            This method is designed to be called repeatedly as part of the main runtime cycle loop (via the user-facing
+            runtime_cycle() method).
+        """
 
         # This is mostly a fall-back to appease mypy, but also simplifies working with runtimes that do not need a GUI,
         # such as 'window checking'.
@@ -1625,12 +1635,17 @@ class _MesoscopeVRSystem:
         if self._ui.pause_runtime:
             self._pause_runtime()
         else:
-            # If the user sends a resume command, resumes the runtime.
+            # If the user sends a resume command, resumes the runtime and adjusts certain class attributes to help
+            # runtime logic functions discount (ignore) the time spent in paused state.
             self._resume_runtime()
 
         # If the user sent the abort command, terminates the runtime early with an error message.
         if self._ui.exit_signal:
             self._terminate_runtime()
+
+            # If the user confirms runtime termination, braks the ui cycle to expediter runtime shut down sequence.
+            if self._terminated:
+                return
 
         # If the user updates the reward volume in the GUI, adjusts the volume used by the instance to match the
         # GUI state and configures the valve module to deliver that much water for each reward command.
@@ -1653,8 +1668,18 @@ class _MesoscopeVRSystem:
             self._show_reward_zone_boundary = self._ui.show_reward
             self._toggle_show_reward(show_reward=self._show_reward_zone_boundary)
 
-    def _runtime_cycle(self):
-        pass
+    def runtime_cycle(self):
+
+        # Synchronizes the runtime state with the state of the user-facing GUI
+        self._ui_cycle()
+
+        # If the managed runtime communicates with Unity, synchronizes the state of the Unity virtual task with the
+        # state of the runtime (and the GUI).
+        if self._unity is not None:
+            self._unity_cycle()
+
+        if self._terminated:
+            return
 
     def _pause_runtime(self) -> None:
         # Notifies the user that the runtime has been paused
@@ -1737,19 +1762,25 @@ class _MesoscopeVRSystem:
         pass
 
     def _terminate_runtime(self) -> None:
-        # If the user requests for the paused stage to be aborted, terminates the runtime.
-        message = "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
+        """Verifies that the user intends to abort the runtime via terminal prompt and, if so, sets the runtime into
+        the termination mode.
+        """
+
+        # Verifies that the user intends to abort the runtime to avoid 'misclick' terminations.
+        message = "Runtime abort signal: Received. Are you sure you want to abort the runtime?"
         console.echo(message=message, level=LogLevel.WARNING)
         while True:
             answer = input("Enter 'yes' or 'no': ")
 
+            # Sets the runtime into the termination state, which aborts all instance cycles and the outer logic function
+            # cycle.
             if answer.lower() == "yes":
-                terminate_runtime = True  # Sets the terminate flag
-                break  # Breaks the while loop
+                self._terminated = True
+                return
 
+            # Returns without terminating the runtime
             elif answer.lower() == "no":
-                # Returns to running the runtime
-                break
+                return
 
 
 def lick_training_logic(
