@@ -315,6 +315,26 @@ class _MesoscopeVRSystem:
         # Sets the runtime into the Idle state before instructing the user to finalize runtime preparations.
         self.idle()
 
+        # The setup procedure is complete.
+        self._started = True
+
+        message = "Mesoscope-VR system: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+    def start_runtime(self) -> None:
+
+        # Makes it impossible to start the runtime unless class assets have been initialized (started).
+        if not self._started:
+            message = (
+                "Unable to start the Mesoscope-VR system runtime as runtime assets have not been initialized. Call the "
+                "MesoscopeVRSystem class start() method before calling this method."
+            )
+            console.error(message=message, error=RuntimeError)
+            return  # Fallback to appease mypy
+
+        # Initializes a second-precise timer used to enforce various delays used by the
+        delay_timer = PrecisionTimer("s")
+
         # Initializes the runtime control UI.
         self._ui = RuntimeControlUI()
 
@@ -325,27 +345,6 @@ class _MesoscopeVRSystem:
             valve_tracker=self._microcontrollers.valve_tracker,
             distance_tracker=self._microcontrollers.distance_tracker,
         )
-
-        # The setup procedure is complete.
-        self._started = True
-
-        message = "Mesoscope-VR system: Started."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def start_runtime(self) -> None:
-
-        # Makes it impossible to start the runtime unless class assets have been initialized. Since version 3.0.0,
-        # critical runtime assets like ui and visualizer are also initialized by the start() method.
-        if self._ui is None or not self._started:
-            message = (
-                "Unable to start the Mesoscope-VR system runtime as runtime assets have not been initialized. Call the "
-                "MesoscopeVRSystem class start() method before calling this method."
-            )
-            console.error(message=message, error=RuntimeError)
-            return  # Fallback to appease mypy
-
-        # Initializes a second-precise timer used to enforce various delays used by the
-        delay_timer = PrecisionTimer("s")
 
         # Queries certain runtime configuration parameters from GUI
         self._runtime_guidance_state = self._ui.enable_guidance
@@ -447,6 +446,10 @@ class _MesoscopeVRSystem:
         message = "Terminating Mesoscope-VR system runtime..."
         console.echo(message=message, level=LogLevel.INFO)
 
+        # Shuts down the UI and the visualizer.
+        self._ui.shutdown()
+        self._visualizer.close()
+
         # Switches the system into the IDLE state. Since IDLE state has most modules set to stop-friendly states,
         # this is used as a shortcut to prepare the VR system for shutdown. Also, this clearly marks the end of the
         # main runtime period.
@@ -491,10 +494,6 @@ class _MesoscopeVRSystem:
         # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors before
         # disconnecting.
         self._zaber_motors.disconnect()
-
-        # Shuts down the UI and closes the visualizer.
-        self._ui.shutdown()
-        self._visualizer.close()
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -1576,10 +1575,10 @@ class _MesoscopeVRSystem:
     def _ui_cycle(self):
         pass
 
-    def _mesoscope_cycle(self):
+    def _runtime_cycle(self):
         pass
 
-    def _pause_runtime(self, ui: RuntimeControlUI) -> None:
+    def _pause_cycle(self, ui: RuntimeControlUI) -> None:
         # Notifies the user that the runtime has been paused
         message = "Mesoscope-VR runtime: Paused."
         console.echo(message=message, level=LogLevel.WARNING)
