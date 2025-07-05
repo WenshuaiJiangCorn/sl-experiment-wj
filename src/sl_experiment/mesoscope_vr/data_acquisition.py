@@ -328,10 +328,6 @@ class _MesoscopeVRSystem:
             message = "Experiment configuration snapshot: Generated."
             console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Starts acquiring data from body cameras. Does not start camera frame saving at this point to avoid generating
-        # unnecessary data
-        self._cameras.start_body_cameras()
-
         # Sets the runtime into the Idle state before instructing the user to finalize runtime preparations.
         self.idle()
 
@@ -355,6 +351,10 @@ class _MesoscopeVRSystem:
         # Initializes a second-precise timer used to enforce various delays used by the
         delay_timer = PrecisionTimer("s")
 
+        # Starts acquiring data from body cameras. Does not start camera frame saving at this point to avoid generating
+        # unnecessary data
+        self._cameras.start_body_cameras()
+
         # Initializes the runtime control UI.
         self._ui = RuntimeControlUI()
 
@@ -373,17 +373,19 @@ class _MesoscopeVRSystem:
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
         if self._session_data.session_type == _experiment:
-            # Establishes communication with the MQTT broker.
+
             if self._unity is not None:
+                # Establishes communication with the MQTT broker.
                 self._unity.connect()
 
-            # Instructs the user to configure the VR scene and verify that it properly interfaces with the VR screens.
-            self._setup_unity()
+                # Instructs the user to configure the VR scene and verify that it properly interfaces with the VR
+                # screens.
+                self._setup_unity()
 
-            # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
-            # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
-            # values.
-            self._get_cue_sequence()
+                # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
+                # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
+                # values.
+                self._get_cue_sequence()
 
             # Configures the VR task to match GUI state
             self._toggle_lick_guidance(enable_guidance=self._enable_guidance)
@@ -467,9 +469,12 @@ class _MesoscopeVRSystem:
         message = "Terminating Mesoscope-VR system runtime..."
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Shuts down the UI and the visualizer.
-        self._ui.shutdown()
-        self._visualizer.close()
+        # Shuts down the UI and the visualizer, if these assets are used by the managed runtime
+        if self._ui is not None:
+            self._ui.shutdown()
+
+        if self._visualizer is not None:
+            self._visualizer.close()
 
         # Switches the system into the IDLE state. Since IDLE state has most modules set to stop-friendly states,
         # this is used as a shortcut to prepare the VR system for shutdown. Also, this clearly marks the end of the
@@ -1670,8 +1675,9 @@ class _MesoscopeVRSystem:
 
     def runtime_cycle(self):
 
-        # Synchronizes the runtime state with the state of the user-facing GUI
-        self._ui_cycle()
+        # If the managed runtime exposes a GUI, synchronizes the runtime state with the state of the user-facing GUI
+        if self._ui is not None:
+            self._ui_cycle()
 
         # If the managed runtime communicates with Unity, synchronizes the state of the Unity virtual task with the
         # state of the runtime (and the GUI).
