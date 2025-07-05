@@ -39,10 +39,10 @@ from .data_preprocessing import purge_failed_session, preprocess_session_data
 
 # Statically defines the names used by supported session types to ensure that the name is used consistently across the
 # entire module.
-_experiment = "mesoscope experiment"
-_run = "run training"
-_lick = "lick training"
-_window = "window checking"
+_experiment: str = "mesoscope experiment"
+_run: str = "run training"
+_lick: str = "lick training"
+_window: str = "window checking"
 
 
 class _MesoscopeVRSystem:
@@ -92,6 +92,8 @@ class _MesoscopeVRSystem:
             such as MicroControllerInterfaces and VideoSystems.
         _started: Tracks whether the VR system and experiment runtime are currently running. Primarily, this is used
             to support releasing hardware resources in the case of an unexpected runtime termination.
+        _terminated: Tracks whether the user has terminated the runtime.
+        _paused: Tracks whether the user has paused the runtime.
         descriptor: Stores the session descriptor instance of the managed session.
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session, if the
             session is of the 'mesoscope experiment' type.
@@ -148,6 +150,10 @@ class _MesoscopeVRSystem:
     ) -> None:
         # Creates the _started flag first to avoid memory leaks if the initialization method fails.
         self._started: bool = False
+
+        # Creates other important runtime flow control flags
+        self._terminated: bool = False
+        self._paused: bool = False
 
         # Caches SessionDescriptor and MesoscopeExperimentConfiguration instances to class attributes.
         self.descriptor: MesoscopeExperimentDescriptor = session_descriptor
