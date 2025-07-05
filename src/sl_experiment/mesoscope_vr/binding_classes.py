@@ -430,6 +430,11 @@ class MicroControllerInterfaces:
         _previous_tone_duration: Tracks the auditory tone duration during previous deliver_reward() or simulate_reward()
             calls.
         _screen_state: Tracks the current VR screen state.
+        _frame_monitoring: Tracks the current mesoscope frame monitoring state.
+        _torque_monitoring: Tracks the current torque monitoring state.
+        _lick_monitoring: Tracks the current lick monitoring state.
+        _encoder_monitoring: Tracks the current encoder monitoring state.
+        _break_state: Tracks the current break state.
         mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
         mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
         wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
@@ -464,6 +469,11 @@ class MicroControllerInterfaces:
         self._previous_volume: float = 0.0
         self._previous_tone_duration: int = 0
         self._screen_state: bool = False
+        self._frame_monitoring: bool = False
+        self._torque_monitoring: bool = False
+        self._lick_monitoring: bool = False
+        self._encoder_monitoring: bool = False
+        self._break_state: bool = True  # The break is normally engaged, so it starts engaged by default
 
         # ACTOR. Actor AMC controls the hardware that needs to be triggered by PC at irregular intervals. Most of such
         # hardware is designed to produce some form of an output: deliver water reward, engage wheel breaks, issue a
@@ -679,14 +689,18 @@ class MicroControllerInterfaces:
         This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
         at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
         """
-        self.wheel_encoder.reset_pulse_count()
-        self.wheel_encoder.check_state(
-            repetition_delay=np.uint32(self._system_configuration.microcontrollers.wheel_encoder_polling_delay_us)
-        )
+        if not self._encoder_monitoring:
+            self.wheel_encoder.reset_pulse_count()
+            self.wheel_encoder.check_state(
+                repetition_delay=np.uint32(self._system_configuration.microcontrollers.wheel_encoder_polling_delay_us)
+            )
+            self._encoder_monitoring = True
 
     def disable_encoder_monitoring(self) -> None:
         """Stops monitoring the wheel encoder."""
-        self.wheel_encoder.reset_command_queue()
+        if self._encoder_monitoring:
+            self.wheel_encoder.reset_command_queue()
+            self._encoder_monitoring = False
 
     def start_mesoscope(self) -> None:
         """Sends the acquisition start TTL pulse to the mesoscope."""
@@ -698,11 +712,15 @@ class MicroControllerInterfaces:
 
     def enable_break(self) -> None:
         """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
-        self.wheel_break.toggle(state=True)
+        if not self._break_state:
+            self.wheel_break.toggle(state=True)
+            self._break_state = True
 
     def disable_break(self) -> None:
         """Disengages the wheel break, enabling the animal to run on the wheel."""
-        self.wheel_break.toggle(state=False)
+        if self._break_state:
+            self.wheel_break.toggle(state=False)
+            self._break_state = False
 
     def enable_vr_screens(self) -> None:
         """Sets the VR screens to be ON."""
@@ -724,11 +742,15 @@ class MicroControllerInterfaces:
         ~100ms. This is followed by ~5ms LOW phase during which the Galvos are executing the flyback procedure. This
         command checks the state of the TTL pin at the 1 kHZ rate, which is enough to accurately report both phases.
         """
-        self.mesoscope_frame.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._frame_monitoring:
+            self.mesoscope_frame.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._frame_monitoring = True
 
     def disable_mesoscope_frame_monitoring(self) -> None:
         """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
-        self.mesoscope_frame.reset_command_queue()
+        if self._frame_monitoring:
+            self.mesoscope_frame.reset_command_queue()
+            self._frame_monitoring = False
 
     def enable_lick_monitoring(self) -> None:
         """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
@@ -737,11 +759,15 @@ class MicroControllerInterfaces:
         reliable proxy for tongue-to-sensor contact. Most lick events span at least 100 ms of time and, therefore, the
         rate of 1 kHZ is adequate for resolving all expected single-lick events.
         """
-        self.lick.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._lick_monitoring:
+            self.lick.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._lick_monitoring = True
 
     def disable_lick_monitoring(self) -> None:
         """Stops monitoring the conductive lick sensor."""
-        self.lick.reset_command_queue()
+        if self._lick_monitoring:
+            self.lick.reset_command_queue()
+            self._lick_monitoring = False
 
     def enable_torque_monitoring(self) -> None:
         """Enables monitoring the torque sensor at ~ 1 kHZ rate.
@@ -751,11 +777,15 @@ class MicroControllerInterfaces:
         reliably distinguishes large torques from small torques and accurately tracks animal motion activity when the
         wheel break is engaged.
         """
-        self.torque.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._torque_monitoring:
+            self.torque.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._torque_monitoring = True
 
     def disable_torque_monitoring(self) -> None:
         """Stops monitoring the torque sensor."""
-        self.torque.reset_command_queue()
+        if self._torque_monitoring:
+            self.torque.reset_command_queue()
+            self._torque_monitoring = False
 
     def open_valve(self) -> None:
         """Opens the water reward solenoid valve.
@@ -918,6 +948,25 @@ class MicroControllerInterfaces:
             tone_duration=np.uint32(tone_duration),
         )
         self.valve.calibrate()
+
+    def reset_mesoscope_frame_count(self) -> None:
+        """Resets the tracked mesoscope pulse count to 0.
+
+        This utility method is used when restarting mesoscope frame acquisition to simplify the logic for detecting
+        acquisition startup failures.
+        """
+        self.mesoscope_frame.reset_pulse_count()
+
+    def reset_valve_tracker(self) -> None:
+        """Resets the total number of rewards and the total volume of water delivered by the valve.
+
+        This utility method is used when starting a new runtime to remove any valve data accumulated during the final
+        manual checkpoint, where the user is allowed to manipulate the valve before runtime starts.
+        """
+        # noinspection PyTypeChecker
+        self.valve_tracker.write_data(index=0, data=0)
+        # noinspection PyTypeChecker
+        self.valve_tracker.write_data(index=1, data=0)
 
     @property
     def mesoscope_frame_count(self) -> int:

@@ -336,6 +336,7 @@ class BehaviorVisualizer:
         # Ensures the plot is not updated any faster than necessary to resolve the time-step used by the plot
         if self._update_timer.elapsed < self._time_step:
             return
+
         self._update_timer.reset()
 
         # Replaces the oldest timestamp data with the current data.

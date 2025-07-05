@@ -549,6 +549,12 @@ class TTLInterface(ModuleInterface):
         else:
             return 0  # If the array does not exist, always returns 0
 
+    def reset_pulse_count(self) -> None:
+        """Resets the tracked mesoscope pulse count to zero, if the TTLInterface instance is used to monitor mesoscope
+        frame acquisition pulses."""
+        if self._pulse_tracker is not None:
+            self._pulse_tracker.write_data(index=0, data=np.uint64(0))
+
 
 class BreakInterface(ModuleInterface):
     """Interfaces with BreakModule instances running on Ataraxis MicroControllers.

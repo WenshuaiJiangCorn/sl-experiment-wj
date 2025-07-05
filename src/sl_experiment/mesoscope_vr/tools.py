@@ -1014,7 +1014,6 @@ class _ControlUIWindow(QMainWindow):
         process. Primarily, this functionality is used to gracefully terminate the GUI from the main runtime process.
         """
         try:
-
             # If the termination flag has been set to 1, terminates the GUI process
             if self._data_array.read_data(index=0, convert_output=True) == 1:
                 self.close()
