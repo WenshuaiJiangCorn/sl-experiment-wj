@@ -214,6 +214,10 @@ class _MesoscopeVRSystem:
         )
         self._experiment_configuration: MesoscopeExperimentConfiguration | None = experiment_configuration
 
+        # Replaces the default state-code map inside the descriptor instance with the actual state-code map used by
+        # this class.
+        self.descriptor.system_state_codes = self._state_map
+
         # Caches the descriptor to disk. Primarily, this is required for preprocessing the data if the session runtime
         # terminates unexpectedly.
         self.descriptor.to_yaml(file_path=Path(session_data.raw_data.session_descriptor_path))
@@ -2148,7 +2152,7 @@ def lick_training_logic(
     # Pre-generates the SessionDescriptor class and populates it with training data.
     descriptor = LickTrainingDescriptor(
         maximum_reward_delay_s=maximum_reward_delay,
-        minimum_reward_delay=minimum_reward_delay,
+        minimum_reward_delay_s=minimum_reward_delay,
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         experimenter=experimenter,
