@@ -392,7 +392,6 @@ class _MesoscopeVRSystem:
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
         if self._session_data.session_type == _experiment:
-
             # Instantiates an MQTTCommunication instance to directly communicate with Unity.
             monitored_topics = (
                 self._cue_sequence_topic,  # Used as part of Unity (re) initialization
@@ -2102,10 +2101,10 @@ def lick_training_logic(
             file_path=previous_descriptor_path
         )
         maximum_reward_delay = previous_descriptor.maximum_reward_delay_s
-        minimum_reward_delay = previous_descriptor.minimum_reward_delay
+        minimum_reward_delay = previous_descriptor.minimum_reward_delay_s
 
     # Initializes the timer used to enforce reward delays
-    delay_timer = PrecisionTimer("us")
+    delay_timer = PrecisionTimer("s")
 
     message = f"Generating the pseudorandom reward delay sequence..."
     console.echo(message=message, level=LogLevel.INFO)
@@ -2126,10 +2125,8 @@ def lick_training_logic(
     # the sampled delay array to fit within the time boundary.
     max_samples_idx = np.searchsorted(cumulative_time, maximum_training_time * 60, side="right")
 
-    # Slices the samples array to make the total training time be roughly the maximum requested duration. Converts each
-    # delay from seconds to microseconds and rounds to the nearest integer. This is done to make delays compatible with
-    # PrecisionTimer class.
-    reward_delays: NDArray[np.uint64] = np.round(samples[:max_samples_idx] * 1000000, decimals=0).astype(np.uint64)
+    # Slices the samples array to make the total training time be roughly the maximum requested duration.
+    reward_delays: NDArray[np.float64] = samples[:max_samples_idx]
 
     message = (
         f"Generated a sequence of {len(reward_delays)} rewards with the total cumulative runtime of "
@@ -2168,11 +2165,11 @@ def lick_training_logic(
         # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
         runtime.start()
 
-        message = f"Initiating lick training procedure..."
-        console.echo(message=message, level=LogLevel.INFO)
-
         # Switches the system into lick-training mode
         runtime.lick_train()
+
+        message = f"Lick training: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Loops over all delays and delivers reward via the lick tube as soon as the delay expires.
         delay_timer.reset()
@@ -2183,12 +2180,18 @@ def lick_training_logic(
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} rewards [{elapsed}]",
         ):
             # This loop is executed while the code is waiting for the delay to pass. Anything that needs to be done
-            # during the delay has to go here
-            while delay_timer.elapsed < delay:
+            # during the delay has to go here. IF the runtime is paused during the delay cycle, the time spent in the
+            # paused is used to discount the delay. This is in contrast to other runtimes, where pause time actually
+            # INCREASES the overall runtime.
+            while delay_timer.elapsed < (delay - runtime.paused_time):
                 runtime.runtime_cycle()  # Repeatedly calls the runtime cycle during the delay period
 
             # Resets the delay timer immediately after exiting the delay loop
             delay_timer.reset()
+
+            # Clears the paused time at the end of each delay cycle. This has to be done to prevent future delay
+            # loops from ending earlier than expected unless the runtime is paused again as part of that loop.
+            runtime.paused_time = 0
 
             # Delivers 5 uL of water to the animal or simulates the reward if the animal is not licking
             runtime.resolve_reward(reward_size=5.0)
@@ -2202,8 +2205,9 @@ def lick_training_logic(
                 console.echo(message=message, level=LogLevel.ERROR)
                 break  # Breaks the for loop
 
-        # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range.
-        delay_timer.delay_noblock(minimum_reward_delay * 1000000)  # Converts to microseconds before delaying.
+        # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range. Uses
+        # the maximum possible time interval as delay interval.
+        delay_timer.delay_noblock(maximum_reward_delay)
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
