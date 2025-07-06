@@ -94,6 +94,9 @@ class _MesoscopeVRSystem:
             state.
         _distance_snapshot_code: Stores the log message ID code used to log cumulative distance traveled by the animal
             at the time when the system received an unexpected Unity termination message.
+        _mesoscope_frame_delay: Stores the maximum number of milliseconds expected to pass between two consecutive
+            mesoscope frame acquisition triggers. By default, this is configured assuming that the acquisition is
+            adjusted to ~10 Hz.
         _source_id: Stores the unique identifier code for this class instance. The identifier is used to mark log
             entries made by this class instance and has to be unique across all sources that log data at the same time,
             such as MicroControllerInterfaces and VideoSystems.
@@ -162,6 +165,8 @@ class _MesoscopeVRSystem:
     _guidance_state_code: int = 3
     _show_reward_code: int = 4
     _distance_snapshot_code: int = 5
+
+    _mesoscope_frame_delay: int = 150
 
     # Reserves logging source ID code 1 for this class
     _source_id: np.uint8 = np.uint8(1)
@@ -256,6 +261,15 @@ class _MesoscopeVRSystem:
         self._ui: RuntimeControlUI | None = None
         self._visualizer: BehaviorVisualizer | None = None
         self._mesoscope_timer: PrecisionTimer | None = None
+
+    def __del__(self) -> None:
+        """Attempts to gracefully shut down the runtime before the class is garbage collected.
+
+        This is a safety feature to handle unexpected runtime terminations (crashes). It is designed to properly release
+        all hardware resources and safely cache all collected data before ending the runtime.
+        """
+        if self._started:
+            self.stop()
 
     def start(self) -> None:
         """Initializes and configures all microcontrollers, cameras, and Zaber motors used during the runtime.
@@ -1566,26 +1580,34 @@ class _MesoscopeVRSystem:
         pause the runtime and request user intervention.
         """
 
-        # If the managed runtime exposes a GUI, synchronizes the runtime state with the state of the user-facing GUI
-        if self._ui is not None:
-            self._ui_cycle()
+        # This loop is used to keep the runtime in the runtime cycle if runtime is paused. This effectively suspends
+        # external runtime logic.
+        while True:
+            # If the managed runtime exposes a GUI, synchronizes the runtime state with the state of the user-facing GUI
+            if self._ui is not None:
+                self._ui_cycle()
 
-        # If the GUI was used to terminate the runtime, aborts the cycle early
-        if self._terminated:
-            return
+            # If the GUI was used to terminate the runtime, aborts the cycle early
+            if self._terminated:
+                return
 
-        # If the managed runtime communicates with Unity, synchronizes the state of the Unity virtual task with the
-        # state of the runtime (and the GUI).
-        if self._unity is not None:
-            self._unity_cycle()
+            # If the managed runtime communicates with Unity, synchronizes the state of the Unity virtual task with the
+            # state of the runtime (and the GUI).
+            if self._unity is not None:
+                self._unity_cycle()
 
-        # Continuously updates the visualizer
-        if self._visualizer is not None:
-            self._visualizer.update()
+            # Continuously updates the visualizer
+            if self._visualizer is not None:
+                self._visualizer.update()
 
-        # If the runtime uses the Mesoscope, ensures that the mesoscope is acquiring frames.
-        if self._mesoscope_timer is not None:
-            self._mesoscope_cycle()
+            # If the runtime uses the Mesoscope, ensures that the mesoscope is acquiring frames.
+            if self._mesoscope_timer is not None:
+                self._mesoscope_cycle()
+
+            # As long as the runtime is not paused, returns after running the cycle once. Otherwise, continuously loops
+            # the cycle until the user uses the UI to resume the runtime or terminate it.
+            if not self._paused:
+                return
 
     def _unity_cycle(self) -> None:
         """Synchronizes the state of the Unity-managed Virtual Reality environment with the runtime state.
@@ -1664,6 +1686,8 @@ class _MesoscopeVRSystem:
                 # Switches the runtime into the paused state and sets the unity termination tracker
                 self._unity_terminated = True
                 self._pause_runtime()
+                message = "Emergency pause: Engaged. Reason: Received unexpected Unity shutdown message."
+                console.echo(message=message, level=LogLevel.ERROR)
 
                 # Reads the current position of the animal, in Unity units. Since this is done after cutting off the
                 # wheel motion stream (by transitioning into paused (idle) state), there should be minimal deviation of
@@ -1749,7 +1773,7 @@ class _MesoscopeVRSystem:
         """Checks whether mesoscope frame acquisition is active and, if not, attempts to restart the acquisition.
 
         This method is designed to be called repeatedly as part of the system runtime cycle. It monitors mesoscope
-        frame acquisition triggers and if it detects a pause longer than 300 milliseconds, it attempts to send a new
+        frame acquisition triggers and if it detects a pause longer than ~150 milliseconds, it attempts to send a new
         acquisition trigger. If sending the acquisition trigger does not recover the mesoscope frame acquisition, the
         method activates the emergency pause state, similar to how Unity termination messages are handled by
         _unity_cycle() method.
@@ -1757,7 +1781,11 @@ class _MesoscopeVRSystem:
 
         # Aborts early if mesoscope_timer is not initialized, it has been less than 300 milliseconds since the last
         # mesoscope frame acquisition check, or the mesoscope runtime appears to be terminated.
-        if self._mesoscope_timer is None or self._mesoscope_timer.elapsed < 300 or self._mesoscope_terminated:
+        if (
+            self._mesoscope_timer is None
+            or self._mesoscope_timer.elapsed < self._mesoscope_frame_delay
+            or self._mesoscope_terminated
+        ):
             return
 
         # If mesoscope has acquired more frames since the last check, updates the cached frame count and returns
@@ -1767,22 +1795,21 @@ class _MesoscopeVRSystem:
             self._mesoscope_timer.reset()  # Resets the timer to start timing the next cycle
             return
 
+        # The only condition under which the mesoscope frame count is 0 is if the tracker was reset by the code below,
+        # but the mesoscope did not start acquiring frames. Then, engages emergency pause mode.
+        elif self._microcontrollers.mesoscope_frame_count == 0:
+            self._mesoscope_terminated = True  # Sets the termination flag
+            self._pause_runtime()  # Pauses the runtime.
+            message = "Emergency pause: Engaged. Reason: Unable to restart mesoscope frame acquisition."
+            console.echo(message=message, level=LogLevel.ERROR)
+            return
+
         # Otherwise, if mesoscope did not acquire any additional frames within 300 seconds, attempts to restart the
-        # acquisition
-        self._microcontrollers.reset_mesoscope_frame_count()
+        # acquisition.
+        self._microcontrollers.reset_mesoscope_frame_count()  # Makes the tracked frame count 0
+        self._mesoscope_frame_count = 0  # Resets the instance tracker
         self._microcontrollers.start_mesoscope()  # Sends the acquisition start trigger
         self._mesoscope_timer.reset()
-
-        # Waits for at most 300 milliseconds to receive a new mesoscope frame acquisition pulse.
-        while self._mesoscope_timer.elapsed < 300:
-            if self._microcontrollers.mesoscope_frame_count > 0:
-                self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
-                self._mesoscope_timer.reset()  # Resets the timer to start timing the next cycle
-                return
-
-        # If automated acquisition recovery fails, enters an emergency pause state.
-        self._mesoscope_terminated = True  # Sets the termination flag
-        self._pause_runtime()  # Pauses the runtime.
 
     def _pause_runtime(self) -> None:
         """Pauses the managed runtime.
@@ -1800,11 +1827,6 @@ class _MesoscopeVRSystem:
             Any water dispensed through the valve during the paused state does not count against the water reward limit
             of the executed task.
         """
-
-        # Notifies the user that the runtime has been paused
-        message = "Mesoscope-VR runtime: Paused."
-        console.echo(message=message, level=LogLevel.WARNING)
-
         # Ensures that the GUI reflects that the runtime is paused. While most paused states originate from the GUI,
         # certain events may cause the main runtime cycle to activate the paused state bypassing the GUI.
         if self._ui is not None and not self._ui.pause_runtime:
@@ -1820,6 +1842,10 @@ class _MesoscopeVRSystem:
 
         # Switches the Mesoscope-VR system into the idle state.
         self.idle()
+
+        # Notifies the user that the runtime has been paused
+        message = "Mesoscope-VR runtime: Paused."
+        console.echo(message=message, level=LogLevel.WARNING)
 
         # Sets the paused flag
         self._paused = True
