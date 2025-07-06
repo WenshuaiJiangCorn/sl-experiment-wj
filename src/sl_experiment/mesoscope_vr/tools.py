@@ -266,6 +266,10 @@ class RuntimeControlUI:
         _data_array: A SharedMemoryArray used to store the data recorded by the remote UI process.
         _ui_process: The Process instance running the Qt5 UI.
         _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
+
+    Notes:
+        Since version 3.0.0, calling the initializer does not start the IO process. Call start() method to finish
+        initializing all UI assets.
     """
 
     def __init__(self) -> None:
@@ -273,18 +277,26 @@ class RuntimeControlUI:
             name="runtime_control_ui", prototype=np.zeros(shape=11, dtype=np.int32), exist_ok=True
         )
 
-        # Starts the UI process
+        # Defines, but does not automatically start the UI process.
         self._ui_process = Process(target=self._run_ui_process, daemon=True)
-        self._ui_process.start()
-        self._started = True
+        self._started = False
 
     def __del__(self) -> None:
         """Ensures all class resources are released before the instance is destroyed.
 
         This is a fallback method, using shutdown() directly is the preferred way of releasing resources.
         """
+        self.shutdown()
+
+    def start(self) -> None:
+        """Starts the remote UI process."""
+
+        # Prevents starting an already started instance
         if self._started:
-            self.shutdown()
+            return
+
+        self._ui_process.start()
+        self._started = True
 
     def shutdown(self) -> None:
         """Shuts down the UI and releases all SharedMemoryArray resources.
@@ -292,6 +304,11 @@ class RuntimeControlUI:
         This method should be called at the end of runtime to properly release all resources and terminate the
         remote UI process.
         """
+
+        # Prevents shutting down an already terminated instance
+        if not self._started:
+            return
+
         # If the UI process is still alive, shuts it down
         if self._ui_process.is_alive():
             self._data_array.write_data(index=0, data=np.int32(1))  # Sends the termination signal to the remote process
