@@ -18,6 +18,8 @@ from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from sl_shared_assets import (
     SessionData,
+    ExperimentState,
+    TrialCueSequence,
     MesoscopePositions,
     ProjectConfiguration,
     RunTrainingDescriptor,
@@ -139,6 +141,14 @@ class _MesoscopeVRSystem:
             50 milliseconds of runtime.
         _speed_timer: Stores the PrecisionTimer instance used to computer the running speed of the animal in
             50-millisecond intervals.
+        _guided_trials: Stores the remaining number of trials which should be executed in the guided mode.
+        _unrewarded_trial_sequence_length: Stores the number of sequential trials for which the animal did not receive
+            a reward. If the animal performs a rewarded trial, this sequence counter is reset to 0.
+        _trial_rewarded: Tracks whether the currently executed trial has been rewarded.
+        _trial_distances: Stores a NumPy array of cumulative traveled distance, in Unity units, at the end of each
+            trial to be executed as part of the current Virtual Reality task sequence.
+        _completed_trials: Stores the total number of trials completed by the animal since the last cue sequence
+            reset.
         _logger: Stores the DataLogger instance that collects behavior log data from all sources.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
@@ -166,8 +176,8 @@ class _MesoscopeVRSystem:
     _cue_sequence_request_topic: str = "CueSequenceTrigger/"
     _disable_guidance_topic: str = "MustLick/True/"
     _enable_guidance_topic: str = "MustLick/False/"
-    _show_reward_zone_boundary_topic: str = "VisibleRewardWall/True/"
-    _hide_reward_zone_boundary_topic: str = "VisibleRewardWall/False/"
+    _show_reward_zone_boundary_topic: str = "VisibleMarker/True/"
+    _hide_reward_zone_boundary_topic: str = "VisibleMarker/False/"
 
     # Also stores log message codes for the class as separate values
     _system_state_code: int = 1
@@ -253,6 +263,11 @@ class _MesoscopeVRSystem:
         self._mesoscope_terminated: bool = False
         self._running_speed: np.float64 = np.float64(0.0)
         self._speed_timer = PrecisionTimer("ms")
+        self._guided_trials: int = 0
+        self._unrewarded_trial_sequence_length: int = 0
+        self._trial_rewarded: bool = False
+        self._trial_distances: NDArray[np.float32] = np.zeros(shape=(0,), dtype=np.float32)
+        self._completed_trials: int = 0
 
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
@@ -1139,6 +1154,79 @@ class _MesoscopeVRSystem:
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
 
+    def _decompose_cue_sequence_to_trial_lengths(self) -> None:
+        """Decomposes the Virtual Reality task wall cue sequence into trials into a sequence of cumulative traveled
+        distances, in Unity units, at the end of each trial.
+
+        Uses greedy longest-match approach to identify trial motifs in the cue sequence and maps them to their trial
+        distances based on the experiment_configuration file data. This is used to translate the sequence of wall cues
+        into the sequence of trial distances, in Unity units. The sequence is then accumulated to generate the NumPy
+        array that stores the cumulative traveled distance at the end of each trial block.
+
+        Raises:
+            RuntimeError: If the method is not able to fully decompose the experiment cue sequence into a set of trial
+                lengths.
+        """
+
+        # Mostly a fallback to appease mypy, this method should not be called for non-experiment runtimes.
+        if self._experiment_configuration is None:
+            return
+
+        # Extracts the list of trial cue sequences supported by the managed experiment runtime.
+        trials: list[TrialCueSequence] = [trial for trial in self._experiment_configuration.trial_structures.values()]
+
+        # Extracts trial motif (cue sequences for each trial type) and their corresponding distances in cm.
+        trial_motifs = [trial.cue_sequence for trial in trials]
+        trial_distances = [float(trial.trial_length_cm) for trial in trials]
+
+        # Constructs a list of tuples, where each inner tuple stores the original motif index and its corresponding
+        # cue sequence.
+        motif_data = [(i, motif) for i, motif in enumerate(trial_motifs)]
+
+        # Sorts trial cue sequence motifs by length (longest first) for greedy matching
+        motif_data.sort(key=lambda x: len(x[1]), reverse=True)
+        sorted_motif_data = tuple(motif_data)  # Casts to tuple for efficiency
+
+        # Loops over the cue sequence and decomposes it into trials.
+        trial_indices = []
+        sequence_pos = 0
+        while sequence_pos < len(self._cue_sequence):
+            motif_found = False
+
+            # Attempts to match longer motifs first, ensuring that longer sequences take precedence over shorter ones.
+            for motif_idx, motif in sorted_motif_data:
+                motif_length = len(motif)
+
+                # If the currently evaluated motif length is less than the remaining sequence length, attempts to match
+                # motif to sequence.
+                if sequence_pos + motif_length <= len(self._cue_sequence):
+                    sequence_slice = self._cue_sequence[sequence_pos : sequence_pos + motif_length]
+
+                    # Converts the motif to a numpy array for efficient comparison
+                    motif_array = np.array(motif, dtype=np.uint8)
+
+                    # Uses NumPy for comparison
+                    if np.array_equal(sequence_slice, motif_array):
+                        trial_indices.append(motif_idx)
+                        sequence_pos += motif_length
+                        motif_found = True
+                        break
+
+            # All valid experiment configurations must be fully decomposable into trial sequences. If no motif is found,
+            # aborts runtime with an error message.
+            if not motif_found:
+                remaining_sequence = self._cue_sequence[sequence_pos : sequence_pos + 10]
+                message = (
+                    f"Unable to decompose the VR wall cue sequence received from Unity into a sequence of trial "
+                    f"distances. No trial motif (trial cue sequence) matched at overall sequence position "
+                    f"{sequence_pos}, remaining sequence: {remaining_sequence.tolist()}"
+                )
+                console.error(message=message, error=RuntimeError)
+
+        # Maps trial indices to distances and computes cumulative traveled distance at the end of each trial.
+        trial_distance_array = np.array([trial_distances[trial_type] for trial_type in trial_indices])
+        self._trial_distances = np.cumsum(trial_distance_array, dtype=np.float32)
+
     def _get_cue_sequence(self) -> None:
         """Queries the sequence of virtual reality track wall cues for the current task from Unity.
 
@@ -1197,6 +1285,21 @@ class _MesoscopeVRSystem:
                         )
                         self._logger.input_queue.put(package)
                         self._cue_sequence = sequence
+
+                        # Attempts to decompose the received cue sequence into a tuple of trial lengths. This is used
+                        # to support automatic guidance mode control during experiment runtimes.
+                        self._decompose_cue_sequence_to_trial_lengths()
+
+                        # Resets the traveled distance tracker array. Primarily, this is only necessary if this method
+                        # is called when recovering from unexpected Unity terminations
+                        self._microcontrollers.reset_distance_tracker()
+
+                        # Also resets internal class attributes used for position and trial completion tracking.
+                        self._position = 0
+                        self._distance = np.float64(0.0)
+                        self._completed_trials = 0
+
+                        # Note, keeps the number of unrewarded and guided trials unchanged. This is intentional
 
                         # Ends the runtime
                         message = "VR cue sequence: Received."
@@ -1697,6 +1800,19 @@ class _MesoscopeVRSystem:
                 # Overwrites the cached position with the new data
                 self._position = current_position
 
+                # Determines how many trials have been completed based on the current position by counting trials where
+                # current position has passed the trial end position
+                current_completed_trials = np.sum(current_position >= self._trial_distances)
+
+                # Checks if the animal completed a trial
+                if current_completed_trials > self._completed_trials:
+                    # Updates the completed trials counter
+                    self._completed_trials = current_completed_trials
+
+                    # If the completed trial was not rewarded, increments the unrewarded trial counter.
+                    if not self._trial_rewarded:
+                        self._unrewarded_trial_sequence_length += 1
+
                 # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
                 # byte-string.
                 json_string = dumps(obj={"movement": position_delta})
@@ -1777,6 +1893,15 @@ class _MesoscopeVRSystem:
                 # This method either delivers the reward or simulates it with the tone, depending on the unconsumed
                 # reward tracker.
                 self.resolve_reward()
+
+                # Decrements the guided trial counter each time Unity instructs the runtime to deliver a reward.
+                # Receiving reward delivery commands indicates that the animal performs the task as expected. This is
+                # only done when guided trials are enabled.
+                if self._guided_trials != 0:  # More efficient comparison, should not dip below zero.
+                    self._guided_trials -= 1
+
+                # Also flips the trial reward flag to 1 if the animal receives the reward during this trial.
+                self._trial_rewarded = True
 
             # If Unity runtime (game mode) terminates, Unity sends a message to the termination topic. In turn, the
             # runtime uses this as an indicator to reset the task logic.
@@ -2024,6 +2149,22 @@ class _MesoscopeVRSystem:
             elif answer.lower() == "no":
                 return
 
+    def enable_guided_trials(self, guided_trial_count: int = 3) -> None:
+        """Enables lick guidance for the requested number of future trials.
+
+        This service method is designed to be used by the experiment runtime logic function to enable lick guidance.
+        This is usually done either in response to the animal struggling with the experiment task or at the beginning of
+        each experiment session, to help the animal to learn the task.
+
+        Args:
+            guided_trial_count: The number of trials for which to enable the lick guidance. Note, if the animal is
+                currently running a trial and has not passed the reward zone, the guidance will apply to the ongoing
+                trial.
+        """
+        self._ui.set_guidance_state(enabled=True)  # Enables lick guidance via direct GUI manipulation.
+        self._guided_trials = guided_trial_count  # Resets the guided trial count.
+        self._unrewarded_trial_sequence_length = 0  # Resets the unrewarded trial sequence counter.
+
     @property
     def terminated(self) -> bool:
         """Returns True if the runtime is in the termination mode.
@@ -2052,6 +2193,16 @@ class _MesoscopeVRSystem:
     def dispensed_water_volume(self) -> float:
         """Returns the total volume of water, in microliters, dispensed by the valve during the current runtime."""
         return self._valve_water_volume
+
+    @property
+    def unrewarded_trial_sequence_length(self) -> int:
+        """Returns the number of consecutive (sequential) trials for which the animal did not receive a reward
+        (failed to satisfy reward conditions).
+
+        Note, a return value of 0 indicates that the last completed trial was rewarded and that the unrewarded sequence
+        is, therefore, broken (0).
+        """
+        return self._unrewarded_trial_sequence_length
 
 
 def lick_training_logic(
@@ -2703,6 +2854,7 @@ def experiment_logic(
 
     # Verifies that all Mesoscope-VR states used during experiments are valid
     valid_states = {1, 2}
+    state: ExperimentState
     for state in experiment_config.experiment_states.values():
         if state.system_state_code not in valid_states:
             message = (
@@ -2746,6 +2898,10 @@ def experiment_logic(
             elif state.system_state_code == 2:
                 runtime.run()
 
+            # If the runtime is configured to run an initial portion of trials in the current experiment phase with
+            # lick guidance, enables guidance for the requested number of trials.
+            runtime.enable_guided_trials(guided_trial_count=state.initial_guided_trials)
+
             # Creates a tqdm progress bar for the current experiment state
             with tqdm(
                 total=state.state_duration_s,
@@ -2755,8 +2911,13 @@ def experiment_logic(
                 # Cycles until the state duration of seconds passes
                 while runtime_timer.elapsed < (state.state_duration_s + runtime.paused_time):
                     # Since experiment logic is resolved by Unity game engine, the runtime logic function only needs to
-                    # call the runtime cycle and handle termination cases.
+                    # call the runtime cycle and handle termination and animal performance issue cases.
                     runtime.runtime_cycle()  # Repeatedly calls the runtime cycle as pare of the experiment state cycle
+
+                    # If the animal accumulates a critical number of unrewarded (failed) trials, enables the guided mode
+                    # for a portion of future trials.
+                    if runtime.unrewarded_trial_sequence_length >= state.failed_trial_threshold:
+                        runtime.enable_guided_trials(guided_trial_count=state.recovery_guided_trials)
 
                     # Breaks the while loop. The termination is also handled at the level of the 'for' loop. The error
                     # message is generated at that level, rather than here.
@@ -2801,8 +2962,8 @@ def window_checking_logic(
 
     This function is used when new animals are added to the project, before any other training or experiment runtime.
     Primarily, it is used to verify that the surgery went as expected and the animal is fit for providing high-quality
-    scientific data. As part of this process, the function also generates the snapshot of zaber motor positions and the
-    mesoscope objective position to be reused by future sessions.
+    scientific data. As part of this process, the function also generates the snapshot of zaber motor positions, the
+    mesoscope objective position, and the red-dot alignment screenshot to be reused by future sessions.
 
     Notes:
         This function largely behaves similar to all other training and experiment session runtimes. However, it does
@@ -2856,8 +3017,7 @@ def window_checking_logic(
     message = f"Initializing interface classes..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Initializes the data logger. This initialization follows the same procedure as the BehaviorTraining or
-    # MesoscopeExperiment classes
+    # Initializes the data logger. This initialization follows the same procedure as the _MesoscopeVRSystem class
     logger: DataLogger = DataLogger(
         output_directory=Path(session_data.raw_data.raw_data_path),
         instance_name="behavior",  # Creates behavior_log subfolder under raw_data
@@ -2950,10 +3110,10 @@ def window_checking_logic(
     screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
     while len(screenshots) != 1:
         message = (
-            f"Unable to retrieve the screenshot of the cranial window and the dot-alignment from the "
+            f"Unable to retrieve the screenshot of the cranial window and the red-dot alignment from the "
             f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
             f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
-            f"single screenshot of the cranial window and the dot-alignment on the ScanImagePC by "
+            f"single screenshot of the cranial window and the red-dot alignment on the ScanImagePC by "
             f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
             f"screenshots stored in the folder before proceeding."
         )
@@ -2961,10 +3121,15 @@ def window_checking_logic(
         input("Enter anything to continue: ")
         screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
 
-    # Moves the screenshot to the raw_data session folder
+    # Moves the screenshot from the ScanImagePC to the VRPC
     screenshot_path: Path = screenshots[0]
     sh.move(src=screenshot_path, dst=Path(session_data.raw_data.window_screenshot_path))
-    message = f"Cranial window and dot-alignment screenshot: Saved."
+
+    # Also saves the screenshot to the animal's persistent data folder, so that it can be reused during the next
+    # runtime.
+    sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
+
+    message = f"Cranial window and red-dot alignment screenshot: Saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Forces the user to update the mesoscope positions file with current mesoscope data.
@@ -3001,28 +3166,25 @@ def window_checking_logic(
     message = f"Mesoscope-VR and cranial window state snapshot: Generated."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
+    # Helps with removing the animal from the enclosure by retracting the lick-port in the Y-axis (moving it away
+    # from the animal).
     message = f"Retracting the lick-port away from the animal..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Helps with removing the animal from the rig by retracting the lick-port in the Y-axis (moving it away from the
-    # animal).
     zaber_motors.unmount_position()
 
     message = "Motor Positioning: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Instructs the user to remove all objects that may interfere with moving the motors.
-    message = (
-        "REMOVE the animal and the mesoscope objective from the VR rig. Failure to do so may HARM the animal and "
-        "DAMAGE the mesoscope. This is the last manual checkpoint, once you progress past this point, the "
-        "Microscope-VR system will reset Zaber motor positions and start data preprocessing."
-    )
+    message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
     console.echo(message=message, level=LogLevel.WARNING)
     input("Enter anything to continue: ")
 
-    # Shuts down zaber bindings
+    # Resets zaber motors for the next runtime
     zaber_motors.park_position()
     zaber_motors.disconnect()
+    message = "Zaber motors: Reset."
+    console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Terminates the face camera
     cameras.stop()
@@ -3031,7 +3193,8 @@ def window_checking_logic(
     logger.stop()
 
     # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline primarily just
-    # copies the session raw_data folder to the NAS and BioHPC server.
+    # copies the session raw_data folder to the NAS and BioHPC server. Unlike other pipelines, window checking does
+    # not give user a choice. All window checking data is necessarily preprocessed.
     preprocess_session_data(session_data=session_data)
 
     # Ends the runtime

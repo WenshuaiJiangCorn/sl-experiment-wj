@@ -369,6 +369,17 @@ class RuntimeControlUI:
         """
         self._data_array.write_data(index=5, data=np.int32(1 if paused else 0))
 
+    def set_guidance_state(self, enabled: bool) -> None:
+        """Sets the guidance state from outside the UI.
+
+        This method is used to synchronize the remote GUI with the main runtime process when the lick guidance state
+        needs to be controlled programmatically.
+
+        Args:
+            enabled: Determines the externally assigned GUI guidance state.
+        """
+        self._data_array.write_data(index=9, data=np.int32(1 if enabled else 0))
+
     @property
     def exit_signal(self) -> bool:
         """Returns True if the user has requested the runtime to gracefully abort.
@@ -1042,6 +1053,14 @@ class _ControlUIWindow(QMainWindow):
                 # External pause state changed, update UI accordingly
                 self._is_paused = external_pause_state
                 self._update_pause_ui()
+
+            # Checks for external guidance state changes and, if necessary, updates the GUI to reflect the current
+            # guidance state (enabled or disabled).
+            external_guidance_state = bool(self._data_array.read_data(index=9, convert_output=True))
+            if external_guidance_state != self._guidance_enabled:
+                # External guidance state changed, update UI accordingly
+                self._guidance_enabled = external_guidance_state
+                self._update_guidance_ui()
         except:
             self.close()
 
@@ -1135,22 +1154,25 @@ class _ControlUIWindow(QMainWindow):
         self._duration_modifier = int(self.duration_spinbox.value())
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
 
-    def _toggle_guidance(self) -> None:
-        """Toggles guidance mode between enabled and disabled states."""
-        self._guidance_enabled = not self._guidance_enabled
+    def _update_guidance_ui(self) -> None:
+        """Updates the guidance UI elements based on the current _guidance_enabled state."""
         if self._guidance_enabled:
-            self._data_array.write_data(index=9, data=np.int32(1))
             self.guidance_btn.setText("🚫 Disable Guidance")
             self.guidance_btn.setObjectName("guidanceDisableButton")
         else:
-            self._data_array.write_data(index=9, data=np.int32(0))
             self.guidance_btn.setText("🎯 Enable Guidance")
             self.guidance_btn.setObjectName("guidanceButton")
 
-        # Refreshes styles after object name change
+        # Refresh styles after object name change
         self.guidance_btn.style().unpolish(self.guidance_btn)  # type: ignore
         self.guidance_btn.style().polish(self.guidance_btn)  # type: ignore
         self.guidance_btn.update()  # Forces update to apply new styles
+
+    def _toggle_guidance(self) -> None:
+        """Toggles guidance mode between enabled and disabled states."""
+        self._guidance_enabled = not self._guidance_enabled
+        self._data_array.write_data(index=9, data=np.int32(1 if self._guidance_enabled else 0))
+        self._update_guidance_ui()
 
     def _update_pause_ui(self) -> None:
         """Updates the pause UI elements based on the current _is_paused state."""
@@ -1185,4 +1207,4 @@ class _ControlUIWindow(QMainWindow):
         # Refresh styles after object name change
         self.reward_visibility_btn.style().unpolish(self.reward_visibility_btn)  # type: ignore
         self.reward_visibility_btn.style().polish(self.reward_visibility_btn)  # type: ignore
-        self.reward_visibility_btn.update()  # Force update to apply new styles
+        self.reward_visibility_btn.update()  # Forces update to apply new styles

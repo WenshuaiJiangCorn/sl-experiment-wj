@@ -61,7 +61,7 @@ dependencies = [
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
     "natsort==8.4.0",
-    "sl-shared-assets==3.0.0rc2",
+    "sl-shared-assets==3.0.0rc4",
 ]
 
 [project.urls]

@@ -968,6 +968,19 @@ class MicroControllerInterfaces:
         # noinspection PyTypeChecker
         self.valve_tracker.write_data(index=1, data=0)
 
+    def reset_distance_tracker(self) -> None:
+        """Resets the total distance traveled by the animal since runtime onset adn the current position of the animal
+        relative to runtime onset.
+
+        This utility method is used when recovering from Unity runtime termination by generating a new task cue
+        sequence. Since Unity restarts the virtual task at position 0, distance tracker array also needs to be reset
+        back to 0.
+        """
+        # noinspection PyTypeChecker
+        self.distance_tracker.write_data(index=0, data=0)
+        # noinspection PyTypeChecker
+        self.distance_tracker.write_data(index=1, data=0)
+
     @property
     def mesoscope_frame_count(self) -> int:
         """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""

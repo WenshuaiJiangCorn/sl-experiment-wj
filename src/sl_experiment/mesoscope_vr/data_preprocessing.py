@@ -39,6 +39,13 @@ from ataraxis_data_structures import compress_npy_logs
 from .tools import MesoscopeData, get_system_configuration
 from ..shared_components import WaterSheet, SurgerySheet
 
+# Statically defines the names used by supported session types to ensure that the name is used consistently across the
+# entire module.
+_experiment: str = "mesoscope experiment"
+_run: str = "run training"
+_lick: str = "lick training"
+_window: str = "window checking"
+
 
 def _delete_directory(directory_path: Path) -> None:
     """Removes the input directory and all its subdirectories using parallel processing.
@@ -859,11 +866,11 @@ def _resolve_telomere_marker(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the state of the 'incomplete' flag.
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    if session_data.session_type.lower() == "lick training":
+    if session_data.session_type.lower() == _lick:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "run training":
+    elif session_data.session_type.lower() == _run:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "mesoscope experiment":
+    elif session_data.session_type.lower() == _experiment:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
     else:
         # Aborts early (without creating the telomere.bin marker file) for any other session type
@@ -908,13 +915,13 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
     quality: str | int = ""
-    if session_data.session_type.lower() == "lick training":
+    if session_data.session_type.lower() == _lick:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "run training":
+    elif session_data.session_type.lower() == _run:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "mesoscope experiment":
+    elif session_data.session_type.lower() == _experiment:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "window checking":
+    elif session_data.session_type.lower() == _window:
         # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
         # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
         # surgery, based on the window checking outcome
@@ -1186,6 +1193,7 @@ def preprocess_session_data(session_data: SessionData) -> None:
         not session_specific_path.exists()
         and general_path.exists()
         and len([path for path in general_path.glob("*")]) > 0
+        and session_data.session_type != _window
     ):
         general_path.rename(session_specific_path)
         ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
