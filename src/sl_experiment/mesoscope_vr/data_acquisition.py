@@ -137,8 +137,8 @@ class _MesoscopeVRSystem:
             terminated its runtime (stopped sending frame pulses and responding to recovery triggers).
         _running_speed: Stores the running speed of the animal, in centimeters per second, computed over the preceding
             50 milliseconds of runtime.
-        _speed_timer: Stores the PrecisionTimer instance used to computer the running speed of the animal in 50
-            milliseconds intervals.
+        _speed_timer: Stores the PrecisionTimer instance used to computer the running speed of the animal in
+            50-millisecond intervals.
         _logger: Stores the DataLogger instance that collects behavior log data from all sources.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
@@ -251,7 +251,7 @@ class _MesoscopeVRSystem:
         self._unity_terminated: bool = False
         self._mesoscope_frame_count: int = 0
         self._mesoscope_terminated: bool = False
-        self._running_speed: float = 0.0
+        self._running_speed: np.float64 = np.float64(0.0)
         self._speed_timer = PrecisionTimer("ms")
 
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
@@ -313,7 +313,7 @@ class _MesoscopeVRSystem:
         This method establishes the communication with the microcontrollers, data logger cores, and video system
         processes. It also executes the runtime preparation sequence, which includes positioning all Zaber motors
         to support the runtime and generating data files that store runtime metadata. When starting a runtime that uses
-        Unity game engine and / or Mesoscope, this method also guides teh user through appropriate steps for setting
+        Unity game engine and / or Mesoscope, this method also guides the user through appropriate steps for setting
         up these external assets.
 
         Notes:
@@ -373,7 +373,7 @@ class _MesoscopeVRSystem:
         # files during processing.
         self._generate_hardware_state_snapshot()
 
-        # Saves the MesoscopeExperimentConfiguration instance to the session folder, if the managed runtime is an
+        # Saves the MesoscopeExperimentConfiguration instance to the session folder if the managed runtime is an
         # experiment session
         if self._experiment_configuration is not None:
             self._experiment_configuration.to_yaml(Path(self._session_data.raw_data.experiment_configuration_path))
@@ -467,7 +467,7 @@ class _MesoscopeVRSystem:
         This method releases the hardware resources used during runtime by various system components by triggering
         appropriate graceful shutdown procedures for all components. Then, it generates a set of files that store
         various runtime metadata. Finally, it calls the data preprocessing pipeline to efficiently package the data and
-        safely transfer it ot the long-term storage destinations.
+        safely transfer it to the long-term storage destinations.
         """
 
         # Prevents stopping an already stopped process.
@@ -492,7 +492,7 @@ class _MesoscopeVRSystem:
         # Stops all cameras.
         self._cameras.stop()
 
-        # Stops mesoscope frame acquisition and monitoring, if the runtime is a Mesoscope experiment.
+        # Stops mesoscope frame acquisition and monitoring if the runtime is a Mesoscope experiment.
         if self._session_data.session_type == _experiment:
             self._stop_mesoscope()
             self._microcontrollers.disable_mesoscope_frame_monitoring()
@@ -1014,7 +1014,7 @@ class _MesoscopeVRSystem:
                     if answer.lower() == "yes":
                         break
 
-                    # If the answer is 'no', ends method runtime,a s there is no need to update the data inside the
+                    # If the answer is 'no', ends method runtime, as there is no need to update the data inside the
                     # file.
                     elif answer.lower() == "no":
                         return
@@ -1400,7 +1400,7 @@ class _MesoscopeVRSystem:
         """
 
         # Ensures that the _runtime_state attribute is set to a non-zero value after runtime initialization. This is
-        # used to restore the runtime back to the pre-pause state, if the runtime enters paused state (idle), but the
+        # used to restore the runtime back to the pre-pause state if the runtime enters paused state (idle), but the
         # user then chooses to resume the runtime.
         if self._runtime_state != 0:
             self._runtime_state = new_state
@@ -1567,6 +1567,22 @@ class _MesoscopeVRSystem:
         # Sets system state to 4
         self._change_system_state(self._state_map["run training"])
 
+    def update_visualizer_thresholds(self, speed_threshold: float, duration_threshold: float) -> None:
+        """Instructs the data visualizer to update the displayed running speed and running epoch duration thresholds
+        using the input data.
+
+        This method is used by the run training runtime to synchronize the visualizer with the actively used thresholds.
+
+        Args:
+            speed_threshold: The speed threshold in centimeters per second. Specifies how fast the animal should be
+                running to satisfy the current task conditions.
+            duration_threshold: The running epoch duration threshold in seconds. Specifies how long the animal must
+                maintain the above-threshold speed to satisfy the current task conditions.
+        """
+        self._visualizer.update_run_training_thresholds(
+            speed_threshold=speed_threshold, duration_threshold=duration_threshold
+        )
+
     def _deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
 
@@ -1588,7 +1604,7 @@ class _MesoscopeVRSystem:
         """
         self._microcontrollers.simulate_reward()
 
-    def resolve_reward(self, reward_size: float | None = None) -> None:
+    def resolve_reward(self, reward_size: float | None = None) -> bool:
         """Depending on the current number of unconsumed rewards and runtime configuration, either delivers or simulates
         the requested volume of water reward.
 
@@ -1599,6 +1615,9 @@ class _MesoscopeVRSystem:
         Args:
             reward_size: The volume of water to deliver, in microliters. If this argument is set to None, the method
                 will use the same volume as used during the previous reward delivery or as set via the GUI.
+
+        Returns:
+            True if the method delivers the water reward, False if it simulates it.
         """
         # Only delivers water rewards if the current unconsumed count value is below the user-defined threshold.
         if self._unconsumed_reward_count < self.descriptor.maximum_unconsumed_rewards:
@@ -1606,10 +1625,12 @@ class _MesoscopeVRSystem:
                 self._microcontrollers.deliver_reward(ignore_parameters=True)
             else:
                 self._microcontrollers.deliver_reward(volume=reward_size)
+            return True
 
         # Otherwise, simulates water reward by sounding the buzzer without delivering any water
         else:
             self._simulate_reward()
+            return False
 
     def runtime_cycle(self) -> None:
         """Sequentially carries out all cyclic Mesoscope-VR runtime tasks.
@@ -1934,8 +1955,8 @@ class _MesoscopeVRSystem:
         # noinspection PyTypeChecker
         self._microcontrollers.valve_tracker.write_data(index=1, data=self._valve_water_volume)
 
-        # Updates the 'paused_time' value to reflect the time spent inside the 'paused' state. Some runtimes use this
-        # public attribute to ad
+        # Updates the 'paused_time' value to reflect the time spent inside the 'paused' state. Most runtimes use this
+        # public attribute to adjust the execution time of certain runtime stages or the runtime altogether.
         pause_time = round(
             convert_time(  # type: ignore
                 time=self._timestamp_timer.elapsed - self._pause_start_time, from_units="us", to_units="s"
@@ -1965,8 +1986,7 @@ class _MesoscopeVRSystem:
         # Restores the system and runtime states to pre-pause conditions.
         if self._system_state == self._state_map["idle"]:
             # This is a rare case where the pause was triggered before a valid non-idle state was activated by the
-            # runtime logic function. While rare, it is not technically impossible, so it will be resolved to setting
-            # the system back to idle state.
+            # runtime logic function. While rare, it is not technically impossible, so it is supported here
             self.idle()
         elif self._system_state == self._state_map["rest"]:
             self.rest()
@@ -2012,6 +2032,26 @@ class _MesoscopeVRSystem:
         GUI.
         """
         return self._terminated
+
+    @property
+    def running_speed(self) -> np.float64:
+        """Returns the current running speed of the animal in centimeters per second."""
+        return self._running_speed
+
+    @property
+    def speed_modifier(self) -> int:
+        """Returns the current user-defined modifier to apply to the running speed threshold during run training."""
+        return self._ui.speed_modifier
+
+    @property
+    def duration_modifier(self) -> int:
+        """Returns the current user-defined modifier to apply to the duration threshold during run training."""
+        return self._ui.duration_modifier
+
+    @property
+    def dispensed_water_volume(self) -> float:
+        """Returns the total volume of water, in microliters, dispensed by the valve during the current runtime."""
+        return self._valve_water_volume
 
 
 def lick_training_logic(
@@ -2204,13 +2244,13 @@ def lick_training_logic(
             if runtime.terminated:
                 message = (
                     "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
-                    "procedure."
+                    "procedure..."
                 )
                 console.echo(message=message, level=LogLevel.ERROR)
                 break  # Breaks the for loop
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range. Uses
-        # the maximum possible time interval as delay interval.
+        # the maximum possible time interval as the delay interval.
         delay_timer.delay_noblock(maximum_reward_delay)
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
@@ -2219,7 +2259,7 @@ def lick_training_logic(
         # destinations.
         runtime.stop()
 
-        message = f"Training runtime: Complete."
+        message = f"Lick training runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
 
@@ -2338,6 +2378,60 @@ def run_training_logic(
         initial_speed_threshold = previous_descriptor.final_run_speed_threshold_cm_s
         initial_duration_threshold = previous_descriptor.final_run_duration_threshold_s
 
+    # Initializes the timers used during runtime
+    runtime_timer = PrecisionTimer("s")
+    running_duration_timer = PrecisionTimer("ms")
+    epoch_timer = PrecisionTimer("ms")
+
+    # Initializes assets used to guard against interrupting run epochs for mice that take many large steps. For mice
+    # with a distinct walking pattern of many very large steps, the speed transiently dips below the threshold for a
+    # very brief moment of time, flagging the epoch as unrewarded. To avoid this issue, instead of interrupting the
+    # epoch outright, we now allow the speed to be below the threshold for a short period of time. These assets
+    # help with that task pattern.
+    epoch_timer_engaged: bool = False
+    maximum_idle_time = max(0.0, maximum_idle_time) * 1000  # Ensures positive values or zero and converts to msec
+
+    # Initializes assets used to ensure that the animal consumes delivered water rewards.
+    if maximum_unconsumed_rewards < 1:
+        # If the maximum unconsumed reward count is below 1, disables the feature by setting the number to match the
+        # maximum number of rewards that can be delivered during runtime.
+        maximum_unconsumed_rewards = int(np.ceil(maximum_water_volume / 0.005))
+
+    # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
+    # optimize main loop runtime speed:
+    initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
+    maximum_speed = np.float64(5)  # In centimeters per second
+    speed_step = np.float64(speed_increase_step)  # In centimeters per second
+
+    initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
+    maximum_duration = np.float64(5000)  # In milliseconds
+    duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
+
+    # The way 'increase_threshold' is used requires it to be greater than 0. So if a threshold of 0 is passed, the
+    # system sets it to a very small number instead, which functions similar to it being 0, but does not produce an
+    # error. Specifically, this prevents the 'division by zero' error.
+    if increase_threshold < 0:
+        increase_threshold = 0.000000000001
+
+    water_threshold = np.float64(increase_threshold * 1000)  # In microliters
+    maximum_volume = np.float64(maximum_water_volume * 1000)  # In microliters
+
+    # Converts the training time from minutes to seconds to make it compatible with the timer precision.
+    training_time = maximum_training_time * 60
+
+    # Initializes internal tracker variables:
+    # Tracks the data necessary to update the training progress bar
+    previous_time = 0
+
+    # Tracks when speed and / or duration thresholds are updated. This is necessary to redraw the threshold lines in
+    # the visualizer plot
+    previous_speed_threshold = copy.copy(initial_speed)
+    previous_duration_threshold = copy.copy(initial_duration)
+
+    # Also pre-initializes the speed and duration trackers
+    speed_threshold: np.float64 = np.float64(0)
+    duration_threshold: np.float64 = np.float64(0)
+
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
         dispensed_water_volume_ml=0.0,
@@ -2357,389 +2451,164 @@ def run_training_logic(
         incomplete=True,  # Has to be initialized to True, so that if session aborts, it is marked as incomplete
     )
 
-    # Initializes the main runtime interface class. Note, most class parameters are statically configured to work for
-    # the current VRPC setup and may need to be adjusted as that setup evolves over time.
-    runtime = _BehaviorTraining(
-        session_data=session_data,
-        session_descriptor=descriptor,
-    )
+    # Initializes the runtime class
+    runtime = _MesoscopeVRSystem(session_data=session_data, session_descriptor=descriptor)
 
-    # Initializes the timers used during runtime
-    runtime_timer = PrecisionTimer("s")
-    speed_timer = PrecisionTimer("ms")
+    try:
+        # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
+        runtime.start()
 
-    # Initializes assets used to guard against interrupting run epochs for mice that take many large steps. For mice
-    # with a distinct walking pattern of many very large steps, the speed transiently dips below the threshold for a
-    # very brief moment of time, flagging the epoch as unrewarded. To avoid this issue, instead of interrupting the
-    # epoch outright, we now allow the speed to be below the threshold for a short period of time. These assets
-    # help with that task pattern.
-    epoch_timer = PrecisionTimer("ms")
-    epoch_timer_engaged: bool = False
-    maximum_idle_time = max(0.0, maximum_idle_time)  # Ensures positive values or zero
-    maximum_idle_time *= 1000  # Converts to milliseconds
+        # Switches the runtime into the run-training mode
+        runtime.run_train()
 
-    # Initializes assets used to ensure that the animal consumes delivered water rewards.
-    if maximum_unconsumed_rewards < 1:
-        # If the maximum unconsumed reward count is below 1, disables the feature by setting the number to match the
-        # maximum number of rewards that can possibly be delivered during runtime.
-        maximum_unconsumed_rewards = int(np.ceil(maximum_water_volume / 0.005))
-    previous_licks = 0
-    unconsumed_count = 0
+        message = f"Run training: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Converts all arguments used to determine the speed and duration threshold over time into numpy variables to
-    # optimize main loop runtime speed:
-    initial_speed = np.float64(initial_speed_threshold)  # In centimeters per second
-    maximum_speed = np.float64(5)  # In centimeters per second
-    speed_step = np.float64(speed_increase_step)  # In centimeters per second
-
-    initial_duration = np.float64(initial_duration_threshold * 1000)  # In milliseconds
-    maximum_duration = np.float64(5000)  # In milliseconds
-    duration_step = np.float64(duration_increase_step * 1000)  # In milliseconds
-
-    # The way 'increase_threshold' is used requires it to be greater than 0. So if a threshold of 0 is passed, the
-    # system sets it to a very small number instead. which functions similar to it being 0, but does not produce an
-    # error.
-    if increase_threshold < 0:
-        increase_threshold = 0.000000000001
-
-    water_threshold = np.float64(increase_threshold * 1000)  # In microliters
-    maximum_volume = np.float64(maximum_water_volume * 1000)  # In microliters
-
-    # Converts the training time from minutes to seconds to make it compatible with the timer precision.
-    training_time = maximum_training_time * 60
-
-    # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
-    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
-
-    # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
-    # putting the animal on the VR rig.
-    runtime.start()
-
-    # Initializes the runtime control UI. Similar to cameras, HAS to be initialized before the visualizer
-    ui = RuntimeControlUI()
-
-    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
-
-    # Updates the threshold lines to use the initial speed and duration values
-    visualizer.update_run_training_thresholds(speed_threshold=initial_speed, duration_threshold=initial_duration)
-
-    message = f"Initiating run training procedure..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Tracks the data necessary to update the training progress bar
-    previous_time = 0
-
-    # Tracks when speed and / or duration thresholds are updated. This is necessary to redraw the threshold lines in
-    # the visualizer plot
-    previous_speed_threshold = copy.copy(initial_speed)
-    previous_duration_threshold = copy.copy(initial_duration)
-
-    # Also pre-initializes the speed and duration trackers
-    speed_threshold: np.float64 = np.float64(0)
-    duration_threshold: np.float64 = np.float64(0)
-
-    # Final checkpoint
-    message = (
-        f"Runtime preparation: Complete. Carry out all final checks and adjustments, such as priming the water "
-        f"delivery valve at this time. When you are ready to start the runtime, use the UI to 'resume' it."
-    )
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Allows the user to manipulate the valve via the UI. Since Zaber interface should also be active, the user can also
-    # manually reposition all Zaber motors.
-    while ui.pause_runtime:
-        # Updates the visualizer plot ~every 30 ms. This should be enough to reliably capture all events of
-        # interest and appear visually smooth to human observers.
-        visualizer.update()
-
-        if ui.reward_signal:
-            runtime._deliver_reward(reward_size=ui.reward_volume)
-
-        if ui.open_valve:
-            runtime.toggle_valve(True)
-
-        if ui.close_valve:
-            runtime.toggle_valve(False)
-
-    # Ensures the valve is closed before continuing
-    runtime.toggle_valve(False)
-
-    # Resets the valve tracker array before proceeding. This allows the user to use the section above to debug the
-    # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
-    # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
-    # noinspection PyTypeChecker
-    valve_tracker.write_data(index=0, data=0)
-    # noinspection PyTypeChecker
-    valve_tracker.write_data(index=1, data=0)
-
-    message = f"Initiating lick training procedure..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    # Initializes the main training loop. The loop will run either until the total training time expires, the maximum
-    # volume of water is delivered or the loop is aborted by the user.
-    previous_reward_volume = 0
-
-    # If the runtime is paused, this is used to extend the training runtime to account for the time spent in the
-    # paused state.
-    additional_time = 0
-
-    # Configures all system components to support run training
-    runtime.run_train()
-
-    # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of water
-    # delivered to the animal
-    progress_bar = tqdm(
-        total=round(maximum_water_volume, ndigits=3),
-        desc="Delivered water volume",
-        unit="ml",
-        bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
-    )
-
-    runtime_timer.reset()
-    speed_timer.reset()  # It is critical to reset BOTh timers at the same time.
-    while runtime_timer.elapsed < (training_time + additional_time):
-        # Updates the total volume of water dispensed during runtime at each loop iteration.
-        dispensed_water_volume = valve_tracker.read_data(index=1, convert_output=False)
-
-        # Determines how many times the speed and duration thresholds have been increased based on the difference
-        # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
-        # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
-        # harder to keep receiving water.
-        increase_steps: np.float64 = np.floor(dispensed_water_volume / water_threshold)
-
-        # Determines the speed and duration thresholds for each cycle. This factors in the user input via keyboard.
-        # Note, user input has a static resolution of 0.1 cm/s per step and 50 ms per step.
-        speed_threshold = np.clip(
-            a=initial_speed + (increase_steps * speed_step) + (ui.speed_modifier * 0.01),
-            a_min=0.1,  # Minimum value
-            a_max=maximum_speed,  # Maximum value
-        )
-        duration_threshold = np.clip(
-            a=initial_duration + (increase_steps * duration_step) + (ui.duration_modifier * 10),
-            a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
-            a_max=maximum_duration,  # Maximum value
+        # Creates a tqdm progress bar that tracks the overall training progress by communicating the total volume of
+        # water delivered to the animal
+        progress_bar = tqdm(
+            total=round(maximum_water_volume, ndigits=3),
+            desc="Delivered water volume",
+            unit="ml",
+            bar_format="{l_bar}{bar}| {n:.3f}/{total:.3f} {postfix}",
         )
 
-        # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
-        # previous threshold trackers with new data.
-        if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
-            visualizer.update_run_training_thresholds(speed_threshold, duration_threshold)
-            previous_speed_threshold = speed_threshold
-            previous_duration_threshold = duration_threshold
+        runtime_timer.reset()
+        running_duration_timer.reset()  # It is critical to reset both timers at the same time.
 
-        # Reads the animal's running speed from the visualizer. The visualizer uses the distance tracker to
-        # calculate the running speed of the animal over 100 millisecond windows. This accesses the result of this
-        # computation and uses it to determine whether the animal is performing above the threshold.
-        current_speed = visualizer.running_speed
+        # This is the main runtime loop of the run training mode.
+        while runtime_timer.elapsed < (training_time + runtime.paused_time):
+            runtime.runtime_cycle()  # Repeatedly calls the runtime cycle during training
 
-        # If the animal licks during the period that separates two rewards, this is interpreted as the animal
-        # consuming the previous and any other leftover rewards.
-        if previous_licks < visualizer.lick_count:
-            previous_licks = visualizer.lick_count
-            unconsumed_count = 0
+            # Determines how many times the speed and duration thresholds have been increased based on the difference
+            # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
+            # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
+            # harder to keep receiving water.
+            increase_steps: np.float64 = np.floor(runtime.dispensed_water_volume / water_threshold)
 
-        # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
-        # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
-        # not yet maintained the required duration, the loop will keep cycling and accumulating the timer count.
-        # This is done until the animal either reaches the required duration or drops below the speed threshold.
-        if current_speed >= speed_threshold and speed_timer.elapsed >= duration_threshold:
-            # Only issues the rewards if the unconsumed reward counter is below the threshold.
-            if unconsumed_count < maximum_unconsumed_rewards:
-                runtime._deliver_reward(reward_size=5.0)  # Delivers 5 uL of water
+            # Determines the speed and duration thresholds for each cycle. This factors in the user input via the
+            # runtime control GUI. Note, user input has a static resolution of 0.01 cm/s and 0.01 s (10 ms) per step.
+            speed_threshold = np.clip(
+                a=initial_speed + (increase_steps * speed_step) + (runtime.speed_modifier * 0.01),
+                a_min=0.1,  # Minimum value
+                a_max=maximum_speed,  # Maximum value
+            )
+            duration_threshold = np.clip(
+                a=initial_duration + (increase_steps * duration_step) + (runtime.duration_modifier * 10),
+                a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
+                a_max=maximum_duration,  # Maximum value
+            )
 
-                # 5 uL == 0.005 ml
-                # Updates the progress bar whenever the animal receives (automated) rewards. The progress bar
-                # purposefully does not track 'manual' water rewards.
-                progress_bar.update(0.005)
+            # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
+            # previous threshold trackers with new data.
+            if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
+                runtime.update_visualizer_thresholds(speed_threshold, duration_threshold)
+                previous_speed_threshold = speed_threshold
+                previous_duration_threshold = duration_threshold
 
-                # Increments the unconsumed reward count each time a reward is delivered
-                unconsumed_count += 1
+            # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
+            # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
+            # not yet maintained the required duration, the loop keeps cycling and accumulating the timer count.
+            # This is done until the animal either reaches the required duration or drops below the speed threshold.
+            if runtime.running_speed >= speed_threshold and running_duration_timer.elapsed >= duration_threshold:
+                # Delivers 5 uL of water or simulates reward delivery. The method returns True if the reward was
+                # delivered and False otherwise.
+                if runtime.resolve_reward(reward_size=5.0):
+                    # Updates the progress bar whenever the animal receives automated water rewards. The progress bar
+                    # purposefully does not track 'manual' water rewards.
+                    progress_bar.update(0.005)  # 5 uL == 0.005 ml
 
-            # If the animal does not consume rewards, still issues auditory tones, but does not deliver water
-            # rewards.
-            else:
-                runtime._simulate_reward()
+                # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
+                # timer, this guards against animals that carry on running without consuming water rewards.
+                running_duration_timer.reset()
 
-            # Also resets the timer. While mice typically stop to consume water rewards, which would reset the
-            # timer, this guards against animals that carry on running without consuming water rewards.
-            speed_timer.reset()
-
-            # If the epoch timer was active for the current epoch, resets the timer
-            epoch_timer_engaged = False
-
-        # If the current speed is below the speed threshold, acts depending on whether the runtime is configured to
-        # allow dipping below the threshold
-        elif current_speed < speed_threshold:
-            # If the user did not allow dipping below the speed threshold, resets the run duration timer.
-            if maximum_idle_time == 0:
-                speed_timer.reset()
-
-            # If the user has enabled brief dips below the speed threshold, starts the epoch timer to ensure the
-            # animal recovers the speed in the allotted time.
-            elif not epoch_timer_engaged:
-                epoch_timer.reset()
-                epoch_timer_engaged = True
-
-            # If epoch timer is enabled, checks whether the animal has failed to recover its running speed in time.
-            # If so, resets the run duration timer.
-            elif epoch_timer.elapsed >= maximum_idle_time:
-                speed_timer.reset()
+                # If the epoch timer was active for the current epoch, resets the timer
                 epoch_timer_engaged = False
 
-        # If the animal is maintaining the required speed and the epoch timer was activated by the animal dipping
-        # below the speed threshold, deactivates the timer. This is essential for ensuring the 'step discount'
-        # time is applied to each case of speed dipping below the speed threshold, rather than the entire run epoch.
-        elif epoch_timer_engaged and current_speed >= speed_threshold and speed_timer.elapsed < duration_threshold:
-            epoch_timer_engaged = False
+            # If the current speed is below the speed threshold, acts depending on whether the runtime is configured to
+            # allow dipping below the threshold
+            elif runtime.running_speed < speed_threshold:
+                # If the user did not allow dipping below the speed threshold, resets the run duration timer.
+                if maximum_idle_time == 0:
+                    running_duration_timer.reset()
 
-        # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
-        # track of elapsed training time. Accounts for any additional time spent in the 'paused' state.
-        elapsed_time = runtime_timer.elapsed - additional_time
-        if elapsed_time > previous_time:
-            previous_time = elapsed_time  # Updates previous time
+                # If the user has enabled brief dips below the speed threshold, starts the epoch timer to ensure the
+                # animal recovers the speed in the allotted time.
+                elif not epoch_timer_engaged:
+                    epoch_timer.reset()
+                    epoch_timer_engaged = True
 
-            # Updates the time display without advancing the progress bar
-            elapsed_minutes = int(elapsed_time // 60)
-            elapsed_seconds = int(elapsed_time % 60)
-            progress_bar.set_postfix_str(
-                f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
-            )
+                # If epoch timer is enabled, checks whether the animal has failed to recover its running speed in time.
+                # If so, resets the run duration timer.
+                elif epoch_timer.elapsed >= maximum_idle_time:
+                    running_duration_timer.reset()
+                    epoch_timer_engaged = False
 
-            # Refreshes the display to show updated time without changing progress
-            progress_bar.refresh()
+            # If the animal is maintaining the required speed and the epoch timer was activated by the animal dipping
+            # below the speed threshold, deactivates the timer. This is essential for ensuring the 'step discount'
+            # time is applied to each case of speed dipping below the speed threshold, rather than the entire run epoch.
+            elif (
+                epoch_timer_engaged
+                and runtime.running_speed >= speed_threshold
+                and running_duration_timer.elapsed < duration_threshold
+            ):
+                epoch_timer_engaged = False
 
-        # Updates the visualizer plot
-        visualizer.update()
+            # Updates the time display when each second passes. This updates the 'suffix' of the progress bar to keep
+            # track of elapsed training time. Accounts for any additional time spent in the 'paused' state.
+            elapsed_time = runtime_timer.elapsed - runtime.paused_time
+            if elapsed_time > previous_time:
+                previous_time = elapsed_time  # Updates previous time
 
-        # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
-        # training early with a success message.
-        if dispensed_water_volume >= maximum_volume:
-            message = (
-                f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
-                f"the training process."
-            )
-            console.echo(message=message, level=LogLevel.SUCCESS)
-            break
+                # Updates the time display without advancing the progress bar
+                elapsed_minutes = int(elapsed_time // 60)
+                elapsed_seconds = int(elapsed_time % 60)
+                progress_bar.set_postfix_str(
+                    f"Time: {elapsed_minutes:02d}:{elapsed_seconds:02d}/{maximum_training_time:02d}:00"
+                )
 
-        # If the ui detects a reward delivery signal, delivers the reward to the animal.
-        if ui.reward_signal:
-            runtime._deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
+                # Refreshes the display to show updated time without changing progress
+                progress_bar.refresh()
 
-        # Adjusts the reward volume each time it is updated in the GUI
-        if ui.reward_volume != previous_reward_volume:
-            runtime.configure_reward_parameters(reward_size=ui.reward_volume)
-
-        # If the user sent the abort command, terminates the training early with an error message.
-        if ui.exit_signal:
-            terminate = False
-            message = "Run training runtime abort signal: received. Are you sure you want to abort the runtime?"
-            console.echo(message=message, level=LogLevel.WARNING)
-            while True:
-                answer = input("Enter 'yes' or 'no': ")
-
-                if answer.lower() == "yes":
-                    terminate = True  # Sets the terminate flag
-                    break  # Breaks the while loop
-
-                elif answer.lower() == "no":
-                    # Returns to running the runtime
-                    break
-
-            if terminate:
-                message = "Aborting the training with a graceful shutdown procedure."
-                console.echo(message=message, level=LogLevel.ERROR)
+            # If the total volume of water dispensed during runtime exceeds the maximum allowed volume, aborts the
+            # training early with a success message.
+            if runtime.dispensed_water_volume >= maximum_volume:
+                message = (
+                    f"Run training has delivered the maximum allowed volume of water ({maximum_volume} uL). Aborting "
+                    f"the training process..."
+                )
+                console.echo(message=message, level=LogLevel.SUCCESS)
                 break
 
-        # If the ui detects a pause command, enters a holding loop.
-        if ui.pause_runtime:
-            pause_start = runtime_timer.elapsed
-            message = "Run training runtime: paused due to user request. Note, sensor readout monitoring is suspended."
-            console.echo(message=message, level=LogLevel.WARNING)
-
-            # Switches runtime to the idle state
-            runtime.idle()
-
-            # Caches valve data to discard any valve data accumulated during the idle period.
-            cached_valve_pulse_count = valve_tracker.read_data(index=0)
-            cached_water_volume = valve_tracker.read_data(index=1)
-
-            # Blocks in-place until the user either unpauses or aborts the training.
-            abort_stage: bool = False
-            while ui.pause_runtime:
-                visualizer.update()  # Continuously updates the visualizer
-
-                # If the ui detects a reward delivery signal, delivers the reward to the animal
-                if ui.reward_signal:
-                    runtime._deliver_reward(reward_size=ui.reward_volume)  # Delivers the requested volume of water
-
-                # Adjusts the reward volume each time it is updated in the GUI
-                if ui.reward_volume != previous_reward_volume:
-                    runtime.configure_reward_parameters(reward_size=ui.reward_volume)
-
-                # If the user requests for the paused runtime to be aborted, terminates the runtime.
-                if ui.exit_signal:
-                    message = "Run training runtime abort signal: received. Are you sure you want to abort the runtime?"
-                    console.echo(message=message, level=LogLevel.WARNING)
-                    while True:
-                        answer = input("Enter 'yes' or 'no': ")
-
-                        if answer.lower() == "yes":
-                            abort_stage = True
-                            break  # Breaks the while loop
-
-                        elif answer.lower() == "no":
-                            break  # Returns to the pause state
-
-                    # Escapes the pause loop if the user chose to abort the runtime
-                    if abort_stage:
-                        break
-            else:
-                # Discards any valve data accumulated during the idle period
-                valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
-                valve_tracker.write_data(index=1, data=cached_water_volume)
-
-                # Restores the runtime state
-                runtime.run_train()
-
-                # Resets unconsumed reward tracker
-                unconsumed_count = 0
-
-            # Updates the 'additional time' value to reflect the time spent inside the 'paused' state. This
-            # increases the training time to counteract the duration of the 'paused' state.
-            additional_time += runtime_timer.elapsed - pause_start
-
-            # Escapes the outer (experiment state) 'while loop'
-            if abort_stage:
-                message = f"Run training runtime: aborted due to user request."
+            # If the user sent the abort command, terminates the training early.
+            if runtime.terminated:
+                message = (
+                    "Run training abort signal detected. Aborting the lick training with a graceful shutdown "
+                    "procedure..."
+                )
                 console.echo(message=message, level=LogLevel.ERROR)
-                break
+                break  # Breaks the for loop
 
-    # Close the progress bar
-    progress_bar.close()
+        # Closes the progress bar if runtime ends as expected
+        progress_bar.close()
 
-    # Shutdown sequence:
-    message = f"Training runtime: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+    # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
+    finally:
+        # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
+        # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
+        # the training.
+        if isinstance(runtime.descriptor, RunTrainingDescriptor):  # This is to appease mypy
+            runtime.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
+            runtime.descriptor.final_run_duration_threshold_s = float(
+                duration_threshold / 1000
+            )  # Converts from s to ms
 
-    # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
-    # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
-    # the training.
-    if not isinstance(runtime.descriptor, LickTrainingDescriptor):  # This is to appease mypy
-        runtime.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
-        runtime.descriptor.final_run_duration_threshold_s = float(duration_threshold / 1000)  # Converts from s to ms
+        # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
+        # destinations.
+        runtime.stop()
 
-    # Terminates the ui
-    ui.shutdown()
-
-    # Closes the visualizer, as the runtime is now over
-    visualizer.close()
-
-    # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
-    # destinations.
-    runtime.stop()
+        message = f"Run training runtime: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 def experiment_logic(
@@ -2754,28 +2623,25 @@ def experiment_logic(
 
     This function can be used to execute any valid experiment using the Mesoscope-VR system. Each experiment should be
     broken into one or more experiment states (phases), such as 'baseline', 'task' and 'cooldown'. Furthermore, each
-    experiment state can use one or more VR system states. Currently, the VR system has two states: rest (1) and run
-    (2). The states are used to broadly configure the Mesoscope-VR system, and they determine which systems are active
-    and what data is collected (see library ReadMe for more details on VR states).
+    experiment state can use one or more Mesoscope-VR system states. Currently, the system has two experiment states:
+    rest (1) and run (2). The states are used to broadly configure the Mesoscope-VR system, and they determine which
+    components (modules) are active and what data is collected (see library ReadMe for more details on system states).
 
-    Primarily, this function is concerned with iterating over the states stored inside the experiment_state_sequence
-    tuple. Each experiment and VR state combination is maintained for the requested duration of seconds. Once all states
-    have been executed, the experiment runtime ends. Under this design pattern, each experiment is conceptualized as
-    a sequence of states.
+    Primarily, this function is concerned with iterating over the states stored inside the experiment configuration file
+    loaded using the 'experiment_name' argument value. Each experiment and Mesoscope-VR system state combination is
+    maintained for the requested duration of seconds. Once all states have been executed, the experiment runtime ends.
+    Under this design pattern, each experiment is conceptualized as a sequence of states.
 
     Notes:
         During experiment runtimes, the task logic and the Virtual Reality world are resolved via the Unity game engine.
         This function itself does not resolve the task logic, it is only concerned with iterating over experiment
-        states, controlling the VR system, and monitoring user command issued via keyboard.
-
-        Similar to all other runtime functions, this function contains all necessary bindings to set up, execute, and
-        terminate an experiment runtime. Custom projects should implement a cli that calls this function with
-        project-specific parameters.
+        states, and controlling the Mesoscope-VR system.
 
     Args:
         experimenter: The id of the experimenter conducting the experiment.
         project_name: The name of the project for which the experiment is conducted.
-        experiment_name: The name or ID of the experiment to be conducted.
+        experiment_name: The name or ID of the experiment to be conducted. Note, must match the name of the experiment
+            configuration file stored under the 'configuration' project-specific directory.
         animal_id: The numeric ID of the animal participating in the experiment.
         animal_weight: The weight of the animal, in grams, at the beginning of the experiment session.
         maximum_unconsumed_rewards: The maximum number of rewards that can be delivered without the animal consuming
@@ -2846,6 +2712,8 @@ def experiment_logic(
             )
             console.error(message=message, error=ValueError)
 
+    runtime_timer = PrecisionTimer("s")  # Initializes the timer to enforce experiment state durations
+
     # Generates the session descriptor class
     descriptor = MesoscopeExperimentDescriptor(
         experimenter=experimenter,
@@ -2854,203 +2722,74 @@ def experiment_logic(
         maximum_unconsumed_rewards=maximum_unconsumed_rewards,
     )
 
-    # Initializes the main runtime interface class.
-    runtime = _MesoscopeExperiment(
-        experiment_configuration=experiment_config,
-        session_data=session_data,
-        session_descriptor=descriptor,
-    )
+    # Initializes the runtime class
+    runtime = _MesoscopeVRSystem(session_data=session_data, session_descriptor=descriptor)
 
-    runtime_timer = PrecisionTimer("s")  # Initializes the timer to enforce experiment state durations
+    try:
+        # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
+        runtime.start()
 
-    # Uses runtime trackers extracted from the runtime instance to initialize the visualizer instance
-    lick_tracker, valve_tracker, speed_tracker = runtime.trackers
+        # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
+        # state
+        for state in experiment_config.experiment_states.values():
+            runtime_timer.reset()  # Resets the timer
 
-    # Initializes the runtime class. This starts all necessary processes and guides the user through the steps of
-    # putting the animal on the VR rig.
-    runtime.start()
+            # Sets the Experiment state
+            runtime.change_runtime_state(state.experiment_state_code)
 
-    # Initializes the runtime control UI. Has to be done before the visualizer
-    ui = RuntimeControlUI()
-
-    # Visualizer initialization HAS to happen after the runtime start to avoid interfering with cameras.
-    visualizer = BehaviorVisualizer(
-        lick_tracker=lick_tracker, valve_tracker=valve_tracker, distance_tracker=speed_tracker
-    )
-
-    # To avoid photobleaching during potentially lengthy preparation stage, only starts the Mesoscope once the
-    # experimenter unpauses the runtime.
-    runtime.start_runtime(ui=ui)
-
-    # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
-    # state
-    previous_reward_volume = 0
-    terminate_runtime: bool = False
-    for state in experiment_config.experiment_states.values():
-        runtime_timer.reset()  # Resets the timer
-
-        # Sets the Experiment state
-        runtime.change_runtime_state(state.experiment_state_code)
-
-        # Resolves and sets the Mesoscope-VR system state
-        if state.system_state_code == 1:
-            runtime.rest()
-        elif state.system_state_code == 2:
-            runtime.run()
-
-        # Creates a tqdm progress bar for the current experiment state
-        with tqdm(
-            total=state.state_duration_s,
-            desc=f"Executing experiment state {state.experiment_state_code}",
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
-        ) as pbar:
+            # Resets the tracker used to update the progress bar every second
             previous_seconds = 0
 
-            # If the runtime is paused, this is used to extend the experiment state duration to account for the time
-            # spent in the paused state.
-            additional_time = 0
+            # Resolves and sets the Mesoscope-VR system state
+            if state.system_state_code == 1:
+                runtime.rest()
+            elif state.system_state_code == 2:
+                runtime.run()
 
-            while runtime_timer.elapsed < (state.state_duration_s + additional_time):
-                visualizer.update()  # Continuously updates the visualizer
+            # Creates a tqdm progress bar for the current experiment state
+            with tqdm(
+                total=state.state_duration_s,
+                desc=f"Executing experiment state {state.experiment_state_code}",
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}s",
+            ) as pbar:
+                # Cycles until the state duration of seconds passes
+                while runtime_timer.elapsed < (state.state_duration_s + runtime.paused_time):
+                    # Since experiment logic is resolved by Unity game engine, the runtime logic function only needs to
+                    # call the runtime cycle and handle termination cases.
+                    runtime.runtime_cycle()  # Repeatedly calls the runtime cycle as pare of the experiment state cycle
 
-                # Handles Unity-MQTT communication
-                runtime._unity_cycle()
-
-                # Updates the progress bar every second. While the current implementation is technically not safe,
-                # we know that the loop will cycle much faster than 1 second, so it should not be possible for the
-                # delta to ever exceed 1 second. Note, discounts any time spent inside the paused state.
-                if (runtime_timer.elapsed - additional_time) > previous_seconds:
-                    pbar.update(1)
-                    previous_seconds = runtime_timer.elapsed - additional_time
-
-                # If the ui detects a pause command, enters a holding loop. Pauses are handled before all other
-                # states to comply with recovering from receiving Unity termination messages
-                if ui.pause_runtime:
-                    pause_start = runtime_timer.elapsed
-                    message = "Experiment runtime: paused due to user request."
-                    console.echo(message=message, level=LogLevel.WARNING)
-
-                    # Caches valve data to discard any valve data accumulated during the idle period.
-                    cached_valve_pulse_count = valve_tracker.read_data(index=0)
-                    cached_water_volume = valve_tracker.read_data(index=1)
-
-                    # Blocks in-place until the user either unpauses or aborts the runtime.
-                    while ui.pause_runtime:
-                        visualizer.update()  # Continuously updates the visualizer
-
-                        # Keeps unity communication loop running. Primarily, this is done to support receiving
-                        # unity termination messages if the user chooses to pause the runtime first and then terminate
-                        # the Unity
-                        runtime._unity_cycle()
-
-                        # If the ui detects a reward delivery signal, delivers the reward to the animal
-                        if ui.reward_signal:
-                            runtime._deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
-
-                        # Adjusts the reward volume each time it is updated in the GUI
-                        if ui.reward_volume != previous_reward_volume:
-                            runtime.configure_reward_parameters(reward_size=ui.reward_volume)
-
-                        # Switches the guidance status in response to user requests
-                        if ui.enable_guidance != previous_guidance_state:
-                            previous_guidance_state = ui.enable_guidance
-                            runtime._toggle_lick_guidance(enable_guidance=previous_guidance_state)
-
-                        # If the user requests for the paused stage to be aborted, terminates the runtime.
-                        if ui.exit_signal:
-                            message = (
-                                "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
-                            )
-                            console.echo(message=message, level=LogLevel.WARNING)
-                            while True:
-                                answer = input("Enter 'yes' or 'no': ")
-
-                                if answer.lower() == "yes":
-                                    terminate_runtime = True  # Sets the terminate flag
-                                    break  # Breaks the while loop
-
-                                elif answer.lower() == "no":
-                                    # Returns to running the runtime
-                                    break
-
-                            if terminate_runtime:
-                                break  # Escapes the pause 'while' loop
-                    else:
-                        # Discards any valve data accumulated during the idle period
-                        valve_tracker.write_data(index=0, data=cached_valve_pulse_count)
-                        valve_tracker.write_data(index=1, data=cached_water_volume)
-
-                        # Updates the 'additional time' value to reflect the time spent inside the 'paused' state.
-                        # This increases the experiment stage duration to counteract the duration of the 'paused'
-                        # state.
-                        additional_time += runtime_timer.elapsed - pause_start
-
-                        # Re-queries the cue sequence as Unity re-initialization always generates a new sequence.
-                        # Also ensures that Unity has been properly re-initialized.
-                        if runtime._unity_terminated:
-                            runtime._get_cue_sequence()
-                            # Resets the unity termination tracker
-                            runtime._unity_terminated = False
-
-                        # Restores the runtime state
-                        if state.system_state_code == 1:
-                            runtime.rest()
-                        elif state.system_state_code == 2:
-                            runtime.run()
-
-                    # Escapes the outer (experiment state) 'while loop if the user chose to terminate the runtime
-                    if terminate_runtime:
+                    # Breaks the while loop. The termination is also handled at the level of the 'for' loop. The error
+                    # message is generated at that level, rather than here.
+                    if runtime.terminated:
                         break
 
-                # If the user sent the abort command, terminates the runtime early with an error message.
-                if ui.exit_signal:
-                    message = "Experiment runtime abort signal: received. Are you sure you want to abort the runtime?"
-                    console.echo(message=message, level=LogLevel.WARNING)
-                    while True:
-                        answer = input("Enter 'yes' or 'no': ")
+                    # Updates the progress bar every second. Note, this calculation statically discounts the time spent
+                    # in the paused state.
+                    delta_seconds = runtime_timer.elapsed - (previous_seconds + runtime.paused_time)
+                    if delta_seconds > 0:
+                        # While it is unlikely that delta ever exceeds 1, supports this rare case
+                        pbar.update(delta_seconds)
+                        previous_seconds = runtime_timer.elapsed - runtime.paused_time
 
-                        if answer.lower() == "yes":
-                            terminate_runtime = True  # Sets the terminate flag
-                            break  # Breaks the while loop
+                runtime.paused_time = 0  # Resets the paused time before entering the next experiment state's cycle
 
-                        elif answer.lower() == "no":
-                            # Returns to running the runtime
-                            break
+                # If the user sent the abort command, terminates the training early.
+                if runtime.terminated:
+                    message = (
+                        "Experiment runtime abort signal detected. Aborting the experiment with a graceful shutdown "
+                        "procedure..."
+                    )
+                    console.echo(message=message, level=LogLevel.ERROR)
+                    break  # Breaks the for loop
 
-                    if terminate_runtime:
-                        break
+    # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
+    finally:
+        # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
+        # destinations.
+        runtime.stop()
 
-                # If the ui detects a reward delivery signal, delivers the reward to the animal
-                if ui.reward_signal:
-                    runtime._deliver_reward(reward_size=ui.reward_volume)  # Delivers 5 uL of water
-
-                # Adjusts the reward volume each time it is updated in the GUI
-                if ui.reward_volume != previous_reward_volume:
-                    runtime.configure_reward_parameters(reward_size=ui.reward_volume)
-
-                # If the user switches the guidance state, adjusts the runtime guidance parameter
-                if ui.enable_guidance != previous_guidance_state:
-                    previous_guidance_state = ui.enable_guidance
-                    runtime._toggle_lick_guidance(enable_guidance=previous_guidance_state)
-
-            if terminate_runtime:
-                message = f"Experiment runtime: aborted due to user request."
-                console.echo(message=message, level=LogLevel.ERROR)
-                break  # Escapes the experiment 'for' loop
-
-    # Shutdown sequence:
-    message = f"Experiment runtime: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Shuts down the UI
-    ui.shutdown()
-
-    # Closes the visualizer, as the runtime is now over
-    visualizer.close()
-
-    # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
-    # destinations.
-    runtime.stop()
+        message = f"Experiment runtime: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 def window_checking_logic(
