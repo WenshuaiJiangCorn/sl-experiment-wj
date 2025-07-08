@@ -4,6 +4,7 @@ These bindings streamline the API used to interface with these components during
 from pathlib import Path
 
 import numpy as np
+from ataraxis_time import PrecisionTimer
 from sl_shared_assets import ZaberPositions
 from ataraxis_video_system import (
     VideoCodecs,
@@ -435,6 +436,7 @@ class MicroControllerInterfaces:
         _lick_monitoring: Tracks the current lick monitoring state.
         _encoder_monitoring: Tracks the current encoder monitoring state.
         _break_state: Tracks the current break state.
+        _delay_timer: Stores a millisecond-precise timer used by certain sequential command methods.
         mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
         mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
         wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
@@ -474,6 +476,8 @@ class MicroControllerInterfaces:
         self._lick_monitoring: bool = False
         self._encoder_monitoring: bool = False
         self._break_state: bool = True  # The break is normally engaged, so it starts engaged by default
+
+        self._delay_timer = PrecisionTimer("ms")
 
         # ACTOR. Actor AMC controls the hardware that needs to be triggered by PC at irregular intervals. Most of such
         # hardware is designed to produce some form of an output: deliver water reward, engage wheel breaks, issue a
@@ -703,11 +707,17 @@ class MicroControllerInterfaces:
             self._encoder_monitoring = False
 
     def start_mesoscope(self) -> None:
-        """Sends the acquisition start TTL pulse to the mesoscope."""
-        self.mesoscope_start.send_pulse()
+        """Starts sending acquisitions tart TTL triggers to the mesoscope at 5-millisecond intervals."""
+        self.mesoscope_start.send_pulse(repetition_delay=np.uint32(5000))
 
     def stop_mesoscope(self) -> None:
         """Sends the acquisition stop TTL pulse to the mesoscope."""
+        self.mesoscope_start.reset_command_queue()  # Stops sending acquisition start triggers
+        self._delay_timer.delay_noblock(delay=200)  # Delays for 200 msec to ensure that the start triggers are off.
+        self.mesoscope_stop.send_pulse()  # Sends the acquisition stop trigger
+
+        # As a safety measure, sends a follow-up trigger after 200 milliseconds.
+        self._delay_timer.delay_noblock(delay=200)
         self.mesoscope_stop.send_pulse()
 
     def enable_break(self) -> None:
@@ -834,7 +844,10 @@ class MicroControllerInterfaces:
                 tone_duration=np.uint32(tone_duration),
             )
 
-        self.valve.send_pulse()
+        # Potentially unsafe option! This potentially reduces the precision of water reward delivery, but the reduction
+        # should be very small, given that the microcontroller cycles at 600+ Mhz. In our tests with Teensy
+        # microcontrollers this did not meaningfully impact reward delivery precision.
+        self.valve.send_pulse(noblock=True)
 
     def simulate_reward(self, tone_duration: int = 300) -> None:
         """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.

@@ -7,6 +7,7 @@ import click
 from sl_shared_assets import (
     SessionData,
     ExperimentState,
+    TrialCueSequence,
     ProjectConfiguration,
     MesoscopeSystemConfiguration,
     MesoscopeExperimentConfiguration,
@@ -197,7 +198,14 @@ def generate_project_configuration_file(project: str, surgery_log_id: str, water
     required=True,
     help="The total number of experiment and acquisition system state combinations in the experiment.",
 )
-def generate_experiment_configuration_file(project: str, experiment: str, state_count: int) -> None:
+@click.option(
+    "-tc",
+    "--trial_count",
+    type=int,
+    required=True,
+    help="The total number of unique trial motifs (wall cue sequences) in the experiment.",
+)
+def generate_experiment_configuration_file(project: str, experiment: str, state_count: int, trial_count: int) -> None:
     """Generates a precursor experiment configuration .yaml file for the target experiment inside the project's
     configuration folder.
 
@@ -231,6 +239,19 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
             experiment_state_code=state + 1,  # Assumes experiment state sequences are 1-based
             system_state_code=0,
             state_duration_s=60,
+            initial_guided_trials=3,
+            failed_trial_threshold=9,
+            recovery_guided_trials=3,
+        )
+
+    # Loops over the number of requested trial motifs and, for each, generates a precursor trial motif inside the
+    # 'trials' dictionary.
+    trials = {}
+    for trial in range(trial_count):
+        trials[f"trial_motif_{trial + 1}"] = TrialCueSequence(
+            cue_sequence=(0, 1, 0, 2, 0, 3, 0, 4),
+            trial_length_cm=240,
+            trial_length_unity_unit=24,
         )
 
     # Depending on the acquisition system, packs state data into the appropriate experiment configuration class and
@@ -706,7 +727,7 @@ def delete_session(session_path: Path) -> None:
     the host-machine.
 
     This is an EXTREMELY dangerous command that can potentially delete valuable data if not used well. This command is
-    intended exclusively for removing failed and test sessions from all computers used in Sun lab data acquisition
+    intended exclusively for removing failed and test sessions from all computers used in the Sun lab data acquisition
     process. Never call this command unless you know what you are doing.
     """
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.

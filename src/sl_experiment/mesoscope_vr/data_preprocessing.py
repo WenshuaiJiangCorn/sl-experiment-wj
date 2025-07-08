@@ -571,7 +571,8 @@ def _pull_mesoscope_data(
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
 
-        # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file
+        # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file.
+        # More recent runtimes also generate a zstack.tif file and a zstack.mat file.
         if len(files) < 2:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
@@ -713,14 +714,24 @@ def _preprocess_mesoscope_directory(
     frame_numbers = []
     starting_frame = 1
     for file in tiff_files:
-        stack_size = _check_stack_size(file)
-        if stack_size > 0:
-            # Appends the starting frame number to the list and increments the stack list
-            frame_numbers.append(starting_frame)
-            starting_frame += stack_size
+        # In version 3.0.0 the data acquisition pipeline was refactored to generate a 'zstack.tif' file as part
+        # of the motion detection setup procedure. Unlike 'session' files (main data acquisition files), zstack is kept
+        # largely unprocessed due to its unique acquisition nature and purpose.
+        if "zstack" in file.name:
+            file.rename("zstack.tiff")
+
+        # All 'session' data files are now named 'session'.
+        elif "session" in file.name:
+            stack_size = _check_stack_size(file)
+            if stack_size > 0:
+                # Appends the starting frame number to the list and increments the stack list
+                frame_numbers.append(starting_frame)
+                starting_frame += stack_size
+
         else:
             # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
-            # processing
+            # processing. Also, all files other than 'session' and 'zstack' are not considered for further processing
+            # since 3.0.0.
             tiff_files.remove(file)
 
     # Converts to tuple for efficiency

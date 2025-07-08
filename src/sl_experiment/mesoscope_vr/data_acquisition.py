@@ -1347,6 +1347,8 @@ class _MesoscopeVRSystem:
         while outcome != "abort":
             # Sends mesoscope frame acquisition trigger
             self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame counter
+
+            # This now repeatedly sends the trigger at 5 ms intervals.
             self._microcontrollers.start_mesoscope()
 
             # Ensures that the frame acquisition starts as expected
@@ -1368,6 +1370,11 @@ class _MesoscopeVRSystem:
                     return
 
             # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
+
+            # Stops the continuous stream of acquisitions tart triggers before displaying the message.
+            self._microcontrollers.stop_mesoscope()
+
+            # Displays an error message to the user.
             message = (
                 f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to receive "
                 f"10 frame acquisition triggers over 10 seconds. It is likely that the mesoscope has not been armed "
@@ -1992,7 +1999,7 @@ class _MesoscopeVRSystem:
         _unity_cycle() method.
         """
 
-        # Aborts early if mesoscope_timer is not initialized, it has been less than 300 milliseconds since the last
+        # Aborts early if mesoscope_timer is not initialized, it has been less than ~150 milliseconds since the last
         # mesoscope frame acquisition check, or the mesoscope runtime appears to be terminated.
         if (
             self._mesoscope_timer is None
@@ -2009,19 +2016,21 @@ class _MesoscopeVRSystem:
             return
 
         # The only condition under which the mesoscope frame count is 0 is if the tracker was reset by the code below,
-        # but the mesoscope did not start acquiring frames. Then, engages emergency pause mode.
+        # but the mesoscope did not restart acquiring frames. Then, engages emergency pause mode.
         elif self._microcontrollers.mesoscope_frame_count == 0:
             self._mesoscope_terminated = True  # Sets the termination flag
             self._pause_runtime()  # Pauses the runtime.
+            self._stop_mesoscope()  # Ensures that automated start triggers are no longer sent.
             message = "Emergency pause: Engaged. Reason: Unable to restart mesoscope frame acquisition."
             console.echo(message=message, level=LogLevel.ERROR)
             return
 
-        # Otherwise, if mesoscope did not acquire any additional frames within 300 seconds, attempts to restart the
-        # acquisition.
+        # In version 3.0.0, the mesoscope start trigger has been switched to a cyclic TTL pulse emitted every
+        # 5 milliseconds. With this configuration, reaching this section is very unlikely and typically indicates that
+        # the Mesoscope has encountered a major runtime error. However, to fully confirm that the mesoscope is indeed
+        # not active, attempts to restart the acquisition for additional 150 ms period.
         self._microcontrollers.reset_mesoscope_frame_count()  # Makes the tracked frame count 0
         self._mesoscope_frame_count = 0  # Resets the instance tracker
-        self._microcontrollers.start_mesoscope()  # Sends the acquisition start trigger
         self._mesoscope_timer.reset()
 
     def _pause_runtime(self) -> None:
