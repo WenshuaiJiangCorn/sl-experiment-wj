@@ -1041,6 +1041,7 @@ class _ControlUIWindow(QMainWindow):
         This method monitors certain values of the communication array to receive messages from the main runtime
         process. Primarily, this functionality is used to gracefully terminate the GUI from the main runtime process.
         """
+        # noinspection PyBroadException
         try:
             # If the termination flag has been set to 1, terminates the GUI process
             if self._data_array.read_data(index=0, convert_output=True) == 1:
@@ -1077,6 +1078,7 @@ class _ControlUIWindow(QMainWindow):
             event: The Qt-generated window shutdown event object.
         """
         # Sends runtime termination signal via the SharedMemoryArray before accepting the close event.
+        # noinspection PyBroadException
         try:
             self._data_array.write_data(index=0, data=np.int32(1))
         except:

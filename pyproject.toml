@@ -61,7 +61,7 @@ dependencies = [
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
     "natsort==8.4.0",
-    "sl-shared-assets==3.0.0rc4",
+    "sl-shared-assets==3.0.0rc6",
 ]
 
 [project.urls]
@@ -149,7 +149,7 @@ dev = [
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
 sl-create-system-config = "sl_experiment.cli:generate_system_configuration_file"
-sl-create-project = "sl_experiment.cli:generate_project_configuration_file"
+sl-create-project = "sl_experiment.cli:generate_project_data_structure"
 sl-create-experiment = "sl_experiment.cli:generate_experiment_configuration_file"
 sl-maintain = "sl_experiment.cli:maintain_acquisition_system"
 sl-lick-train = "sl_experiment.cli:lick_training"

@@ -8,7 +8,6 @@ from sl_shared_assets import (
     SessionData,
     ExperimentState,
     TrialCueSequence,
-    ProjectConfiguration,
     MesoscopeSystemConfiguration,
     MesoscopeExperimentConfiguration,
     get_system_configuration_data,
@@ -133,47 +132,26 @@ def generate_system_configuration_file(output_directory: str, acquisition_system
     required=True,
     help="The name of the project to be created.",
 )
-@click.option(
-    "-sli",
-    "--surgery_log_id",
-    type=str,
-    required=True,
-    help="The 44-symbol alpha-numeric ID code used by the project's surgery log Google sheet.",
-)
-@click.option(
-    "-wli",
-    "--water_restriction_log_id",
-    type=str,
-    required=True,
-    help="The 44-symbol alpha-numeric ID code used by the project's water restriction log Google sheet.",
-)
-def generate_project_configuration_file(project: str, surgery_log_id: str, water_restriction_log_id: str) -> None:
-    """Generates a new project directory hierarchy and writes its configuration as a project_configuration.yaml file.
+def generate_project_data_structure(project: str) -> None:
+    """Generates a new project directory hierarchy on the local machine.
 
     This command creates new Sun lab projects. Until a project is created in this fashion, all data-acquisition and
-    data-processing commands from sl-experiment and sl-forgery libraries targeting the project will not work. This
-    command is intended to be called on the main computer of the data-acquisition system(s) used by the project. Note,
-    this command assumes that the local machine (PC) is the main PC of the data acquisition system and has a valid
-    acquisition system configuration .yaml file.
+    data-processing commands from sl-experiment library targeting the project will not work. This command is intended to
+    be called on the main computer of the data-acquisition system(s) used by the project. Note, this command assumes
+    that the local machine (PC) is the main PC of the data acquisition system and has a valid acquisition system
+    configuration .yaml file.
     """
 
     # Queries the data acquisition configuration data. Specifically, this is used to get the path to the root
     # directory where all projects are stored on the local machine.
     system_configuration = get_system_configuration_data()
-    file_path = system_configuration.paths.root_directory.joinpath(
-        project, "configuration", "project_configuration.yaml"
-    )
+    project_path = system_configuration.paths.root_directory.joinpath(project, "configuration")
 
     # Generates the initial project directory hierarchy
-    ensure_directory_exists(file_path)
+    ensure_directory_exists(project_path)
 
-    # Saves project configuration data as a .yaml file to the 'configuration' directory of the created project
-    configuration = ProjectConfiguration(
-        project_name=project, surgery_sheet_id=surgery_log_id, water_log_sheet_id=water_restriction_log_id
-    )
-    configuration.save(path=file_path.joinpath())
     # noinspection PyTypeChecker
-    console.echo(message=f"Project {project} data structure and configuration file: generated.", level=LogLevel.SUCCESS)
+    console.echo(message=f"Project {project} data structure: generated.", level=LogLevel.SUCCESS)
 
 
 @click.command()
@@ -249,7 +227,7 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
     trials = {}
     for trial in range(trial_count):
         trials[f"trial_motif_{trial + 1}"] = TrialCueSequence(
-            cue_sequence=(0, 1, 0, 2, 0, 3, 0, 4),
+            cue_sequence=[0, 1, 0, 2, 0, 3, 0, 4],
             trial_length_cm=240,
             trial_length_unity_unit=24,
         )

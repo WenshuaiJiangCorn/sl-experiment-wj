@@ -21,7 +21,6 @@ from sl_shared_assets import (
     ExperimentState,
     TrialCueSequence,
     MesoscopePositions,
-    ProjectConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
     MesoscopeHardwareState,
@@ -36,7 +35,7 @@ from ataraxis_communication_interface import MQTTCommunication, MicroControllerI
 from .tools import MesoscopeData, RuntimeControlUI, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
-from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, write_version_data
+from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, get_version_data
 from .data_preprocessing import purge_failed_session, preprocess_session_data
 
 # Statically defines the names used by supported session types to ensure that the name is used consistently across the
@@ -223,10 +222,6 @@ class _MesoscopeVRSystem:
             session_descriptor
         )
         self._experiment_configuration: MesoscopeExperimentConfiguration | None = experiment_configuration
-
-        # Replaces the default state-code map inside the descriptor instance with the actual state-code map used by
-        # this class.
-        self.descriptor.system_state_codes = self._state_map
 
         # Caches the descriptor to disk. Primarily, this is required for preprocessing the data if the session runtime
         # terminates unexpectedly.
@@ -959,6 +954,7 @@ class _MesoscopeVRSystem:
                 torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
                 screens_initially_on=self._microcontrollers.screens.initially_on,
                 recorded_mesoscope_ttl=True,
+                system_state_codes=self._state_map,
             )
         # Lick training runtimes use a subset of hardware, including torque sensor
         elif self._session_data.session_type == _lick:
@@ -967,6 +963,7 @@ class _MesoscopeVRSystem:
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
                 valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
                 valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                system_state_codes=self._state_map,
             )
         # Run training runtimes use the same subset of hardware as the rest training runtime, except instead of torque
         # sensor, they monitor the encoder.
@@ -976,6 +973,7 @@ class _MesoscopeVRSystem:
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
                 valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
                 valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                system_state_codes=self._state_map,
             )
         else:
             # It should be impossible to satisfy this error clause, but is kept for safety reasons
@@ -2269,31 +2267,35 @@ def lick_training_logic(
         )
         console.error(message=message, error=FileNotFoundError)
 
+    # Queries the current Python and library version information. This is then used to initialize the SessionData
+    # instance.
+    python_version, library_version = get_version_data()
+
     # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
     # hierarchy as part of this initialization process
-    session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type=_lick)
+    session_data = SessionData.create(
+        project_name=project_name,
+        animal_id=animal_id,
+        session_type=_lick,
+        python_version=python_version,
+        sl_experiment_version=library_version,
+    )
     mesoscope_data = MesoscopeData(session_data=session_data)
-
-    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
-    write_version_data(session_data)
 
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
     # preprocessing
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
-        file_path=session_data.raw_data.project_configuration_path
-    )
     _ = WaterSheet(
         animal_id=int(animal_id),
         session_date=session_data.session_name,
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.water_log_sheet_id,
+        sheet_id=system_configuration.sheets.water_log_sheet_id,
     )
     _ = SurgerySheet(
         project_name=project_name,
         animal_id=int(animal_id),
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
     # If the managed animal has cached data from a previous lick training session and the function is
@@ -2497,13 +2499,20 @@ def run_training_logic(
         )
         console.error(message=message, error=FileNotFoundError)
 
+    # Queries the current Python and library version information. This is then used to initialize the SessionData
+    # instance.
+    python_version, library_version = get_version_data()
+
     # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
     # hierarchy as part of this initialization process
-    session_data = SessionData.create(project_name=project_name, animal_id=animal_id, session_type=_run)
+    session_data = SessionData.create(
+        project_name=project_name,
+        animal_id=animal_id,
+        session_type=_run,
+        python_version=python_version,
+        sl_experiment_version=library_version,
+    )
     mesoscope_data = MesoscopeData(session_data=session_data)
-
-    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
-    write_version_data(session_data)
 
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
@@ -2825,17 +2834,20 @@ def experiment_logic(
         )
         console.error(message=message, error=FileNotFoundError)
 
-    # Initializes the SessionData and creates the necessary session directory hierarchy as part of this initialization
-    # process
+    # Queries the current Python and library version information. This is then used to initialize the SessionData
+    # instance.
+    python_version, library_version = get_version_data()
+
+    # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
+    # hierarchy as part of this initialization process
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
         session_type=_experiment,
         experiment_name=experiment_name,
+        python_version=python_version,
+        sl_experiment_version=library_version,
     )
-
-    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
-    write_version_data(session_data)
 
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
@@ -3000,16 +3012,20 @@ def window_checking_logic(
         )
         console.error(message=message, error=FileNotFoundError)
 
-    # Initializes the SessionData and MesoscopeData classes for the session.
+    # Queries the current Python and library version information. This is then used to initialize the SessionData
+    # instance.
+    python_version, library_version = get_version_data()
+
+    # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
+    # hierarchy as part of this initialization process
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
         session_type=_window,
+        python_version=python_version,
+        sl_experiment_version=library_version,
     )
     mesoscope_data = MesoscopeData(session_data=session_data)
-
-    # Caches current sl-experiment and Python versions to disk as a version_data.yaml file.
-    write_version_data(session_data)
 
     # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
     # through the init checks. The class is later re-instantiated during session data preprocessing

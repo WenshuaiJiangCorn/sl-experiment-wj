@@ -26,7 +26,6 @@ from sl_shared_assets import (
     SessionData,
     SurgeryData,
     ProcessingTracker,
-    ProjectConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
     MesoscopeExperimentDescriptor,
@@ -78,6 +77,7 @@ def _delete_directory(directory_path: Path) -> None:
     # optional delay step to give Windows time to release file handles.
     max_attempts = 5
     for attempt in range(max_attempts):
+        # noinspection PyBroadException
         try:
             os.rmdir(directory_path)
             break  # Breaks early if the call succeeds
@@ -353,8 +353,7 @@ def _generate_ops(
     if isinstance(si_rois, dict):
         si_rois = [si_rois]
 
-    # Extracts the ROI dimensions for each ROI. Original code says 'for each z-plane; but nplanes is not used anywhere
-    # in these computations:
+    # Extracts the ROI dimensions for each ROI.
 
     # Preallocates output arrays
     nrois = len(si_rois)
@@ -394,7 +393,7 @@ def _generate_ops(
 
     # Generates the data to be stored as the JSON config based on the result of the computations above.
     # Note, most of these values were filled based on the 'prototype' ops.json from Tyche F3. For our pipeline they are
-    # mostly not relevant, except for the "'fs", ""nplanes", and ""nrois".
+    # mostly not relevant, except for the "fs", ""nplanes", and "nrois".
     data: dict[str, int | float | list[Any]] = {
         "fs": framerate,
         "nplanes": nplanes,
@@ -912,12 +911,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Queries the data acquisition system configuration parameters.
     system_configuration = get_system_configuration()
 
-    # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
-    # retrieve the Google sheet ID data.
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
-        Path(session_data.raw_data.project_configuration_path),  # type: ignore
-    )
-
     # Resolves the animal ID (name)
     animal_id = int(session_data.animal_id)
 
@@ -965,7 +958,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
             session_date=session_data.session_name,
             animal_id=animal_id,
             credentials_path=Path(system_configuration.paths.google_credentials_path),
-            sheet_id=project_configuration.water_log_sheet_id,
+            sheet_id=system_configuration.sheets.water_log_sheet_id,
         )
 
         wr_sheet.update_water_log(
@@ -983,7 +976,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         project_name=session_data.project_name,
         animal_id=animal_id,
         credentials_path=Path(system_configuration.paths.google_credentials_path),
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
     # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
