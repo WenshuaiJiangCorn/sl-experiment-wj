@@ -2132,6 +2132,9 @@ class _MesoscopeVRSystem:
         # Restores the runtime state back to the values active before the pause.
         self.change_runtime_state(new_state=self._runtime_state)
 
+        # Resets the paused flag
+        self._paused = False
+
     def _terminate_runtime(self) -> None:
         """Verifies that the user intends to abort the runtime via terminal prompt and, if so, sets the runtime into
         the termination mode.

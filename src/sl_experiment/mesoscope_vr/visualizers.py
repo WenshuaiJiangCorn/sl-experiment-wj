@@ -290,7 +290,7 @@ class BehaviorVisualizer:
         # Adds text annotations for speed and duration thresholds
         self._speed_threshold_text = self._speed_axis.text(
             -self._time_window + 0.5,  # x position: left edge and padding
-            20,  # y position: near top of plot
+            40,  # y position: near top of plot
             f"Target speed: {0:.2f} cm/s",
             fontdict=_fontdict_legend,
             verticalalignment="top",
@@ -299,7 +299,7 @@ class BehaviorVisualizer:
 
         self._duration_threshold_text = self._speed_axis.text(
             -self._time_window + 0.5,  # x position: left edge and padding
-            17.5,  # y position: below speed text
+            37.5,  # y position: below speed text
             f"Target duration: {0:.2f} s",
             fontdict=_fontdict_legend,
             verticalalignment="top",
