@@ -446,26 +446,6 @@ class ZaberAxis:
         )
         return representation_string
 
-    def __del__(self) -> None:
-        """Ensures the managed motor is stopped and parked before the class instance is garbage-collected.
-
-        This is a safety feature designed to de-power and lock the motor if the class encounters a runtime error. The
-        feature is aimed at preserving the life and health of the animals and preventing mesoscope objective damage.
-        """
-
-        # Unless the motor is already shut, ensures the motor gracefully stops and parks before the class is destroyed.
-        # Does not carry out the shutdown procedure, as it may harm the animal and / or damage the mesoscope.
-        if not self._shutdown_flag:
-            # Issues the stop command
-            self.stop()
-
-            # Waits for the motor to seize movement
-            while self._motor.is_busy():
-                continue
-
-            # Parks the motor
-            self.park()
-
     def _ensure_call_padding(self) -> None:
         """This method should be used before each call to motor hardware to ensure it is sufficiently separated
         from other calls to prevent overwhelming the serial connection.
@@ -764,6 +744,24 @@ class ZaberAxis:
         self.park()  # Parks the motor before shutdown
         self._shutdown_flag = True  # Sets the shutdown flag to True to indicate that the motor has been shut down
 
+    def emergency_shutdown(self) -> None:
+        """Stops and parks the motor.
+
+        This method purposefully avoids moving the motor to the park position before shutdown. It is designed to be
+        called in the case of emergency, when the managing runtime crashes. Users should use the default 'shutdown'
+        method.
+        """
+        if self._shutdown_flag is not None and not self._shutdown_flag:
+            # Issues the stop command
+            self.stop()
+
+            # Waits for the motor to seize movement
+            while self._motor.is_busy():
+                continue
+
+            # Parks the motor
+            self.park()
+
 
 class ZaberDevice:
     """Manages a single Zaber device (controller) and all of its axes (motors).
@@ -894,6 +892,14 @@ class ZaberDevice:
         self._device.settings.set(setting=_ZaberSettings.device_shutdown_flag, value=1)
         self._shutdown_flag = True  # Also sets the local shutdown flag
 
+    def emergency_shutdown(self) -> None:
+        """Stops and parks the managed axis, but does not reset the shutdown flag.
+
+        This method is designed to be used exclusively by the __del__ method of the managing ZaberConnection class to
+        end the runtime.
+        """
+        self._axis.emergency_shutdown()
+
     @property
     def label(self) -> str:
         """Returns the label (user-assigned descriptive name) of the device."""
@@ -980,6 +986,8 @@ class ZaberConnection:
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
             # involves motor parking and this may not be safe in all circumstances. Therefore, the user can only
             # call shutdown manually.
+            for device in self._devices:
+                device.emergency_shutdown()
             self._connection.close()
 
     def connect(self) -> None:

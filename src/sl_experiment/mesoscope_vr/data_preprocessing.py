@@ -717,7 +717,8 @@ def _preprocess_mesoscope_directory(
         # of the motion detection setup procedure. Unlike 'session' files (main data acquisition files), zstack is kept
         # largely unprocessed due to its unique acquisition nature and purpose.
         if "zstack" in file.name:
-            file.rename("zstack.tiff")
+            file.rename(output_directory.joinpath("zstack.tiff"))
+            tiff_files.remove(file)
 
         # All 'session' data files are now named 'session'.
         elif "session" in file.name:

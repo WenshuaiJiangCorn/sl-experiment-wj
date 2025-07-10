@@ -2970,7 +2970,9 @@ def experiment_logic(
     )
 
     # Initializes the runtime class
-    runtime = _MesoscopeVRSystem(session_data=session_data, session_descriptor=descriptor)
+    runtime = _MesoscopeVRSystem(
+        session_data=session_data, session_descriptor=descriptor, experiment_configuration=experiment_config
+    )
 
     try:
         # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
