@@ -278,6 +278,12 @@ class RuntimeControlUI:
             name="runtime_control_ui", prototype=np.zeros(shape=11, dtype=np.int32), exist_ok=True
         )
 
+        # Configures certain array elements to specific initialization values
+        self._data_array.write_data(index=8, data=np.int32(5))  # Preconfigures reward delivery to use 5 uL rewards
+        self._data_array.write_data(index=10, data=np.int32(0))  # Defaults to not showing reward collision boundary
+        self._data_array.write_data(index=9, data=np.int32(0))  # Initially disables guidance for all runtimes
+        self._data_array.write_data(index=5, data=np.int32(1))  # Ensures all runtimes start in a paused state
+
         # Defines, but does not automatically start the UI process.
         self._ui_process = Process(target=self._run_ui_process, daemon=True)
         self._started = False
@@ -525,7 +531,6 @@ class _ControlUIWindow(QMainWindow):
         self.exit_btn.setObjectName("exitButton")
 
         # Runtime Pause / Unpause (resume) button
-        self._data_array.write_data(index=5, data=np.int32(1))  # Ensures all runtimes start in a paused state
         self.pause_btn = QPushButton("▶️ Resume Runtime")
         self.pause_btn.setToolTip("Pauses or resumes the runtime.")
         # noinspection PyUnresolvedReferences
@@ -533,7 +538,7 @@ class _ControlUIWindow(QMainWindow):
         self.pause_btn.setObjectName("resumeButton")
 
         # Lick Guidance
-        self._data_array.write_data(index=9, data=np.int32(0))
+        # Ensures the array is also set to the default value
         self.guidance_btn = QPushButton("🎯 Enable Guidance")
         self.guidance_btn.setToolTip("Toggles lick guidance mode on or off.")
         # noinspection PyUnresolvedReferences
@@ -541,7 +546,6 @@ class _ControlUIWindow(QMainWindow):
         self.guidance_btn.setObjectName("guidanceButton")
 
         # Show / Hide Reward Collision Boundary
-        self._data_array.write_data(index=10, data=np.int32(0))  # Defaults to not showing reward collision boundary
         self.reward_visibility_btn = QPushButton("👁️ Show Reward")
         self.reward_visibility_btn.setToolTip("Toggles reward collision boundary visibility on or off.")
         # noinspection PyUnresolvedReferences
@@ -611,9 +615,6 @@ class _ControlUIWindow(QMainWindow):
         # Volume control on the left
         volume_label = QLabel("Reward volume:")
         volume_label.setObjectName("volumeLabel")
-
-        # Ensures the array is also set to the default value
-        self._data_array.write_data(index=8, data=np.int32(5))
 
         self.volume_spinbox = QDoubleSpinBox()
         self.volume_spinbox.setRange(1, 20)  # Ranges from 1 to 20

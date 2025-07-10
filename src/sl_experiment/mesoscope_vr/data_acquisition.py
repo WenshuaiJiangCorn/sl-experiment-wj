@@ -441,6 +441,11 @@ class _MesoscopeVRSystem:
             # frame pulses.
             self._mesoscope_timer = PrecisionTimer("ms")
 
+        # Initializes the runtime visualizer. This HAS to be initialized after cameras and the UI to prevent collisions
+        # in the QT backend, which is used by all three assets. Also, since the visualizer runs in a concurrent thread,
+        # it is best to initialize it as close as possible to the beginning of the main runtime cycle loop.
+        self._visualizer.open()
+
         # Enters into a manual checkpoint loop. This loop holds the runtime and allows the user to use the GUI to test
         # various runtime components.
         self._checkpoint()
@@ -463,11 +468,6 @@ class _MesoscopeVRSystem:
 
             # Starts mesoscope frame acquisition
             self._start_mesoscope()
-
-        # Initializes the runtime visualizer. This HAS to be initialized after cameras and the UI to prevent collisions
-        # in the QT backend, which is used by all three assets. Also, since the visualizer runs in a concurrent thread,
-        # it is best to initialize it as close as possible to the beginning of the main runtime cycle loop.
-        self._visualizer.open()
 
         # The setup procedure is complete.
         self._started = True
@@ -594,6 +594,8 @@ class _MesoscopeVRSystem:
         # At this point, the user can use the GUI and the Zaber UI to freely manipulate all components of the
         # mesoscope-VR system.
         while self._ui.pause_runtime:
+            self._visualizer.update()  # Refreshes the visualizer window.
+
             if self._ui.reward_signal:
                 self._deliver_reward(reward_size=self._ui.reward_volume)
 
@@ -1556,7 +1558,7 @@ class _MesoscopeVRSystem:
         # Ensures that the _system_state attribute is set to a non-zero value after runtime initialization. This is
         # used to restore the runtime back to the pre-pause state if the runtime enters paused state (idle), but the
         # user then chooses to resume the runtime.
-        if self._system_state != 0:
+        if new_state != self._state_map["idle"]:
             self._system_state = new_state  # Updates the Mesoscope-VR system state
 
         # Logs the system state update. Uses header-code 1 to indicate that the logged value is the system state-code.
@@ -1765,7 +1767,9 @@ class _MesoscopeVRSystem:
     def _deliver_reward(self, reward_size: float = 5.0) -> None:
         """Uses the solenoid valve to deliver the requested volume of water in microliters.
 
-        This method is used by external runtime logic functions to deliver water rewards to the animal.
+        Args:
+            reward_size: The volume of water to deliver, in microliters. If this argument is set to None, the method
+                will use the same volume as used during the previous reward delivery or as set via the GUI.
         """
         self._unconsumed_reward_count += 1  # Increments the unconsumed reward count each time reward is delivered.
         self._microcontrollers.deliver_reward(volume=reward_size)
@@ -1783,7 +1787,7 @@ class _MesoscopeVRSystem:
         """
         self._microcontrollers.simulate_reward()
 
-    def resolve_reward(self, reward_size: float | None = None) -> bool:
+    def resolve_reward(self, reward_size: float = 5.0) -> bool:
         """Depending on the current number of unconsumed rewards and runtime configuration, either delivers or simulates
         the requested volume of water reward.
 
@@ -1792,18 +1796,14 @@ class _MesoscopeVRSystem:
         rewards when animal is not consuming them.
 
         Args:
-            reward_size: The volume of water to deliver, in microliters. If this argument is set to None, the method
-                will use the same volume as used during the previous reward delivery or as set via the GUI.
+            reward_size: The volume of water to deliver, in microliters.
 
         Returns:
             True if the method delivers the water reward, False if it simulates it.
         """
         # Only delivers water rewards if the current unconsumed count value is below the user-defined threshold.
         if self._unconsumed_reward_count < self.descriptor.maximum_unconsumed_rewards:
-            if reward_size is None:
-                self._microcontrollers.deliver_reward(ignore_parameters=True)
-            else:
-                self._microcontrollers.deliver_reward(volume=reward_size)
+            self._deliver_reward(reward_size=reward_size)
             return True
 
         # Otherwise, simulates water reward by sounding the buzzer without delivering any water
@@ -1973,11 +1973,11 @@ class _MesoscopeVRSystem:
             topic: str
             topic, _ = self._unity.get_data()  # type: ignore
 
-            # Uses the reward volume specified during startup (5.0) or via the UI (Anything from 1 to 20).
+            # Uses the reward volume specified during startup (5.0).
             if topic == self._microcontrollers.valve.mqtt_topic:
                 # This method either delivers the reward or simulates it with the tone, depending on the unconsumed
                 # reward tracker.
-                self.resolve_reward()
+                self.resolve_reward(5.0)
 
                 # Decrements the guided trial counter each time Unity instructs the runtime to deliver a reward.
                 # Receiving reward delivery commands indicates that the animal performs the task as expected. This is
@@ -2587,20 +2587,17 @@ def run_training_logic(
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
     # preprocessing
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
-        file_path=session_data.raw_data.project_configuration_path
-    )
     _ = WaterSheet(
         animal_id=int(animal_id),
         session_date=session_data.session_name,
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.water_log_sheet_id,
+        sheet_id=system_configuration.sheets.water_log_sheet_id,
     )
     _ = SurgerySheet(
         project_name=project_name,
         animal_id=int(animal_id),
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
     # If the managed animal has cached data from a previous run training session and the function is
@@ -2922,20 +2919,17 @@ def experiment_logic(
     # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
     # both classes to run through the init checks. The classes are later re-instantiated during session data
     # preprocessing
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
-        file_path=session_data.raw_data.project_configuration_path
-    )
     _ = WaterSheet(
         animal_id=int(animal_id),
         session_date=session_data.session_name,
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.water_log_sheet_id,
+        sheet_id=system_configuration.sheets.water_log_sheet_id,
     )
     _ = SurgerySheet(
         project_name=project_name,
         animal_id=int(animal_id),
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
     # Uses initialized SessionData instance to load the experiment configuration data
@@ -3099,14 +3093,11 @@ def window_checking_logic(
 
     # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
     # through the init checks. The class is later re-instantiated during session data preprocessing
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(  # type: ignore
-        file_path=session_data.raw_data.project_configuration_path
-    )
     _ = SurgerySheet(
         project_name=project_name,
         animal_id=int(animal_id),
         credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
     message = f"Initializing interface classes..."
