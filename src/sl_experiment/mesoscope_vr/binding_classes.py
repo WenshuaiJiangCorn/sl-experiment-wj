@@ -834,7 +834,7 @@ class MicroControllerInterfaces:
         # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
         # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
         # reducing communication overhead.
-        if (volume != self._previous_volume or tone_duration != self._previous_tone_duration) and not ignore_parameters:
+        if not ignore_parameters and (volume != self._previous_volume or tone_duration != self._previous_tone_duration):
             # Parameters are cached here to use the tone_duration before it is converted to microseconds.
             self._previous_volume = volume
             self._previous_tone_duration = tone_duration
@@ -849,10 +849,7 @@ class MicroControllerInterfaces:
                 tone_duration=np.uint32(tone_duration),
             )
 
-        # Potentially unsafe option! This potentially reduces the precision of water reward delivery, but the reduction
-        # should be very small, given that the microcontroller cycles at 600+ Mhz. In our tests with Teensy
-        # microcontrollers this did not meaningfully impact reward delivery precision.
-        self.valve.send_pulse(noblock=True)
+        self.valve.send_pulse(noblock=False)
 
     def simulate_reward(self, tone_duration: int = 300) -> None:
         """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.
