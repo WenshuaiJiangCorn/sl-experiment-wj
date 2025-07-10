@@ -299,7 +299,7 @@ class BehaviorVisualizer:
 
         self._duration_threshold_text = self._speed_axis.text(
             -self._time_window + 0.5,  # x position: left edge and padding
-            37.5,  # y position: below speed text
+            35.5,  # y position: below speed text
             f"Target duration: {0:.2f} s",
             fontdict=_fontdict_legend,
             verticalalignment="top",

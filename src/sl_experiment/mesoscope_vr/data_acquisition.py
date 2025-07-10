@@ -2681,7 +2681,7 @@ def run_training_logic(
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         maximum_unconsumed_rewards=maximum_unconsumed_rewards,
-        maximum_idle_time_s=maximum_idle_time,
+        maximum_idle_time_s=round(maximum_idle_time/1000, 3),  # Converts back to seconds for storage purposes.
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
         incomplete=True,  # Has to be initialized to True, so that if session aborts, it is marked as incomplete

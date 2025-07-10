@@ -470,6 +470,7 @@ def lick_training(
     help="The maximum volume of water, in milliliters, that can be delivered during training.",
 )
 @click.option(
+    "-t"
     "--maximum_time",
     type=int,
     show_default=True,
