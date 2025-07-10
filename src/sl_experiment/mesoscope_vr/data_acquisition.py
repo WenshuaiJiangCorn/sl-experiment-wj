@@ -2668,6 +2668,9 @@ def run_training_logic(
     speed_threshold: np.float64 = np.float64(0)
     duration_threshold: np.float64 = np.float64(0)
 
+    # This one-time tracker is used to initialize the speed and duration threshold visualization.
+    once = True
+
     # Pre-generates the SessionDescriptor class and populates it with training data
     descriptor = RunTrainingDescriptor(
         dispensed_water_volume_ml=0.0,
@@ -2681,7 +2684,7 @@ def run_training_logic(
         maximum_training_time_m=maximum_training_time,
         maximum_water_volume_ml=maximum_water_volume,
         maximum_unconsumed_rewards=maximum_unconsumed_rewards,
-        maximum_idle_time_s=round(maximum_idle_time/1000, 3),  # Converts back to seconds for storage purposes.
+        maximum_idle_time_s=round(maximum_idle_time / 1000, 3),  # Converts back to seconds for storage purposes.
         experimenter=experimenter,
         mouse_weight_g=animal_weight,
         incomplete=True,  # Has to be initialized to True, so that if session aborts, it is marked as incomplete
@@ -2745,11 +2748,18 @@ def run_training_logic(
             )
 
             # If any of the threshold changed relative to the previous loop iteration, updates the visualizer and
-            # previous threshold trackers with new data.
-            if duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold:
+            # previous threshold trackers with new data. The update is forced at the beginning of runtime to make
+            # visualizer render the threshold lines and values.
+            if once or (
+                duration_threshold != previous_duration_threshold or previous_speed_threshold != speed_threshold
+            ):
                 runtime.update_visualizer_thresholds(speed_threshold, duration_threshold)
                 previous_speed_threshold = speed_threshold
                 previous_duration_threshold = duration_threshold
+
+                # Inactivates the 'once' tracker after the first update.
+                if once:
+                    once = False
 
             # If the speed is above the speed threshold, and the animal has been maintaining the above-threshold speed
             # for the required duration, delivers 5 uL of water. If the speed is above threshold, but the animal has
