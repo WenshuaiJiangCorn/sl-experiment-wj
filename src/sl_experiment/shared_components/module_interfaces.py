@@ -20,6 +20,10 @@ from ataraxis_communication_interface import (
     RepeatedModuleCommand,
 )
 
+# Precreates NumPy constants used when resetting SharedMemoryArray instances to optimize runtime performance.
+_zero_uint = np.uint64(0)
+_zero_float = np.float64(0.0)
+
 
 class EncoderInterface(ModuleInterface):
     """Interfaces with EncoderModule instances running on Ataraxis MicroControllers.
@@ -70,7 +74,7 @@ class EncoderInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(2),
             module_id=np.uint8(1),
-            mqtt_communication=True,
+            mqtt_communication=False,
             data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=None,
@@ -297,17 +301,30 @@ class EncoderInterface(ModuleInterface):
         return self._cm_per_pulse
 
     @property
-    def distance_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the total distance, in centimeters, traveled by the animal since
-        runtime onset.
+    def absolute_position(self) -> np.float64:
+        """Returns the absolute position of the animal relative to the runtime onset in Unity units.
 
-        The distance is stored under index 0 of the tracker and uses the float64 datatype. Note, the distance does NOT
-        account for the direction of travel. It is a monotonically incrementing count of traversed centimeters.
-
-        Since version 2.0.0 the array uses index 1 to communicate the absolute position of the animal in Unity units.
         The position is given relative to the position at runtime onset ('0').
         """
-        return self._distance_tracker
+        return self._distance_tracker.read_data(index=1, convert_output=False)  # type: ignore
+
+    @property
+    def traveled_distance(self) -> np.float64:
+        """Returns the total distance, in centimeters, traveled by the animal since runtime onset.
+
+        This distance tracker is a monotonically incrementing count of traversed centimeters that does not account for
+        the direction of travel.
+        """
+        return self._distance_tracker.read_data(index=0, convert_output=False)  # type: ignore
+
+    def reset_distance_tracker(self) -> None:
+        """Resets the array that tracks the total traveled distance and the absolute position of the animal relative to
+        the runtime onset.
+        """
+        # noinspection PyTypeChecker
+        self._distance_tracker.write_data(index=0, data=_zero_float)
+        # noinspection PyTypeChecker
+        self._distance_tracker.write_data(index=1, data=_zero_float)
 
 
 class TTLInterface(ModuleInterface):
@@ -542,18 +559,18 @@ class TTLInterface(ModuleInterface):
         self._input_queue.put(command)  # type: ignore
 
     @property
-    def pulse_count(self) -> int:
+    def pulse_count(self) -> np.uint64:
         """Returns the total number of received TTL pulses recorded by the class since initialization."""
         if self._pulse_tracker is not None:
-            return int(self._pulse_tracker.read_data(index=0, convert_output=True))
+            return self._pulse_tracker.read_data(index=0, convert_output=False)  # type: ignore
         else:
-            return 0  # If the array does not exist, always returns 0
+            return _zero_uint  # If the array does not exist, always returns 0
 
     def reset_pulse_count(self) -> None:
-        """Resets the tracked mesoscope pulse count to zero, if the TTLInterface instance is used to monitor mesoscope
+        """Resets the tracked mesoscope pulse count to zero if the TTLInterface instance is used to monitor mesoscope
         frame acquisition pulses."""
         if self._pulse_tracker is not None:
-            self._pulse_tracker.write_data(index=0, data=np.uint64(0))
+            self._pulse_tracker.write_data(index=0, data=_zero_uint)
 
 
 class BreakInterface(ModuleInterface):
@@ -830,8 +847,8 @@ class ValveInterface(ModuleInterface):
             law.
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
-        _valve_tracker: Stores the SharedMemoryArray that tracks how many times the valve was opened and the total
-            volume of water dispensed by the valve during runtime.
+        _valve_tracker: Stores the SharedMemoryArray that tracks the total volume of water dispensed by the valve
+            during runtime.
         _previous_state: Tracks the previous valve state as Open (True) or Closed (False). This is used to accurately
             track delivered water volumes each time the valve opens and closes.
         _cycle_timer: A PrecisionTimer instance initialized in the Communication process to track how long the valve
@@ -846,7 +863,6 @@ class ValveInterface(ModuleInterface):
         # kOpen, kClosed, kCalibrated, kToneOn, kToneOff, kTonePinNotSet
         # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54), np.uint8(55), np.uint8(56), np.uint8(57)}
         data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
-        # mqtt_command_topics: set[str] = {"Gimbl/Reward/"}
 
         self._debug: bool = debug
 
@@ -858,7 +874,7 @@ class ValveInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(5),
             module_id=np.uint8(1),
-            mqtt_communication=True,
+            mqtt_communication=False,
             data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=error_codes,
@@ -885,11 +901,11 @@ class ValveInterface(ModuleInterface):
         # Stores the reward topic to make it accessible via property
         self._reward_topic: str = "Gimbl/Reward/"
 
-        # Precreates a shared memory array used to track and share valve state data. Index 0 is used to report the
-        # current valve state (open or closed). Index 1 tracks the total amount of water dispensed by the valve.
+        # Precreates a shared memory array used to track and share valve state data. Index 0 tracks the total amount of
+        # water dispensed by the valve during runtime.
         self._valve_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_valve_tracker",
-            prototype=np.zeros(shape=2, dtype=np.float64),
+            prototype=np.zeros(shape=1, dtype=np.float64),
             exist_ok=True,
         )
         self._previous_state: bool = False
@@ -925,12 +941,7 @@ class ValveInterface(ModuleInterface):
             if self._debug:
                 console.echo(f"Valve Opened")
 
-            # Each time the valve is opened, increments the pulse counter by one and updates the reward tracker
-            count = self._valve_tracker.read_data(index=0, convert_output=False)
-            count += 1
-            self._valve_tracker.write_data(index=0, data=count)
-
-            # Resets the cycle timer each time the valve transitions from closed to open state.
+            # Resets the cycle timer each time the valve transitions to open state.
             if not self._previous_state:
                 self._previous_state = True
                 self._cycle_timer.reset()  # type: ignore
@@ -939,9 +950,9 @@ class ValveInterface(ModuleInterface):
             if self._debug:
                 console.echo(f"Valve Closed")
 
-            # Each time the valve transitions from open to closed state, records the period of time the valve was open
-            # and uses it to estimate the volume of fluid delivered through the valve. Accumulates the total volume in
-            # the tracker array.
+            # Each time the valve transitions to closed state, records the period of time the valve was open and uses it
+            # to estimate the volume of fluid delivered through the valve. Accumulates the total volume in the tracker
+            # array.
             if self._previous_state:
                 self._previous_state = False
                 open_duration = self._cycle_timer.elapsed  # type: ignore
@@ -1199,9 +1210,9 @@ class ValveInterface(ModuleInterface):
         return self._calibration_cov
 
     @property
-    def delivered_volume(self) -> float:
+    def delivered_volume(self) -> np.float64:
         """Returns the total volume of water, in microliters, delivered by the valve during the current runtime."""
-        return float(self._valve_tracker.read_data(index=1, convert_output=True))
+        return self._valve_tracker.read_data(index=0, convert_output=False)  # type: ignore
 
     @property
     def valve_tracker(self) -> SharedMemoryArray:
@@ -1262,7 +1273,7 @@ class LickInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(4),
             module_id=np.uint8(1),
-            mqtt_communication=True,
+            mqtt_communication=False,
             data_codes=data_codes,
             mqtt_command_topics=None,
             error_codes=None,
@@ -1444,13 +1455,9 @@ class LickInterface(ModuleInterface):
         return self._volt_per_adc_unit
 
     @property
-    def lick_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the total number of licks detected by the module since class
-        initialization.
-
-        The count is stored under index 0 of the array as an uint64 value.
-        """
-        return self._lick_tracker
+    def lick_count(self) -> np.uint64:
+        """Returns the total number of licks detected by the module since runtime onset."""
+        return self._lick_tracker.read_data(index=0, convert_output=False)  # type: ignore
 
     @property
     def lick_threshold(self) -> np.uint16:

@@ -16,7 +16,7 @@ from ataraxis_video_system import (
     OutputPixelFormats,
 )
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import DataLogger, SharedMemoryArray
+from ataraxis_data_structures import DataLogger
 from ataraxis_time.time_helpers import convert_time
 from ataraxis_communication_interface import MicroControllerInterface
 
@@ -707,7 +707,12 @@ class MicroControllerInterfaces:
             self._encoder_monitoring = False
 
     def start_mesoscope(self) -> None:
-        """Starts sending acquisitions tart TTL triggers to the mesoscope at 5-millisecond intervals."""
+        """Starts sending acquisitions start TTL triggers to the mesoscope at 5-millisecond intervals.
+
+        ScanImage version 2023 is configured to ignore acquisition start triggers while an acquisition is already
+        in-progress. The current approach of sending 'keep alive' triggers ensures that if a DAQ bug is encountered and
+        ScanImage stops the acquisition, the acquisition restarts within 5 milliseconds of the bug.
+        """
         self.mesoscope_start.send_pulse(repetition_delay=np.uint32(5000))
 
     def stop_mesoscope(self) -> None:
@@ -963,74 +968,43 @@ class MicroControllerInterfaces:
         self.valve.calibrate()
 
     def reset_mesoscope_frame_count(self) -> None:
-        """Resets the tracked mesoscope pulse count to 0.
-
-        This utility method is used when restarting mesoscope frame acquisition to simplify the logic for detecting
-        acquisition startup failures.
-        """
+        """Resets the mesoscope frame counter to 0."""
         self.mesoscope_frame.reset_pulse_count()
 
-    def reset_valve_tracker(self) -> None:
-        """Resets the total number of rewards and the total volume of water delivered by the valve.
-
-        This utility method is used when starting a new runtime to remove any valve data accumulated during the final
-        manual checkpoint, where the user is allowed to manipulate the valve before runtime starts.
-        """
-        # noinspection PyTypeChecker
-        self.valve_tracker.write_data(index=0, data=0)
-        # noinspection PyTypeChecker
-        self.valve_tracker.write_data(index=1, data=0)
-
     def reset_distance_tracker(self) -> None:
-        """Resets the total distance traveled by the animal since runtime onset adn the current position of the animal
-        relative to runtime onset.
-
-        This utility method is used when recovering from Unity runtime termination by generating a new task cue
-        sequence. Since Unity restarts the virtual task at position 0, distance tracker array also needs to be reset
-        back to 0.
+        """Resets the total distance traveled by the animal since runtime onset and the current position of the animal
+        relative to runtime onset to 0.
         """
-        # noinspection PyTypeChecker
-        self.distance_tracker.write_data(index=0, data=0)
-        # noinspection PyTypeChecker
-        self.distance_tracker.write_data(index=1, data=0)
+        self.wheel_encoder.reset_distance_tracker()
 
     @property
-    def mesoscope_frame_count(self) -> int:
+    def mesoscope_frame_count(self) -> np.uint64:
         """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
         return self.mesoscope_frame.pulse_count
 
     @property
-    def total_delivered_volume(self) -> float:
+    def delivered_water_volume(self) -> np.float64:
         """Returns the total volume of water, in microliters, dispensed by the valve since runtime onset."""
         return self.valve.delivered_volume
 
     @property
-    def distance_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the total distance traveled by the animal since runtime
-        onset.
-
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
-        """
-        return self.wheel_encoder.distance_tracker
+    def lick_count(self) -> np.uint64:
+        """Returns the total number of licks recorded since runtime onset."""
+        return self.lick.lick_count
 
     @property
-    def lick_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the lick sensor status.
+    def traveled_distance(self) -> np.float64:
+        """Returns the total distance, in centimeters, traveled by the animal since runtime onset.
 
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        lick detection plots.
+        This value does not account for the direction of travel and is a monotonically increasing count of traveled
+        centimeters.
         """
-        return self.lick.lick_tracker
+        return self.wheel_encoder.traveled_distance
 
     @property
-    def valve_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the water reward valve state.
-
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        reward delivery plots.
-        """
-        return self.valve.valve_tracker
+    def position(self) -> np.float64:
+        """Returns the current absolute position of the animal, in Unity units, relative to runtime onset."""
+        return self.wheel_encoder.absolute_position
 
 
 class VideoSystems:

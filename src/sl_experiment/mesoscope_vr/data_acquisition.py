@@ -13,6 +13,7 @@ from pathlib import Path
 import tempfile
 
 from tqdm import tqdm
+from numba import njit  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
@@ -32,7 +33,7 @@ from ataraxis_data_structures import DataLogger, LogPackage
 from ataraxis_time.time_helpers import convert_time, get_timestamp
 from ataraxis_communication_interface import MQTTCommunication, MicroControllerInterface
 
-from .tools import MesoscopeData, RuntimeControlUI, get_system_configuration
+from .tools import MesoscopeData, RuntimeControlUI, CachedMotifDecomposer, get_system_configuration
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
 from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, get_version_data
@@ -127,10 +128,8 @@ class _MesoscopeVRSystem:
         _show_reward_zone_boundary: Determines whether the reward zone collision wall is currently visible.
         _pause_start_time: Stores the absolute time of the last paused state onset, in microseconds since UTC onset.
         paused_time: Stores the total time, in seconds, the runtime spent in the paused (idle) state.
-        _valve_pulse_count: Stores the number of times the water delivery valve has been pulsed before starting the
-            paused state.
-        _valve_water_volume: Stores the total volume of water dispensed by the water delivery valve before starting the
-            paused state.
+        _delivered_water_volume: Stores the total volume of water dispensed by the water delivery valve during runtime
+            (outside the paused / idle state).
         _unity_terminated: Determines whether the runtime has detected that the Unity game engine has unexpectedly
             terminated its runtime (sent a system shutdown message).
         _mesoscope_frame_count: Tracks the number of frames acquired by the Mesoscope since the last acquisition onset.
@@ -148,6 +147,8 @@ class _MesoscopeVRSystem:
             trial to be executed as part of the current Virtual Reality task sequence.
         _completed_trials: Stores the total number of trials completed by the animal since the last cue sequence
             reset.
+        _paused_water_volume: Tracks the total volume of water, in milliliters, dispensed by the water delivery valve
+            during the paused state.
         _logger: Stores the DataLogger instance that collects behavior log data from all sources.
         _microcontrollers: Stores the MicroControllerInterfaces instance that interfaces with all MicroController
             devices used during runtime.
@@ -161,6 +162,8 @@ class _MesoscopeVRSystem:
         _mesoscope_timer: Stores the PrecisionTimer instance used to track the delay between receiving consecutive
             mesoscope frame acquisition pulses. This is used to detect and rectify a rare case where mesoscope
             acquisition unexpectedly stops.
+        _motif_decomposer: Stores the MotifDecomposer instance used during runtime to decompose long VR cue sequences
+            into the sequence of trials and corresponding cumulative traveled distance associated with each trial.
 
     Raises:
         RuntimeError: If the host PC does not have enough logical CPU cores to support the runtime.
@@ -186,7 +189,7 @@ class _MesoscopeVRSystem:
     _distance_snapshot_code: int = 5
 
     # Statically assigns mesoscope frame checking window and speed calculation window, both in milliseconds
-    _mesoscope_frame_delay: int = 150
+    _mesoscope_frame_delay: int = 115
     _speed_calculation_window: int = 50
 
     # Reserves logging source ID code 1 for this class
@@ -242,19 +245,18 @@ class _MesoscopeVRSystem:
         self._timestamp_timer: PrecisionTimer = PrecisionTimer("us")  # A timer used to timestamp log entries
 
         # Initializes additional tracker variables used to cyclically handle various data updates during runtime.
-        self._position: float = 0.0
+        self._position: np.float64 = np.float64(0.0)
         self._distance: np.float64 = np.float64(0.0)
-        self._lick_count: int = 0
+        self._lick_count: np.uint64 = np.uint64(0)
         self._cue_sequence: NDArray[np.uint8] = np.zeros(shape=(0,), dtype=np.uint8)
         self._unconsumed_reward_count: int = 0
         self._enable_guidance: bool = False
         self._show_reward_zone_boundary: bool = False
         self._pause_start_time: int = 0
         self.paused_time: int = 0
-        self._valve_pulse_count: float = 0.0
-        self._valve_water_volume: float = 0.0
+        self._delivered_water_volume: np.float64 = np.float64(0.0)
         self._unity_terminated: bool = False
-        self._mesoscope_frame_count: int = 0
+        self._mesoscope_frame_count: np.uint64 = np.uint64(0)
         self._mesoscope_terminated: bool = False
         self._running_speed: np.float64 = np.float64(0.0)
         self._speed_timer = PrecisionTimer("ms")
@@ -263,6 +265,7 @@ class _MesoscopeVRSystem:
         self._trial_rewarded: bool = False
         self._trial_distances: NDArray[np.float32] = np.zeros(shape=(0,), dtype=np.float32)
         self._completed_trials: int = 0
+        self._paused_water_volume: np.float64 = np.float64(0.0)
 
         # Initializes the DataLogger instance used to log data from all microcontrollers, camera frame savers, and this
         # class instance.
@@ -298,10 +301,11 @@ class _MesoscopeVRSystem:
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
 
-        # Defines optional assets used by some, but not all runtimes. These assets are initialized to None by default
-        # and are overwritten by the start() method.
+        # Defines optional assets used by some, but not all runtimes. Most of these assets are initialized to None by
+        # default and are overwritten by the start() method.
         self._unity: MQTTCommunication | None = None
         self._mesoscope_timer: PrecisionTimer | None = None
+        self._motif_decomposer = CachedMotifDecomposer()  # Only used with Unity, but is safe to initialize here.
 
         # Initializes, but does not start the assets used by all runtimes. These assets need to be started in a
         # specific order, which is handled by the start() method.
@@ -612,10 +616,8 @@ class _MesoscopeVRSystem:
         # Ensures the valve is closed before continuing.
         self._microcontrollers.close_valve()
 
-        # Resets the valve tracker array before proceeding. This allows the user to use the section above to debug the
-        # valve, potentially dispensing a lot of water in the process. If the tracker is not reset, this may immediately
-        # terminate the runtime and lead to an inaccurate tracking of the water volume received by the animal.
-        self._microcontrollers.reset_valve_tracker()
+        # Updates the paused water volume tracker to reflect the total volume of water delivered during the checkpoint.
+        self._paused_water_volume += self._microcontrollers.delivered_water_volume
 
     def _setup_zaber_motors(self) -> None:
         """If necessary, carries out the Zaber motor setup and positioning sequence.
@@ -826,8 +828,7 @@ class _MesoscopeVRSystem:
         # Step 0: Prepare ScanImagePC and laser
         message = (
             f"Launch ScanImage library on the ScanImagePC by calling 'scanimage' in Matlab command line interface and "
-            f"activate the laser. Critically, make sure that the mesoscope has the 'external triggers' checkbox "
-            f"enabled."
+            f"activate the laser by arming the interlock and turning the activation key."
         )
         console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
@@ -909,9 +910,9 @@ class _MesoscopeVRSystem:
 
         # Step 4: Generate the new MotionEstimator file and arm mesoscope for acquisition
         message = (
-            "Create a new MotionEstimator file by calling the 'setupZstackALL' command in Matlab command line "
-            "interface. Use the Motion Estimation user interface to save the newly generated MotionEstimator file to "
-            "the mesoscope_data folder. Then, arm the mesoscope for acquisition by activating the 'Loop' mode."
+            "Call the setupAcquisition(hSI, hSICtl) function via MATLAB command line on the ScanImagePC. The function "
+            "will carry out the rest of the required preparation steps, including configuring the acquisition "
+            "parameters."
         )
         console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
@@ -1100,14 +1101,18 @@ class _MesoscopeVRSystem:
 
         # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
         # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
-        # that the reported dispensed_water_volume_ul is accurate.
-        delivered_water = self._microcontrollers.total_delivered_volume
+        # that the reported water volumes are accurate:
 
-        # Note, although the class supports various descriptor file formats, the data written by this method is uniform
-        # (shared) by all supported descriptor types.
+        # Runtime water volume. This should accurately reflect the volume of water consumed by the animal during
+        # runtime.
+        delivered_water = self._microcontrollers.delivered_water_volume - self._paused_water_volume
+        # Converts from uL to ml
+        self.descriptor.dispensed_water_volume_ml = float(round(delivered_water / 1000, ndigits=3))
 
-        # Overwrites the delivered water volume with the volume recorded over the runtime.
-        self.descriptor.dispensed_water_volume_ml = round(delivered_water / 1000, ndigits=3)  # Converts from uL to ml
+        # Same as above, but tracks the total volume of water dispensed during pauses. While the animal might
+        # have consumed some of that water, it is equally plausible that all water was wasted or not dispensed at all.
+        self.descriptor.pause_dispensed_water_volume_ml = float(round(self._paused_water_volume / 1000, ndigits=3))
+
         self.descriptor.incomplete = False  # If the runtime reaches this point, the session is likely complete.
 
         # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
@@ -1152,6 +1157,71 @@ class _MesoscopeVRSystem:
             dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
         )
 
+    @staticmethod
+    @njit(cache=True)  # type: ignore
+    def _decompose_sequence_numba_flat(
+        cue_sequence: NDArray[np.uint8],
+        motifs_flat: NDArray[np.uint8],
+        motif_starts: NDArray[np.int32],
+        motif_lengths: NDArray[np.int32],
+        motif_indices: NDArray[np.int32],
+        max_trials: int,
+    ) -> tuple[NDArray[np.int32], int]:
+        """Decomposes a long sequence of Virtual Reality (VR) wall cues into individual trial motifs.
+
+        This is a worker function used to speed up decomposition via numba-acceleration.
+
+        Args:
+            cue_sequence: The full cue sequence to decompose.
+            motifs_flat: All motifs concatenated into a single 1D array.
+            motif_starts: Starting index of each motif in motifs_flat.
+            motif_lengths: The length of each motif.
+            motif_indices: Original indices of motifs (before sorting).
+            max_trials: The maximum number of trials that can make up the cue sequence.
+
+        Returns:
+            A tuple of two elements. The first element stores the array of trial type-indices (the sequence of trial
+            type indices). The second element stores the total number of trials extracted from the cue sequence.
+        """
+        # Prepares runtime trackers
+        trial_indices = np.zeros(max_trials, dtype=np.int32)
+        trial_count = 0
+        sequence_pos = 0
+        sequence_length = len(cue_sequence)
+        num_motifs = len(motif_lengths)
+
+        # Decomposes the sequence into trial motifs using greedy matching. Longer motifs are matched over shorter ones.
+        # Pre-specifying the maximum number of trials serves as a safety feature to avoid processing errors.
+        while sequence_pos < sequence_length and trial_count < max_trials:
+            motif_found = False
+
+            for i in range(num_motifs):
+                motif_length = motif_lengths[i]
+
+                # If the current sequence position is within the bounds of the motif, checks if it matches the motif.
+                if sequence_pos + motif_length <= sequence_length:
+                    # Gets motif start position from the flat array
+                    motif_start = motif_starts[i]
+
+                    # Checks if the motif matches the evaluated sequence.
+                    match = True
+                    for j in range(motif_length):
+                        if cue_sequence[sequence_pos + j] != motifs_flat[motif_start + j]:
+                            match = False
+                            break
+                    # If the motif matches, records the trial type index and moves to the next sequence position.
+                    if match:
+                        trial_indices[trial_count] = motif_indices[i]
+                        trial_count += 1
+                        sequence_pos += motif_length
+                        motif_found = True
+                        break
+            # If the function is not able to pair a part of the sequence with a motif, aborts with an error.
+            if not motif_found:
+                return trial_indices, -1
+
+        return trial_indices[:trial_count], trial_count
+
     def _decompose_cue_sequence_to_trial_lengths(self) -> None:
         """Decomposes the Virtual Reality task wall cue sequence into trials into a sequence of cumulative traveled
         distances, in Unity units, at the end of each trial.
@@ -1165,7 +1235,6 @@ class _MesoscopeVRSystem:
             RuntimeError: If the method is not able to fully decompose the experiment cue sequence into a set of trial
                 lengths.
         """
-
         # Mostly a fallback to appease mypy, this method should not be called for non-experiment runtimes.
         if self._experiment_configuration is None:
             return
@@ -1174,55 +1243,49 @@ class _MesoscopeVRSystem:
         trials: list[TrialCueSequence] = [trial for trial in self._experiment_configuration.trial_structures.values()]
 
         # Extracts trial motif (cue sequences for each trial type) and their corresponding distances in cm.
-        trial_motifs = [trial.cue_sequence for trial in trials]
-        trial_distances = [float(trial.trial_length_cm) for trial in trials]
+        trial_motifs: list[NDArray[np.uint8]] = [np.array(trial.cue_sequence, dtype=np.uint8) for trial in trials]
+        trial_distances: list[float] = [float(trial.trial_length_cm) for trial in trials]
 
-        # Constructs a list of tuples, where each inner tuple stores the original motif index and its corresponding
-        # cue sequence.
-        motif_data = [(i, motif) for i, motif in enumerate(trial_motifs)]
+        # Prepares the flattened motif data using the MotifDecomposer class.
+        motifs_flat, motif_starts, motif_lengths, motif_indices, distances_array = (
+            self._motif_decomposer.prepare_motif_data(trial_motifs, trial_distances)
+        )
 
-        # Sorts trial cue sequence motifs by length (longest first) for greedy matching
-        motif_data.sort(key=lambda x: len(x[1]), reverse=True)
-        sorted_motif_data = tuple(motif_data)  # Casts to tuple for efficiency
+        # Estimates the maximum number of trials that can be theoretically extracted from the input cue sequence.
+        min_motif_length = min(len(motif) for motif in trial_motifs)
+        max_trials = len(self._cue_sequence) // min_motif_length + 1
 
-        # Loops over the cue sequence and decomposes it into trials.
-        trial_indices = []
-        sequence_pos = 0
-        while sequence_pos < len(self._cue_sequence):
-            motif_found = False
+        # CallS Numba-accelerated worker method to decompose the sequence.
+        trial_indices_array, trial_count = self._decompose_sequence_numba_flat(
+            self._cue_sequence, motifs_flat, motif_starts, motif_lengths, motif_indices, max_trials
+        )
 
-            # Attempts to match longer motifs first, ensuring that longer sequences take precedence over shorter ones.
-            for motif_idx, motif in sorted_motif_data:
-                motif_length = len(motif)
+        # Checks for decomposition errors
+        if trial_count == -1:
+            # Finds the position where decomposition failed for the error message
+            sequence_pos = 0
+            trial_indices_list = trial_indices_array[:max_trials].tolist()
 
-                # If the currently evaluated motif length is less than the remaining sequence length, attempts to match
-                # motif to sequence.
-                if sequence_pos + motif_length <= len(self._cue_sequence):
-                    sequence_slice = self._cue_sequence[sequence_pos : sequence_pos + motif_length]
+            # Reconstructs the position by summing the lengths of successfully matched trials
+            for idx in trial_indices_list:
+                if idx == 0 and sequence_pos > 0:  # Assumes 0 is not a valid trial index after first match
+                    break
+                sequence_pos += len(trial_motifs[idx])
 
-                    # Converts the motif to a numpy array for efficient comparison
-                    motif_array = np.array(motif, dtype=np.uint8)
-
-                    # Uses NumPy for comparison
-                    if np.array_equal(sequence_slice, motif_array):
-                        trial_indices.append(motif_idx)
-                        sequence_pos += motif_length
-                        motif_found = True
-                        break
-
-            # All valid experiment configurations must be fully decomposable into trial sequences. If no motif is found,
-            # aborts runtime with an error message.
-            if not motif_found:
-                remaining_sequence = self._cue_sequence[sequence_pos : sequence_pos + 10]
-                message = (
-                    f"Unable to decompose the VR wall cue sequence received from Unity into a sequence of trial "
-                    f"distances. No trial motif (trial cue sequence) matched at overall sequence position "
-                    f"{sequence_pos}, remaining sequence: {remaining_sequence.tolist()}"
-                )
-                console.error(message=message, error=RuntimeError)
+            remaining_sequence = self._cue_sequence[sequence_pos : sequence_pos + 10]
+            message = (
+                f"Unable to decompose the VR wall cue sequence received from Unity into a sequence of trial "
+                f"distances. No trial motif (trial cue sequence) matched at overall sequence position "
+                f"{sequence_pos}, remaining sequence: {remaining_sequence.tolist()}"
+            )
+            console.error(message=message, error=RuntimeError)
+            return
 
         # Maps trial indices to distances and computes cumulative traveled distance at the end of each trial.
-        trial_distance_array = np.array([trial_distances[trial_type] for trial_type in trial_indices])
+        trial_indices_list = trial_indices_array[:trial_count].tolist()
+        trial_distance_array: NDArray[np.float32] = np.array(
+            [distances_array[trial_type] for trial_type in trial_indices_list], dtype=np.float32
+        )
         self._trial_distances = np.cumsum(trial_distance_array, dtype=np.float32)
 
     def _get_cue_sequence(self) -> None:
@@ -1284,20 +1347,22 @@ class _MesoscopeVRSystem:
                         self._logger.input_queue.put(package)
                         self._cue_sequence = sequence
 
-                        # Attempts to decompose the received cue sequence into a tuple of trial lengths. This is used
-                        # to support automatic guidance mode control during experiment runtimes.
+                        # Attempts to decompose the received cue sequence into an array of cumulative trial lengths.
+                        # Primarily, this is used to track animal's performance and automatically engage guidance if
+                        # the animal performs poorly.
                         self._decompose_cue_sequence_to_trial_lengths()
 
                         # Resets the traveled distance tracker array. Primarily, this is only necessary if this method
-                        # is called when recovering from unexpected Unity terminations
+                        # is called when recovering from unexpected Unity terminations to re-align distance trackers
+                        # with the fact that the task corridor (environment) origin position and time have been reset.
                         self._microcontrollers.reset_distance_tracker()
 
                         # Also resets internal class attributes used for position and trial completion tracking.
-                        self._position = 0
+                        self._position = np.float64(0.0)
                         self._distance = np.float64(0.0)
                         self._completed_trials = 0
 
-                        # Note, keeps the number of unrewarded and guided trials unchanged. This is intentional
+                        # Note, keeps the number of unrewarded and guided trials unchanged. This is intentional.
 
                         # Ends the runtime
                         message = "VR cue sequence: Received."
@@ -1319,7 +1384,8 @@ class _MesoscopeVRSystem:
         raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
     def _start_mesoscope(self) -> None:
-        """Sends the frame acquisition start TTL pulse to the mesoscope and waits for the frame acquisition to begin.
+        """Starts sending the frame acquisition start TTL pulses to the mesoscope and waits for the frame acquisition to
+        begin.
 
         This method is used internally to start the mesoscope frame acquisition as part of the runtime startup
         process and to verify that the mesoscope is available and properly configured to acquire frames
@@ -1328,9 +1394,6 @@ class _MesoscopeVRSystem:
         Notes:
             This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
             prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
-
-            In addition to this method, the system also uses the _mesoscope_cycle() method to automatically recover
-            from external trigger failures.
 
         Raises:
             RuntimeError: If the mesoscope does not confirm frame acquisition within 20 seconds after the
@@ -1343,10 +1406,23 @@ class _MesoscopeVRSystem:
         # Keeps retrying to activate mesoscope acquisition until success or until the user aborts the acquisition
         outcome = ""
         while outcome != "abort":
-            # Sends mesoscope frame acquisition trigger
             self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame counter
 
-            # This now repeatedly sends the trigger at 5 ms intervals.
+            # Ensures that the mesoscope is not acquiring frames. This critical to ensure that the mesoscope data folder
+            # does nto contain any unwanted / unexpected data.
+            self._stop_mesoscope()
+
+            # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data inside
+            # the mesoscope folder always perfectly aligns with the number of frame acquisition triggers.
+            for pattern in ["*.tif", "*.tiff"]:
+                for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
+                    # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
+                    # of the acquisition setup.
+                    if "zstack" not in file.name:
+                        file.unlink(missing_ok=True)
+
+            # Sends mesoscope frame acquisition trigger. Calling this method instructs the Actor microcontroller to
+            # repeatedly send the trigger at 5 ms intervals.
             self._microcontrollers.start_mesoscope()
 
             # Ensures that the frame acquisition starts as expected
@@ -1368,11 +1444,6 @@ class _MesoscopeVRSystem:
                     return
 
             # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
-
-            # Stops the continuous stream of acquisitions tart triggers before displaying the message.
-            self._microcontrollers.stop_mesoscope()
-
-            # Displays an error message to the user.
             message = (
                 f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to receive "
                 f"10 frame acquisition triggers over 10 seconds. It is likely that the mesoscope has not been armed "
@@ -1793,7 +1864,7 @@ class _MesoscopeVRSystem:
             # If the animal has changed its position since the previous cycle, updates the position and sends the
             # data to Unity. Since Unity expects to be sent the delta (change) in animal position, rather than the
             # current absolute position, converts the absolute position readout to a delta value.
-            current_position = self._microcontrollers.distance_tracker.read_data(index=1, convert_output=True)
+            current_position = self._microcontrollers.position
 
             # Subtracting previous position from current position correctly maps positive deltas to moving forward and
             # negative deltas to moving backward
@@ -1807,7 +1878,7 @@ class _MesoscopeVRSystem:
 
                 # Determines how many trials have been completed based on the current position by counting trials where
                 # current position has passed the trial end position
-                current_completed_trials = np.sum(current_position >= self._trial_distances)
+                current_completed_trials = int(np.sum(current_position >= self._trial_distances))
 
                 # Checks if the animal completed a trial
                 if current_completed_trials > self._completed_trials:
@@ -1827,7 +1898,7 @@ class _MesoscopeVRSystem:
                 self._unity.send_data(topic=self._microcontrollers.wheel_encoder.mqtt_topic, payload=byte_array)
 
         # If the lick tracker indicates that the sensor has detected new licks, updates internal lick counter
-        lick_count = self._microcontrollers.lick_tracker.read_data(index=0, convert_output=True)
+        lick_count = self._microcontrollers.lick_count
         if lick_count > self._lick_count:
             # Updates the local lick counter with the new data
             self._lick_count = lick_count
@@ -1843,13 +1914,22 @@ class _MesoscopeVRSystem:
             if self._unity is not None:
                 self._unity.send_data(topic=self._microcontrollers.lick.mqtt_topic, payload=None)
 
+        # If the water delivery valve tracker indicates that the valve delivered a water reward, determine the delivered
+        # volume and, depending on whether the runtime is active or paused, updates the appropriate tracker attribute.
+        dispensed_water = self._microcontrollers.delivered_water_volume - (
+            self._paused_water_volume + self._delivered_water_volume
+        )
+        if dispensed_water > 0:
+            if self._paused:
+                self._paused_water_volume += dispensed_water
+            else:
+                self._delivered_water_volume += dispensed_water
+
         # The speed value is updated over ~50 millisecond windows. This gives a good balance between smoothness
         # and sensitivity (on top of 'metal' smoothing built into the encoder module).
         if self._speed_timer.elapsed >= self._speed_calculation_window:
             # Reads the monotonically increasing total traveled distance value (in cm)
-            travelled_distance: np.float64 = self._microcontrollers.distance_tracker.read_data(
-                index=0, convert_output=False
-            )
+            travelled_distance = self._microcontrollers.traveled_distance
             self._speed_timer.reset()  # Resets the timer
 
             # Determines the total distance covered by the animal over the window of 50 ms
@@ -1920,9 +2000,7 @@ class _MesoscopeVRSystem:
                 # Reads the current position of the animal, in Unity units. Since this is done after cutting off the
                 # wheel motion stream (by transitioning into paused (idle) state), there should be minimal deviation of
                 # the read position and the physical position of the animal.
-                traveled_distance: float = self._microcontrollers.distance_tracker.read_data(
-                    index=1, convert_output=True
-                )
+                traveled_distance = float(self._microcontrollers.traveled_distance)
                 # Converts float to a byte array using little-endian format
                 distance_bytes = np.array([traveled_distance], dtype="<i8").view(np.uint8)
 
@@ -2028,7 +2106,7 @@ class _MesoscopeVRSystem:
         # the Mesoscope has encountered a major runtime error. However, to fully confirm that the mesoscope is indeed
         # not active, attempts to restart the acquisition for additional 150 ms period.
         self._microcontrollers.reset_mesoscope_frame_count()  # Makes the tracked frame count 0
-        self._mesoscope_frame_count = 0  # Resets the instance tracker
+        self._mesoscope_frame_count = np.uint64(0)  # Resets the instance tracker
         self._mesoscope_timer.reset()
 
     def _pause_runtime(self) -> None:
@@ -2053,11 +2131,6 @@ class _MesoscopeVRSystem:
         if not self._ui.pause_runtime:
             self._ui.set_pause_state(paused=True)
 
-        # Caches valve data to discard any valve data accumulated during the pause period. This is done to prevent
-        # user-driven valve manipulation from influencing the runtime if the user chooses to resume it.
-        self._valve_pulse_count = self._microcontrollers.valve_tracker.read_data(index=0)
-        self._valve_water_volume = self._microcontrollers.valve_tracker.read_data(index=1)
-
         # Records pause onset time
         self._pause_start_time = self._timestamp_timer.elapsed
 
@@ -2080,12 +2153,6 @@ class _MesoscopeVRSystem:
         """
         message = "Mesoscope-VR runtime: Resumed."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Discards any valve data accumulated during the idle period by restoring the valve tracker to the cached state.
-        # noinspection PyTypeChecker
-        self._microcontrollers.valve_tracker.write_data(index=0, data=self._valve_pulse_count)
-        # noinspection PyTypeChecker
-        self._microcontrollers.valve_tracker.write_data(index=1, data=self._valve_water_volume)
 
         # Updates the 'paused_time' value to reflect the time spent inside the 'paused' state. Most runtimes use this
         # public attribute to adjust the execution time of certain runtime stages or the runtime altogether.
@@ -2202,7 +2269,7 @@ class _MesoscopeVRSystem:
     @property
     def dispensed_water_volume(self) -> float:
         """Returns the total volume of water, in microliters, dispensed by the valve during the current runtime."""
-        return self._valve_water_volume
+        return float(self._delivered_water_volume)
 
     @property
     def unrewarded_trial_sequence_length(self) -> int:
@@ -2395,6 +2462,15 @@ def lick_training_logic(
             while delay_timer.elapsed < (delay - runtime.paused_time):
                 runtime.runtime_cycle()  # Repeatedly calls the runtime cycle during the delay period
 
+            # If the user sent the abort command, terminates the training early.
+            if runtime.terminated:
+                message = (
+                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
+                    "procedure..."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                break  # Breaks the for loop
+
             # Resets the delay timer immediately after exiting the delay loop
             delay_timer.reset()
 
@@ -2404,15 +2480,6 @@ def lick_training_logic(
 
             # Delivers 5 uL of water to the animal or simulates the reward if the animal is not licking
             runtime.resolve_reward(reward_size=5.0)
-
-            # If the user sent the abort command, terminates the training early.
-            if runtime.terminated:
-                message = (
-                    "Lick training abort signal detected. Aborting the lick training with a graceful shutdown "
-                    "procedure..."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                break  # Breaks the for loop
 
         # Ensures the animal has time to consume the last reward before the LickPort is moved out of its range. Uses
         # the maximum possible time interval as the delay interval.
@@ -2652,6 +2719,15 @@ def run_training_logic(
         while runtime_timer.elapsed < (training_time + runtime.paused_time):
             runtime.runtime_cycle()  # Repeatedly calls the runtime cycle during training
 
+            # If the user sent the abort command, terminates the training early.
+            if runtime.terminated:
+                message = (
+                    "Run training abort signal detected. Aborting the lick training with a graceful shutdown "
+                    "procedure..."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                break  # Breaks the for loop
+
             # Determines how many times the speed and duration thresholds have been increased based on the difference
             # between the total delivered water volume and the increase threshold. This dynamically adjusts the running
             # speed and duration thresholds with delivered water volume, ensuring the animal has to try progressively
@@ -2751,15 +2827,6 @@ def run_training_logic(
                 )
                 console.echo(message=message, level=LogLevel.SUCCESS)
                 break
-
-            # If the user sent the abort command, terminates the training early.
-            if runtime.terminated:
-                message = (
-                    "Run training abort signal detected. Aborting the lick training with a graceful shutdown "
-                    "procedure..."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-                break  # Breaks the for loop
 
         # Closes the progress bar if runtime ends as expected
         progress_bar.close()
@@ -2938,15 +3005,15 @@ def experiment_logic(
                     # call the runtime cycle and handle termination and animal performance issue cases.
                     runtime.runtime_cycle()  # Repeatedly calls the runtime cycle as pare of the experiment state cycle
 
+                    # If the user has terminated the runtime, breaks the while loop. The termination is also handled at
+                    # the level of the 'for' loop. The error message is generated at that level, rather than here.
+                    if runtime.terminated:
+                        break
+
                     # If the animal accumulates a critical number of unrewarded (failed) trials, enables the guided mode
                     # for a portion of future trials.
                     if runtime.unrewarded_trial_sequence_length >= state.failed_trial_threshold:
                         runtime.enable_guided_trials(guided_trial_count=state.recovery_guided_trials)
-
-                    # Breaks the while loop. The termination is also handled at the level of the 'for' loop. The error
-                    # message is generated at that level, rather than here.
-                    if runtime.terminated:
-                        break
 
                     # Updates the progress bar every second. Note, this calculation statically discounts the time spent
                     # in the paused state.
@@ -2958,7 +3025,7 @@ def experiment_logic(
 
                 runtime.paused_time = 0  # Resets the paused time before entering the next experiment state's cycle
 
-                # If the user sent the abort command, terminates the training early.
+                # If the user sent the abort command, terminates the experiment early.
                 if runtime.terminated:
                     message = (
                         "Experiment runtime abort signal detected. Aborting the experiment with a graceful shutdown "

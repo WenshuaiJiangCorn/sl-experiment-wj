@@ -10,6 +10,7 @@ from multiprocessing import Process
 import numpy as np
 from PyQt6.QtGui import QFont, QCloseEvent
 from PyQt6.QtCore import Qt, QTimer
+from numpy.typing import NDArray
 from PyQt6.QtWidgets import (
     QLabel,
     QWidget,
@@ -1210,3 +1211,90 @@ class _ControlUIWindow(QMainWindow):
         self.reward_visibility_btn.style().unpolish(self.reward_visibility_btn)  # type: ignore
         self.reward_visibility_btn.style().polish(self.reward_visibility_btn)  # type: ignore
         self.reward_visibility_btn.update()  # Forces update to apply new styles
+
+
+class CachedMotifDecomposer:
+    """A helper class to cache the flattened Trial cue sequence motif data between multiple motif decomposition
+    runtimes.
+
+    Trial motifs are used during experiment runtimes to decompose a long sequence of VR wall cues into trials. In turn,
+    this is used to track animal's performance during runtime (for each trial) and, if necessary, enable or disable
+    lick guidance. Since each experiment can use one or more trial motifs (cue sequences), this decomposition has to be
+    performed at runtime for each experiment. To optimize runtime performance, this class prepares and stores the
+    necessary dat to support numba-accelerated motif decomposition at runtime, especially in (rare) cases where it has
+    to be performed multiple times due to Unity crashing.
+
+    Attributes:
+        _cached_motifs: Stores the original trial motifs used for decomposition.
+        _cached_flat_data: Stores flattened motif data structure, optimized for numba-accelerated computations.
+        _cached_distances: Stores the distances of each trial motif, in centimeters.
+    """
+
+    def __init__(self) -> None:
+        self._cached_motifs: list[NDArray[np.uint8]] | None = None
+        self._cached_flat_data: (
+            tuple[NDArray[np.uint8], NDArray[np.int32], NDArray[np.int32], NDArray[np.int32]] | None
+        ) = None
+        self._cached_distances: NDArray[np.float32] | None = None
+
+    def prepare_motif_data(
+        self, trial_motifs: list[NDArray[np.uint8]], trial_distances: list[float]
+    ) -> tuple[NDArray[np.uint8], NDArray[np.int32], NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
+        """Prepares and caches the flattened motif data for faster cue sequence-to-trial decomposition (conversion).
+
+        Args:
+            trial_motifs: A list of trial motifs (wall cue sequences) in the format of numpy arrays.
+            trial_distances: A list of trial distances in centimeters.
+
+        Returns:
+            A tuple containing five elements. The first element is a flattened array of all motifs. The second
+            element is an array that stores the starting indices of each motif in the flat array. The third element is
+            an array that stores the length of each motif. The fourth element is an array that stores the original
+            indices of motifs before sorting. The fifth element is an array of trial distances in centimeters.
+        """
+        # Checks if the class already contains cached data for the input motifs. In this case, returns the cached data.
+        if self._cached_motifs is not None and len(self._cached_motifs) == len(trial_motifs):
+            # Carries out deep comparison of motif arrays
+            all_equal = all(
+                np.array_equal(cached, current) for cached, current in zip(self._cached_motifs, trial_motifs)
+            )
+            if all_equal and self._cached_flat_data is not None and self._cached_distances is not None:
+                return self._cached_flat_data + (self._cached_distances,)
+
+        # Otherwise, prepares flattened motif data:
+        # Sorts motifs by length (longest first)
+        motif_data: list[tuple[int, NDArray[np.uint8], int]] = [
+            (i, motif, len(motif)) for i, motif in enumerate(trial_motifs)
+        ]
+        motif_data.sort(key=lambda x: x[2], reverse=True)
+
+        # Calculates total size needed to represent all motifs in an array.
+        total_size: int = sum(len(motif) for motif in trial_motifs)
+        num_motifs: int = len(trial_motifs)
+
+        # Creates arrays with specified dtypes.
+        motifs_flat: NDArray[np.uint8] = np.zeros(total_size, dtype=np.uint8)
+        motif_starts: NDArray[np.int32] = np.zeros(num_motifs, dtype=np.int32)
+        motif_lengths: NDArray[np.int32] = np.zeros(num_motifs, dtype=np.int32)
+        motif_indices: NDArray[np.int32] = np.zeros(num_motifs, dtype=np.int32)
+
+        # Fills the arrays
+        current_pos: int = 0
+        for i, (orig_idx, motif, length) in enumerate(motif_data):
+            # Ensures motifs are stored as uint8
+            motif_uint8 = motif.astype(np.uint8) if motif.dtype != np.uint8 else motif
+            motifs_flat[current_pos : current_pos + length] = motif_uint8
+            motif_starts[i] = current_pos
+            motif_lengths[i] = length
+            motif_indices[i] = orig_idx
+            current_pos += length
+
+        # Converts distances to float32 type
+        distances_array: NDArray[np.float32] = np.array(trial_distances, dtype=np.float32)
+
+        # Caches the results
+        self._cached_motifs = [motif.copy() for motif in trial_motifs]
+        self._cached_flat_data = (motifs_flat, motif_starts, motif_lengths, motif_indices)
+        self._cached_distances = distances_array
+
+        return self._cached_flat_data + (distances_array,)

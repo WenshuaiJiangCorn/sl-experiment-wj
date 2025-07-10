@@ -154,10 +154,10 @@ class BehaviorVisualizer:
     def __init__(
         self,
     ) -> None:
-        # Currently, the class is statically configured to visualize the sliding window of 10 seconds updated every 40
+        # Currently, the class is statically configured to visualize the sliding window of 10 seconds updated every 25
         # ms.
         self._time_window: int = 10
-        self._time_step: int = 40
+        self._time_step: int = 25
         self._update_timer = PrecisionTimer("ms")
 
         # Precreates the structures used to store the displayed data during visualization runtime
