@@ -360,7 +360,7 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
         # Window checking does not use the light-shield and requires two alignment steps: red-dot and GenTeal
         message = (
             f"Install the mesoscope objective, and carry out the air red-dot alignment. Then, level the eyes of the "
-            f"animals as well as possible given the constraints of the craniotomy placement, clean the window and "
+            f"animals as well as possible given the constraints of the craniotomy placement, clean the window, and "
             f"repeat the red-dot alignment using GenTeal. After alignment, discover and select the imaging plane. "
             f"Note, all future imaging sessions will use the same imaging plane as established during this window "
             f"checking runtime!"
@@ -414,13 +414,13 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
     # Resets the kinase and phosphatase markers before instructing the user to start the acquisition preparation
     # function.
     if not window_checking:
-        mesoscope_data.scanimagepc_data.kinase_path.unlink()
-        mesoscope_data.scanimagepc_data.phosphatase_path.unlink()
+        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+        mesoscope_data.scanimagepc_data.phosphatase_path.unlink(missing_ok=True)
 
     # For window checking, ensures that kinase is removed, while the phosphatase is present. This aborts the runtime
     # after generating the zstack.tiff and the MotionEstimator.me files.
     else:
-        mesoscope_data.scanimagepc_data.kinase_path.unlink()
+        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
         mesoscope_data.scanimagepc_data.phosphatase_path.touch()
 
     # Step 4: Generate the new MotionEstimator file and arm mesoscope for acquisition
@@ -436,7 +436,8 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
     target_files = (
         mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("MotionEstimator.me"),
         mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("fov.roi"),
-        mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("zstack.tif"),
+        # Due to how the acquisition function works, the expected file will always use this name.
+        mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("zstack_00000_00001.tif"),
     )
 
     # Waits until the necessary files are generated on the ScanImagePC. This is also used as a secondary check to
