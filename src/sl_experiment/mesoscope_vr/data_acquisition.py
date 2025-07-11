@@ -47,6 +47,425 @@ _lick: str = "lick training"
 _window: str = "window checking"
 
 
+# Defines some shared methods to make their use consistent between window checking and other runtimes.
+def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_data: MesoscopeData) -> None:
+    """Generates a precursor mesoscope_positions.yaml file and optionally forces the user to update it to reflect
+    the current Mesoscope objective position coordinates.
+
+    This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
+    positions that will be reused during the next session to restore the imaging field.
+
+    Args:
+        session_data: The SessionData instance for the runtime for which the snapshot is generated.
+        mesoscope_data: The MesoscopeData instance for the runtime for which the snapshot is generated.
+    """
+
+    # Generates a precursor MesoscopePositions file and dumps it to the session raw_data folder.
+    # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
+    # coordinates with the positions loaded from the snapshot stored inside the persistent_data folder of the
+    # animal.
+    force_mesoscope_positions_update: bool = False
+    if Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
+        sh.copy(
+            mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
+            session_data.raw_data.mesoscope_positions_path,
+        )
+        # Loads the previous position data into memory
+        previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=session_data.raw_data.mesoscope_positions_path
+        )
+
+        # Asks the user whether they want to update position data. If not, then there is no need to update the data
+        # inside the precursor .YAML file.
+        if not force_mesoscope_positions_update:
+            message = (
+                f"Do you want to update the mesoscope objective position data stored inside the "
+                f"mesoscope_positions.yaml file loaded from the previous session?"
+            )
+            console.echo(message=message, level=LogLevel.INFO)
+            while True:
+                answer = input("Enter 'yes' or 'no': ")
+
+                # If the answer is 'yes', breaks the loop and executes the data update sequence.
+                if answer.lower() == "yes":
+                    break
+
+                # If the answer is 'no', ends method runtime, as there is no need to update the data inside the
+                # file.
+                elif answer.lower() == "no":
+                    return
+
+    # If previous position data is not available, creates a new MesoscopePositions instance with default (0)
+    # position values.
+    else:
+        previous_mesoscope_positions = MesoscopePositions()
+
+        # Caches the precursor file to the raw_data session directory.
+        previous_mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+
+    # Notifies the user that the precursor file is ready for modification.
+    message = "Mesoscope objective position precursor: Created."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Forces the user to update the mesoscope positions file with current mesoscope data
+    message = (
+        "Update the data inside the mesoscope_positions.yaml file stored inside the raw_data session directory "
+        "to reflect the current mesoscope objective position."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file into
+    # memory.
+    mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+        file_path=Path(session_data.raw_data.mesoscope_positions_path),
+    )
+
+    # Ensures that the user has updated the position data.
+    while (
+        mesoscope_positions.mesoscope_x == previous_mesoscope_positions.mesoscope_x
+        and mesoscope_positions.mesoscope_y == previous_mesoscope_positions.mesoscope_y
+        and mesoscope_positions.mesoscope_z == previous_mesoscope_positions.mesoscope_z
+        and mesoscope_positions.mesoscope_roll == previous_mesoscope_positions.mesoscope_roll
+        and mesoscope_positions.mesoscope_fast_z == previous_mesoscope_positions.mesoscope_fast_z
+        and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
+        and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
+    ):
+        message = (
+            "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
+            "directory has been updated to include the mesoscope objective positions used during runtime. "
+            "Manually edit the mesoscope_positions.yaml file to update the position fields with coordinates "
+            "displayed in ScanImage software or ThorLabs pad. Make sure to save the changes to the file by "
+            "using 'CTRL+S' combination."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+
+        # Reloads the positions file each time to ensure positions have been modified.
+        mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(session_data.raw_data.mesoscope_positions_path),
+        )
+
+    # Copies the updated mesoscope positions data into the animal's persistent directory.
+    sh.copy2(
+        src=session_data.raw_data.mesoscope_positions_path,
+        dst=mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
+    )
+
+
+def _generate_zaber_snapshot(
+    session_data: SessionData, mesoscope_data: MesoscopeData, zaber_motors: ZaberMotors
+) -> None:
+    """Creates a snapshot of current Zaber motor positions and saves them to the session raw_data folder and the
+    persistent folder of the animal that participates in the runtime.
+
+    Args:
+        zaber_motors: The ZaberMotors instance for the runtime for which the snapshot is generated.
+        session_data: The SessionData instance for the runtime for which the snapshot is generated.
+        mesoscope_data: The MesoscopeData instance for the runtime for which the snapshot is generated.
+    """
+
+    # Generates the snapshot
+    zaber_positions = zaber_motors.generate_position_snapshot()
+
+    # Saves the newly generated file both to the persistent folder and to the session folder. Note, saving to the
+    # persistent data directory automatically overwrites any existing positions file.
+    zaber_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.zaber_positions_path))
+    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
+
+    message = "Zaber motor positions: Saved."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+
+def _setup_zaber_motors(zaber_motors: ZaberMotors) -> None:
+    """If necessary, carries out the Zaber motor setup and positioning sequence.
+
+    This method is used as part of the startup procedure for most runtimes to prepare the Zaber motors for the specific
+    animal that participates in the runtime.
+
+    Args:
+        zaber_motors: The ZaberMotors instance that manages the Zaber motors used during runtime.
+    """
+
+    # Determines whether to carry out the Zaber motor positioning sequence.
+    message = (
+        f"Do you want to carry out the Zaber motor setup sequence for this animal? Only enter 'no' if the animal "
+        f"is already positioned inside the Mesoscope enclosure."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+
+    # Blocks until a valid answer is received from the user
+    while True:
+        answer = input("Enter 'yes' or 'no': ")
+
+        if answer.lower() == "no":
+            # Aborts method runtime, as no further Zaber setup is required.
+            return
+
+        if answer.lower() == "yes":
+            # Proceeds with the setup sequence.
+            break
+
+    # Since it is now possible to shut down Zaber motors without fixing HeadBarRoll position, requests the user
+    # to verify this manually
+    message = (
+        "Check that the HeadBarRoll motor has a positive (>0) angle. If the angle is negative (<0), the motor will "
+        "collide with the stopper during homing, which will DAMAGE the motor."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is
+    # safe to proceed with motor movements.
+    message = (
+        "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the "
+        "VR screens, and make sure the animal is NOT mounted on the rig."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not
+    # intersect with each other, so it is safe to move all motor assemblies at the same time.
+    zaber_motors.prepare_motors()
+
+    # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
+    # session's position or are set to the default mounting position stored in non-volatile memory. The
+    # LickPort is moved to a position optimized for putting the animal on the VR rig (positioned away from the
+    # HeadBar).
+    zaber_motors.mount_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    # Gives user time to mount the animal and requires confirmation before proceeding further.
+    message = (
+        "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig. Do NOT "
+        "adjust any motors manually at this time. Do NOT install the mesoscope objective."
+    )
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    # Primarily, this restores the LickPort to the previous session's position or default parking position. The
+    # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
+    # manually, they too will be restored to default positions.
+    zaber_motors.restore_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+
+def _reset_zaber_motors(zaber_motors: ZaberMotors) -> None:
+    """Optionally resets Zaber motors back to the hardware-defined parking positions.
+
+    This method is called as part of the shutdown procedure for most runtimes to achieve two major goals. First, it
+    facilitates removing the animal from the Mesoscope enclosure by retracting the lick-port away from its head. Second,
+    it positions Zaber motors in a way that ensures that the motors can be safely homed after potential power cycling.
+
+    Args:
+        zaber_motors: The ZaberMotors instance that manages the Zaber motors used during runtime.
+    """
+
+    # Determines whether to carry out the Zaber motor shutdown sequence.
+    message = (
+        f"Do you want to carry out Zaber motor shutdown sequence? If ending a successful runtime, enter 'yes'. "
+        f"Entering 'yes' does NOT itself move any motors, so it is SAFE. If terminating a failed runtime to "
+        f"restart it, enter 'no'."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    while True:
+        answer = input("Enter 'yes' or 'no': ")
+
+        # Continues with the rest of the shutdown runtime
+        if answer.lower() == "yes":
+            break
+
+        # Ends the runtime, as there is no need to move Zaber motors.
+        elif answer.lower() == "no":
+            # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors
+            # before disconnecting.
+            zaber_motors.disconnect()
+
+            return
+
+    # Helps with removing the animal from the enclosure by retracting the lick-port in the Y-axis (moving it away
+    # from the animal).
+    message = f"Retracting the lick-port away from the animal..."
+    console.echo(message=message, level=LogLevel.INFO)
+
+    zaber_motors.unmount_position()
+
+    message = "Motor Positioning: Complete."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+    message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
+    console.echo(message=message, level=LogLevel.WARNING)
+    input("Enter anything to continue: ")
+
+    zaber_motors.park_position()
+
+    # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors
+    # before disconnecting.
+    zaber_motors.disconnect()
+
+    message = "Zaber motors: Reset."
+    console.echo(message=message, level=LogLevel.SUCCESS)
+
+
+def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, window_checking: bool = False) -> None:
+    """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data or checking the
+    quality of the cranial window.
+
+    This method is used as part of the start() method execution for experiment runtimes to ensure the mesoscope is ready
+    for data acquisition. It is also used by the window_checking runtime to guide the user through the process of
+    generating the required data to potentially support future experiments. It guides the user through all mesoscope
+    preparation steps and, at the end of runtime, ensures the mesoscope is ready for acquisition.
+    """
+
+    # Step 0: Prepares the ScanImagePC and Laser
+    message = (
+        f"Launch ScanImage library on the ScanImagePC by calling 'scanimage' in Matlab command line interface and "
+        f"activate the laser by arming the interlock and turning the activation key."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # Step 1: Find the imaging plane and confirm there are no bubbles
+    # If previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
+    # augment the message to the user.
+    if not window_checking and Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
+        previous_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+            file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path)
+        )
+        # Gives user time to mount the animal and requires confirmation before proceeding further.
+        message = (
+            f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
+            f"window, and find the imaging plane. Do NOT tape the light-shield until you find the imaging "
+            f"plane and confirm no bubbles are present above the imaging plane. "
+            f"Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
+            f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
+            f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
+            f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}."
+        )
+    elif not window_checking:
+        # While it is somewhat unlikely that imaging plane is not established at this time, this is not impossible.
+        # In that case, instructs the user to choose the imaging plane instead of restoring it to the state used
+        # during the previous runtime.
+        message = (
+            f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
+            f"window, and choose the imaging plane. Do NOT tape the light-shield until you confirm no bubbles "
+            f"are present above the chosen imaging plane. Note, all future imaging sessions will use the same "
+            f"imaging plane as established during this runtime!"
+        )
+    else:
+        # Window checking does not use the light-shield and requires two alignment steps: red-dot and GenTeal
+        message = (
+            f"Install the mesoscope objective, and carry out the air red-dot alignment. Then, level the eyes of the "
+            f"animals as well as possible given the constraints of the craniotomy placement, clean the window and "
+            f"repeat the red-dot alignment using GenTeal. After alignment, discover and select the imaging plane. "
+            f"Note, all future imaging sessions will use the same imaging plane as established during this window "
+            f"checking runtime!"
+        )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # Step 2: Carry out the red-dot alignment process. This is not needed for window checking runtimes, as we do not
+    # use the light-shield
+    if not window_checking:
+        message = (
+            "Withdraw the objective ~1000 um away from the imaging plane and tape up the light shield. Confirm that "
+            "there are no bubbles present above the imaging plane and carry out the red-dot (re) alignment. Then, move "
+            "the objective back to the imaging plane and re-align it to the reference MotionEstimator file state "
+            "(if one is available)."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+        input("Enter anything to continue: ")
+
+    # Step 3: Generate the screenshot of the red-dot alignment and the cranial window
+    message = (
+        "Generate the screenshot of the red-dot alignment, the imaging plane state (cell activity), and the "
+        "ScanImage acquisition parameters using 'Win + PrtSc' combination."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # Forces the user to create the dot-alignment and cranial window screenshot on the ScanImage PC before
+    # continuing.
+    screenshots = [screenshot for screenshot in Path(mesoscope_data.scanimagepc_data.meso_data_path).glob("*.png")]
+    while len(screenshots) != 1:
+        message = (
+            f"Unable to retrieve the screenshot from the ScanImage PC. Specifically, expected a single .png file "
+            f"to be stored in the root mesoscope data (mesodata) folder of the ScanImagePC, but instead found "
+            f"{len(screenshots)} candidates. If multiple candidates are present, remove any extra screenshots "
+            f"stored in the folder before proceeding."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+        screenshots = [screenshot for screenshot in Path(mesoscope_data.scanimagepc_data.meso_data_path).glob("*.png")]
+
+    # Transfers the screenshot to the mesoscope_frames folder of the session's raw_data folder
+    screenshot_path = Path(session_data.raw_data.window_screenshot_path)
+    source_path: Path = screenshots[0]
+    sh.move(source_path, screenshot_path)  # Moves the screenshot from the ScanImagePC to the VRPC
+
+    # Also saves the screenshot to the animal's persistent data folder, so that it can be reused during the next
+    # runtime.
+    sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
+
+    # Resets the kinase and phosphatase markers before instructing the user to start the acquisition preparation
+    # function.
+    if not window_checking:
+        mesoscope_data.scanimagepc_data.kinase_path.unlink()
+        mesoscope_data.scanimagepc_data.phosphatase_path.unlink()
+
+    # For window checking, ensures that kinase is removed, while the phosphatase is present. This aborts the runtime
+    # after generating the zstack.tiff and the MotionEstimator.me files.
+    else:
+        mesoscope_data.scanimagepc_data.kinase_path.unlink()
+        mesoscope_data.scanimagepc_data.phosphatase_path.touch()
+
+    # Step 4: Generate the new MotionEstimator file and arm mesoscope for acquisition
+    message = (
+        "Call the setupAcquisition(hSI, hSICtl) function via MATLAB command line on the ScanImagePC. The function "
+        "will carry out the rest of the required preparation steps, including configuring the acquisition "
+        "parameters and starting the acquisition upon receiving a trigger from the VRPC (only for experiment sessions)."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # When preparation function runs successfully, it generates 3 files: MotionEstimator.me, fov.roi, and zstack.tif.
+    target_files = (
+        mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("MotionEstimator.me"),
+        mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("fov.roi"),
+        mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("zstack.tif"),
+    )
+
+    # Waits until the necessary files are generated on the ScanImagePC. This is also used as a secondary check to
+    # ensure that the function was called
+    while not all(f.exists() for f in target_files):
+        message = (
+            f"Unable to retrieve the necessary files from the ScanImagePC. Specifically, expected the following "
+            f"files to be present in the mesoscope_data folder of the ScanImagePC: "
+            f"{', '.join(f.name for f in target_files)}. Rerun the setupAcquisition(hSI, hSICtl) function to generate"
+            f"the requested files."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+
+    # If necessary, persists the MotionEstimator and the fov.roi files to the 'persistent data' folder of the processed
+    # animal on the ScanImagePC.
+    if not mesoscope_data.scanimagepc_data.roi_path.exists():
+        sh.copy2(target_files[1], mesoscope_data.scanimagepc_data.roi_path)
+    if not mesoscope_data.scanimagepc_data.motion_estimator_path.exists():
+        sh.copy2(target_files[0], mesoscope_data.scanimagepc_data.motion_estimator_path)
+
+    # Moves all files to the mesoscope_data directory
+    sh.move(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
+    sh.move(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
+    sh.move(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
+
+    console.echo(message="Mesoscope Preparation: Complete.", level=LogLevel.SUCCESS)
+
+
 class _MesoscopeVRSystem:
     """The base class for all Mesoscope-VR system runtimes.
 
@@ -110,8 +529,6 @@ class _MesoscopeVRSystem:
         _started: Tracks whether runtime assets have been initialized (started).
         _terminated: Tracks whether the user has terminated the runtime.
         _paused: Tracks whether the user has paused the runtime.
-        _asset_tracker: Tracks what runtime assets have been initialized and started to support proper shutdown and
-            cleanup if runtime terminates unexpectedly.
         descriptor: Stores the session descriptor instance of the managed session.
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session, if the
             session is of the 'mesoscope experiment' type.
@@ -211,10 +628,6 @@ class _MesoscopeVRSystem:
         self._terminated: bool = False
         self._paused: bool = False
 
-        # Tracks what assets have been initialized and started to support graceful shutdowns if initialization or
-        # start runtimes fail at any point
-        self._asset_tracker: set[str] = set()
-
         # Pre-runtime check to ensure that the PC has enough cores to run the system.
         # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
         # configuration (3 producers, 3 consumer), 1 core for the central process calling this method, 1 core for
@@ -309,7 +722,6 @@ class _MesoscopeVRSystem:
         self._zaber_motors: ZaberMotors = ZaberMotors(
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
-        self._asset_tracker.add("zaber")
 
         # Defines optional assets used by some, but not all runtimes. Most of these assets are initialized to None by
         # default and are overwritten by the start() method.
@@ -323,12 +735,14 @@ class _MesoscopeVRSystem:
         self._visualizer: BehaviorVisualizer = BehaviorVisualizer()
 
     def __del__(self) -> None:
-        """Attempts to gracefully shut down the runtime before the class is garbage collected.
-
-        This is a safety feature to handle unexpected runtime terminations (crashes). It is designed to properly release
-        all hardware resources and safely cache all collected data before ending the runtime.
-        """
-        self.stop()
+        message = (
+            "MesoscopeVRSystem has encountered an unexpected fatal error during runtime. Attempting to gracefully "
+            "reset zaber motors..."
+        )
+        # Always attempts to carry out graceful zaber motor shutdown procedure whenever possible.
+        console.echo(message=message, level=LogLevel.WARNING)
+        if self._zaber_motors is not None:
+            self._reset_zaber_motors()
 
     def start(self) -> None:
         """Initializes and configures all internal and external assets used during the runtime and guides the user
@@ -359,7 +773,6 @@ class _MesoscopeVRSystem:
 
         # Starts the data logger
         self._logger.start()
-        self._asset_tracker.add("logger")
 
         # Generates and logs the onset timestamp for the Mesoscope-VR system as a whole. This class generates
         # log entries similar to other data acquisition classes, so it requires a temporal reference point for all
@@ -383,12 +796,10 @@ class _MesoscopeVRSystem:
         # Begins acquiring and displaying frames with the face camera. Does not start body cameras and does not save
         # face camera frames to disk at this time to conserve disk space.
         self._cameras.start_face_camera()
-        self._asset_tracker.add("cameras")
 
         # If necessary, carries out the Zaber motor setup and animal mounting sequence. Once this call returns, the
         # runtime assumes that the animal is mounted in the mesoscope enclosure.
         self._setup_zaber_motors()
-        self._asset_tracker.add("restored")
 
         # Generates a snapshot of all zaber motor positions. This serves as an early checkpoint in case the runtime has
         # to be aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart
@@ -409,7 +820,6 @@ class _MesoscopeVRSystem:
 
         # Starts all microcontroller interfaces
         self._microcontrollers.start()
-        self._asset_tracker.add("axmcs")
 
         # Sets the runtime into the Idle state before instructing the user to finalize runtime preparations.
         self.idle()
@@ -420,7 +830,6 @@ class _MesoscopeVRSystem:
 
         # Initializes the runtime control GUI.
         self._ui.start()
-        self._asset_tracker.add("ui")
 
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
@@ -434,7 +843,6 @@ class _MesoscopeVRSystem:
             )
             self._unity = MQTTCommunication(monitored_topics=monitored_topics)
             self._unity.connect()  # Establishes communication with the MQTT broker.
-            self._asset_tracker.add("mqtt")
 
             # Instructs the user to configure the VR scene and verify that it properly interfaces with the VR
             # screens. This also queries the task cue (segment) sequence from Unity. The extracted sequence data is
@@ -449,7 +857,6 @@ class _MesoscopeVRSystem:
 
             # Instructs the user to prepare the mesoscope for data acquisition.
             self._setup_mesoscope()
-            self._asset_tracker.add("mesoscope")
 
             # Initializes the milliseconds-precise timer used to track the delay between consecutive mesoscope
             # frame pulses.
@@ -459,7 +866,6 @@ class _MesoscopeVRSystem:
         # in the QT backend, which is used by all three assets. Also, since the visualizer runs in a concurrent thread,
         # it is best to initialize it as close as possible to the beginning of the main runtime cycle loop.
         self._visualizer.open()
-        self._asset_tracker.add("visualizer")
 
         # Enters into a manual checkpoint loop. This loop holds the runtime and allows the user to use the GUI to test
         # various runtime components.
@@ -519,35 +925,28 @@ class _MesoscopeVRSystem:
         # Switches the system into the IDLE state. Since IDLE state has most modules set to stop-friendly states,
         # this is used as a shortcut to prepare the VR system for shutdown. Also, this clearly marks the end of the
         # main runtime period.
-        if "axmcs" in self._asset_tracker:
-            self.idle()
+        self.idle()
 
         # Shuts down the UI and the visualizer
-        if "ui" in self._asset_tracker:
-            self._ui.shutdown()
+        self._ui.shutdown()
+        self._visualizer.close()
 
-        if "visualizer" in self._asset_tracker:
-            self._visualizer.close()
-
-        if "mqtt" in self._asset_tracker and self._unity is not None:
+        if self._unity is not None:
             self._unity.disconnect()
 
         # Stops all cameras.
-        if "cameras" in self._asset_tracker:
-            self._cameras.stop()
+        self._cameras.stop()
 
-        if "axmcs" in self._asset_tracker:
-            # Stops mesoscope frame acquisition and monitoring if the runtime uses Mesoscope.
-            if "mesoscope" in self._asset_tracker:
-                self._stop_mesoscope()
-                self._microcontrollers.disable_mesoscope_frame_monitoring()
+        # Stops mesoscope frame acquisition and monitoring if the runtime uses Mesoscope.
+        if self._session_data.session_type == _experiment:
+            self._stop_mesoscope()
+            self._microcontrollers.disable_mesoscope_frame_monitoring()
 
-            # Stops all microcontroller interfaces
-            self._microcontrollers.stop()
+        # Stops all microcontroller interfaces
+        self._microcontrollers.stop()
 
         # Stops the data logger instance
-        if "logger" in self._asset_tracker:
-            self._logger.stop()
+        self._logger.stop()
 
         message = "Data Logger: Stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -563,21 +962,16 @@ class _MesoscopeVRSystem:
         if self._session_data.session_type == _experiment:
             self._generate_mesoscope_position_snapshot()
 
-        if "zaber" in self._asset_tracker:
-            # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
-            # to be done before Zaber motors are potentially reset back to parking position. Skips generation of the
-            # zaber snapshot if the runtime terminated before motors were restored to the previous day's imaging
-            # position.
-            if "restored" in self._asset_tracker:
-                self._generate_zaber_snapshot()
+        # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
+        # to be done before Zaber motors are potentially reset back to parking position. Skips generation of the
+        # zaber snapshot if the runtime terminated before motors were restored to the previous day's imaging
+        # position.
+        self._generate_zaber_snapshot()
 
-            # Optionally resets Zaber motors by moving them to the dedicated parking position before shutting down Zaber
-            # connection.
-            self._reset_zaber_motors()
-
-            # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors
-            # before disconnecting.
-            self._zaber_motors.disconnect()
+        # Optionally resets Zaber motors by moving them to the dedicated parking position before shutting down Zaber
+        # connection. Regardless of whether the motors are moved, disconnects from the motors at the end of method
+        # runtime.
+        self._reset_zaber_motors()
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -668,72 +1062,8 @@ class _MesoscopeVRSystem:
         This method is used as part of the start() method execution for most runtimes to prepare the Zaber motors for
         the specific animal that participates in the runtime.
         """
-
-        # Determines whether to carry out the Zaber motor positioning sequence.
-        message = (
-            f"Do you want to carry out the Zaber motor setup sequence for this animal? Only enter 'no' if the animal "
-            f"is already positioned inside the Mesoscope enclosure."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-
-        # Blocks until a valid answer is received from the user
-        while True:
-            answer = input("Enter 'yes' or 'no': ")
-
-            if answer.lower() == "no":
-                # Aborts method runtime, as no further Zaber setup is required.
-                return
-
-            if answer.lower() == "yes":
-                # Proceeds with the setup sequence.
-                break
-
-        # Since it is now possible to shut down Zaber motors without fixing HeadBarRoll position, requests the user
-        # to verify this manually
-        message = (
-            "Check that the HeadBarRoll motor has a positive (>0) angle. If the angle is negative (<0), the motor will "
-            "collide with the stopper during homing, which will DAMAGE the motor."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is
-        # safe to proceed with motor movements.
-        message = (
-            "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the "
-            "VR screens, and make sure the animal is NOT mounted on the rig."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not
-        # intersect with each other, so it is safe to move all motor assemblies at the same time.
-        self._zaber_motors.prepare_motors()
-
-        # Sets the motors into the mounting position. The HeadBar and Wheel are either restored to the previous
-        # session's position or are set to the default mounting position stored in non-volatile memory. The
-        # LickPort is moved to a position optimized for putting the animal on the VR rig (positioned away from the
-        # HeadBar).
-        self._zaber_motors.mount_position()
-
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Gives user time to mount the animal and requires confirmation before proceeding further.
-        message = (
-            "Preparing to move the motors into the imaging position. Mount the animal onto the VR rig. Do NOT "
-            "adjust any motors manually at this time. Do NOT install the mesoscope objective."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        # Primarily, this restores the LickPort to the previous session's position or default parking position. The
-        # HeadBar and Wheel should not move, as they are already 'restored'. However, if the user did move them
-        # manually, they too will be restored to default positions.
-        self._zaber_motors.restore_position()
-
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        # Calls the shared method
+        _setup_zaber_motors(zaber_motors=self._zaber_motors)
 
     def _reset_zaber_motors(self) -> None:
         """Optionally resets Zaber motors back to the hardware-defined parking positions.
@@ -742,43 +1072,8 @@ class _MesoscopeVRSystem:
         removing the animal from the Mesoscope enclosure by retracting the lick-port away from its head. Second, it
         positions Zaber motors in a way that ensures that the motors can be safely homed after potential power cycling.
         """
-
-        # Determines whether to carry out the Zaber motor shutdown sequence.
-        message = (
-            f"Do you want to carry out Zaber motor shutdown sequence? If ending a successful runtime, enter 'yes'. "
-            f"Entering 'yes' does NOT itself move any motors, so it is SAFE. If terminating a failed runtime to "
-            f"restart it, enter 'no'."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        while True:
-            answer = input("Enter 'yes' or 'no': ")
-
-            # Continues with the rest of the shutdown runtime
-            if answer.lower() == "yes":
-                break
-
-            # Ends the runtime, as there is no need to move Zaber motors.
-            elif answer.lower() == "no":
-                return
-
-        # Helps with removing the animal from the enclosure by retracting the lick-port in the Y-axis (moving it away
-        # from the animal).
-        message = f"Retracting the lick-port away from the animal..."
-        console.echo(message=message, level=LogLevel.INFO)
-
-        self._zaber_motors.unmount_position()
-
-        message = "Motor Positioning: Complete."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
-        self._zaber_motors.park_position()
-
-        message = "Zaber motors: Reset."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        # Calls the shared method
+        _reset_zaber_motors(zaber_motors=self._zaber_motors)
 
     def _setup_unity(self) -> None:
         """Guides the user through verifying that Unity is configured to correctly display the task environment on the
@@ -918,119 +1213,22 @@ class _MesoscopeVRSystem:
     def _setup_mesoscope(self) -> None:
         """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data.
 
-        This method is used as part of the start_runtime() method execution for experiment runtimes to ensure the
+        This method is used as part of the start() method execution for experiment runtimes to ensure the
         mesoscope is ready for data acquisition. It guides the user through all mesoscope preparation steps and, at
         the end of runtime, ensures the mesoscope is ready for acquisition.
         """
 
-        # Step 0: Prepare ScanImagePC and laser
-        message = (
-            f"Launch ScanImage library on the ScanImagePC by calling 'scanimage' in Matlab command line interface and "
-            f"activate the laser by arming the interlock and turning the activation key."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Step 1: Find the imaging plane and confirm there are no bubbles
-        # If previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
-        # augment the message to the user.
-        if Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
-            previous_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path)
-            )
-            # Gives user time to mount the animal and requires confirmation before proceeding further.
-            message = (
-                f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
-                f"window, and find the imaging plane. Do NOT tape the light-shield until you find the imaging "
-                f"plane and confirm no bubbles are present above the imaging plane. "
-                f"Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
-                f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
-                f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
-                f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}."
-            )
-        else:
-            # While it is somewhat unlikely that imaging plane is not established at this time, this is not impossible.
-            # In that case, instructs the user to choose the imaging plane instead of restoring it to the state used
-            # during the previous runtime.
-            message = (
-                f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
-                f"window, and choose the imaging plane. Do NOT tape the light-shield until you confirm no bubbles "
-                f"are present above the chosen imaging plane. Note, all future imaging sessions will use the same "
-                f"imaging plane as established during this runtime!"
-            )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Step 2: Carry out the red-dot alignment process
-        message = (
-            "Withdraw the objective ~1000 um away from the imaging plane and tape up the light shield. Confirm that "
-            "there are no bubbles present above the imaging plane and carry out the red-dot (re) alignment. Then, move "
-            "the objective back to the imaging plane and re-align it to the reference MotionEstimator file state "
-            "(if one is available)."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Step 3: Generate the screenshot of the red-dot alignment and the cranial window
-        message = (
-            "Generate the screenshot of the red-dot alignment, the imaging plane state (cell activity), and the "
-            "ScanImage acquisition parameters using 'Win + PrtSc' combination."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Forces the user to create the dot-alignment and cranial window screenshot on the ScanImage PC before
-        # continuing.
-        screenshots = [
-            screenshot for screenshot in Path(self._mesoscope_data.scanimagepc_data.meso_data_path).glob("*.png")
-        ]
-        while len(screenshots) != 1:
-            message = (
-                f"Unable to retrieve the screenshot from the ScanImage PC. Specifically, expected a single .png file "
-                f"to be stored in the root mesoscope data (mesodata) folder of the ScanImagePC, but instead found "
-                f"{len(screenshots)} candidates. If multiple candidates are present, remove any extra screenshots "
-                f"stored in the folder before proceeding."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            input("Enter anything to continue: ")
-            screenshots = [
-                screenshot for screenshot in Path(self._mesoscope_data.scanimagepc_data.meso_data_path).glob("*.png")
-            ]
-
-        # Transfers the screenshot to the mesoscope_frames folder of the session's raw_data folder
-        screenshot_path = Path(self._session_data.raw_data.window_screenshot_path)
-        source_path: Path = screenshots[0]
-        sh.move(source_path, screenshot_path)  # Moves the screenshot from the ScanImagePC to the VRPC
-
-        # Also saves the screenshot to the animal's persistent data folder, so that it can be reused during the next
-        # runtime.
-        sh.copy2(screenshot_path, self._mesoscope_data.vrpc_persistent_data.window_screenshot_path)
-
-        # Step 4: Generate the new MotionEstimator file and arm mesoscope for acquisition
-        message = (
-            "Call the setupAcquisition(hSI, hSICtl) function via MATLAB command line on the ScanImagePC. The function "
-            "will carry out the rest of the required preparation steps, including configuring the acquisition "
-            "parameters and starting the acquisition upon receiving a trigger from the VRPC."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        console.echo(message="Mesoscope Preparation: Complete.", level=LogLevel.SUCCESS)
+        # Calls the shared method
+        _setup_mesoscope(session_data=self._session_data, mesoscope_data=self._mesoscope_data, window_checking=False)
 
     def _generate_zaber_snapshot(self) -> None:
         """Creates a snapshot of current Zaber motor positions and saves them to the session raw_dat folder and the
         persistent folder of the animal that participates in the runtime."""
 
-        # Generates the snapshot
-        zaber_positions = self._zaber_motors.generate_position_snapshot()
-
-        # Saves the newly generated file both to the persistent folder and to the session folder. Note, saving to the
-        # persistent data directory automatically overwrites any existing positions file.
-        zaber_positions.to_yaml(file_path=Path(self._mesoscope_data.vrpc_persistent_data.zaber_positions_path))
-        zaber_positions.to_yaml(file_path=Path(self._session_data.raw_data.zaber_positions_path))
-
-        message = "Zaber motor positions: Saved."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+        # Calls the shared method
+        _generate_zaber_snapshot(
+            session_data=self._session_data, mesoscope_data=self._mesoscope_data, zaber_motors=self._zaber_motors
+        )
 
     def _generate_hardware_state_snapshot(self) -> None:
         """Resolves and generates the snapshot of hardware configuration parameters used by the Mesoscope-VR system
@@ -1095,103 +1293,8 @@ class _MesoscopeVRSystem:
         This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
         positions that will be reused during the next session to restore the imaging field.
         """
-        # The presence of the 'nk.bin' marker indicates that the session has not been properly initialized. Since
-        # this method can be called as part of the emergency shutdown process for a session that encountered an
-        # initialization error, if the marker exists, ends the runtime early.
-        if self._session_data.raw_data.nk_path.exists():
-            return
-
-        # Generates a precursor MesoscopePositions file and dumps it to the session raw_data folder.
-        # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
-        # coordinates with the positions loaded from the snapshot stored inside the persistent_data folder of the
-        # animal.
-        force_mesoscope_positions_update: bool = False
-        if Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
-            sh.copy(
-                self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
-                self._session_data.raw_data.mesoscope_positions_path,
-            )
-            # Loads the previous position data into memory
-            previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=self._session_data.raw_data.mesoscope_positions_path
-            )
-
-            # Asks the user whether they want to update position data. If not, then there is no need to update the data
-            # inside the precursor .YAML file.
-            if not force_mesoscope_positions_update:
-                message = (
-                    f"Do you want to update the mesoscope objective position data stored inside the "
-                    f"mesoscope_positions.yaml file loaded from the previous session?"
-                )
-                console.echo(message=message, level=LogLevel.INFO)
-                while True:
-                    answer = input("Enter 'yes' or 'no': ")
-
-                    # If the answer is 'yes', breaks the loop and executes the data update sequence.
-                    if answer.lower() == "yes":
-                        break
-
-                    # If the answer is 'no', ends method runtime, as there is no need to update the data inside the
-                    # file.
-                    elif answer.lower() == "no":
-                        return
-
-        # If previous position data is not available, creates a new MesoscopePositions instance with default (0)
-        # position values.
-        else:
-            previous_mesoscope_positions = MesoscopePositions()
-
-            # Caches the precursor file to the raw_data session directory.
-            previous_mesoscope_positions.to_yaml(file_path=Path(self._session_data.raw_data.mesoscope_positions_path))
-
-        # Notifies the user that the precursor file is ready for modification.
-        message = "Mesoscope objective position precursor: Created."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-        # Forces the user to update the mesoscope positions file with current mesoscope data
-        message = (
-            "Update the data inside the mesoscope_positions.yaml file stored inside the raw_data session directory "
-            "to reflect the current mesoscope objective position."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file into
-        # memory.
-        mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
-        )
-
-        # Ensures that the user has updated the position data.
-        while (
-            mesoscope_positions.mesoscope_x == previous_mesoscope_positions.mesoscope_x
-            and mesoscope_positions.mesoscope_y == previous_mesoscope_positions.mesoscope_y
-            and mesoscope_positions.mesoscope_z == previous_mesoscope_positions.mesoscope_z
-            and mesoscope_positions.mesoscope_roll == previous_mesoscope_positions.mesoscope_roll
-            and mesoscope_positions.mesoscope_fast_z == previous_mesoscope_positions.mesoscope_fast_z
-            and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
-            and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
-        ):
-            message = (
-                "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
-                "directory has been updated to include the mesoscope objective positions used during runtime. "
-                "Manually edit the mesoscope_positions.yaml file to update the position fields with coordinates "
-                "displayed in ScanImage software or ThorLabs pad. Make sure to save the changes to the file by "
-                "using 'CTRL+S' combination."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            input("Enter anything to continue: ")
-
-            # Reloads the positions file each time to ensure positions have been modified.
-            mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-                file_path=Path(self._session_data.raw_data.mesoscope_positions_path),
-            )
-
-        # Copies the updated mesoscope positions data into the animal's persistent directory.
-        sh.copy2(
-            src=self._session_data.raw_data.mesoscope_positions_path,
-            dst=self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
-        )
+        # Calls the shared method
+        _generate_mesoscope_position_snapshot(session_data=self._session_data, mesoscope_data=self._mesoscope_data)
 
     def _generate_session_descriptor(self) -> None:
         """Updates the contents of the locally stored session descriptor file with runtime data and caches it to
@@ -1401,7 +1504,7 @@ class _MesoscopeVRSystem:
         """Queries the sequence of virtual reality track wall cues for the current task from Unity.
 
         This method is used to both get the static VR task cue sequence and to verify that the Unity task is currently
-        running. It is called as part of the start_runtime() method and to recover from unexpected Unity shutdowns that
+        running. It is called as part of the start() method and to recover from unexpected Unity shutdowns that
         occur during runtime.
 
         Notes:
@@ -2610,9 +2713,9 @@ def lick_training_logic(
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
-        # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
-        # destinations.
-        runtime.stop()
+        # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
+        if not session_data.raw_data.nk_path.exists():
+            runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
 
         message = f"Lick training runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -2771,10 +2874,6 @@ def run_training_logic(
     previous_speed_threshold = copy.copy(initial_speed)
     previous_duration_threshold = copy.copy(initial_duration)
 
-    # Also pre-initializes the speed and duration trackers
-    speed_threshold: np.float64 = np.float64(0)
-    duration_threshold: np.float64 = np.float64(0)
-
     # This one-time tracker is used to initialize the speed and duration threshold visualization.
     once = True
 
@@ -2863,12 +2962,12 @@ def run_training_logic(
 
             # Determines the speed and duration thresholds for each cycle. This factors in the user input via the
             # runtime control GUI. Note, user input has a static resolution of 0.01 cm/s and 0.01 s (10 ms) per step.
-            speed_threshold = np.clip(
+            speed_threshold: np.float64 = np.clip(
                 a=initial_speed + (increase_steps * speed_step) + (runtime.speed_modifier * 0.01),
                 a_min=0.1,  # Minimum value
                 a_max=maximum_speed,  # Maximum value
             )
-            duration_threshold = np.clip(
+            duration_threshold: np.float64 = np.clip(
                 a=initial_duration + (increase_steps * duration_step) + (runtime.duration_modifier * 10),
                 a_min=50,  # Minimum value (0.05 seconds == 50 milliseconds)
                 a_max=maximum_duration,  # Maximum value
@@ -2967,18 +3066,9 @@ def run_training_logic(
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
-        # Directly overwrites the final running speed and duration thresholds in the descriptor instance stored in the
-        # runtime attributes. This ensures the descriptor properly reflects the final thresholds used at the end of
-        # the training.
-        if isinstance(runtime.descriptor, RunTrainingDescriptor):  # This is to appease mypy
-            runtime.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
-            runtime.descriptor.final_run_duration_threshold_s = float(
-                duration_threshold / 1000
-            )  # Converts from s to ms
-
-        # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
-        # destinations.
-        runtime.stop()
+        # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
+        if not session_data.raw_data.nk_path.exists():
+            runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
 
         message = f"Run training runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -3173,9 +3263,9 @@ def experiment_logic(
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
-        # Terminates the runtime. This also triggers data preprocessing and, after that, moves the data to storage
-        # destinations.
-        runtime.stop()
+        # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
+        if not session_data.raw_data.nk_path.exists():
+            runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
 
         message = f"Experiment runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -3278,142 +3368,24 @@ def window_checking_logic(
         zaber_positions_path=mesoscope_data.vrpc_persistent_data.zaber_positions_path
     )
 
-    # Initializes the Zaber positioning sequence. This relies heavily on user feedback to confirm that it is safe to
-    # proceed with motor movements.
-    message = (
-        "Preparing to move Zaber motors into mounting position. Remove the mesoscope objective, swivel out the VR "
-        "screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-        "the mesoscope and / or HARM the animal."
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
-    input("Enter anything to continue: ")
+    # Removes the nk.bin marker.
+    session_data.mark_initialization()
 
-    # Homes all motors in-parallel. The homing trajectories for the motors as they are used now should not intersect
-    # with each other, so it is safe to move both assemblies at the same time.
-    zaber_motors.prepare_motors()
+    # Prepares Zaber motors for data acquisition.
+    _setup_zaber_motors(zaber_motors=zaber_motors)
 
-    # Sets the motors into the mounting position. Since there should not be any previous positions, all motors should
-    # be set to the default mounting position.
-    zaber_motors.mount_position()
-
-    message = "Motor Positioning: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # This section is where most manual manipulations take place, as the user needs to move the objective to the imaging
-    # plane and check the quality of surgery.
-    message = (
-        "Position the mesoscope objective above the imaging field to asses the animal surgery and cranial window "
-        "implantation quality. Exercise caution when moving HeadBar Roll and Pitch axes motors. Make sure you are "
-        "satisfied with the imaging quality before proceeding further."
-    )
-    console.echo(message=message, level=LogLevel.INFO)
-    input("Enter anything to continue: ")
-
-    # Generates the mesoscope positions file precursor in the raw_data folder of the managed session and forces the
-    # user to update it with the current mesoscope objective positions.
-    mesoscope_positions = MesoscopePositions()
-    mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
-    message = f"Mesoscope positions precursor file: Generated."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    message = (
-        "Generate the cranial window screenshot and record the mesoscope objective positions in the precursor "
-        "mesoscope_positions file."
-    )
-    console.echo(message=message, level=LogLevel.INFO)
-    input("Enter anything to continue: ")
+    # Runs the user through the process of preparing the mesoscope and assessing the quality of the animal's cranial
+    # window.
+    _setup_mesoscope(session_data=session_data, mesoscope_data=mesoscope_data, window_checking=True)
 
     # Retrieves current motor positions and packages them into a ZaberPositions object.
-    zaber_positions = zaber_motors.generate_position_snapshot()
+    _generate_zaber_snapshot(session_data=session_data, mesoscope_data=mesoscope_data, zaber_motors=zaber_motors)
 
-    # Dumps zaber data into the raw_data folder of the new session and the persistent_data folder of the animal
-    zaber_positions.to_yaml(file_path=Path(session_data.raw_data.zaber_positions_path))
-    zaber_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.zaber_positions_path))
+    # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
+    _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
 
-    message = f"Zaber motor position snapshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Forces the user to always have a single cranial window screenshot and does not allow proceeding until the
-    # screenshot is generated.
-    mesodata_path = Path(mesoscope_data.scanimagepc_data.meso_data_path)
-    screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-    while len(screenshots) != 1:
-        message = (
-            f"Unable to retrieve the screenshot of the cranial window and the red-dot alignment from the "
-            f"ScanImage PC. Specifically, expected a single .png file to be stored in the root mesoscope "
-            f"data folder of the ScanImagePC, but instead found {len(screenshots)} candidates. Generate a "
-            f"single screenshot of the cranial window and the red-dot alignment on the ScanImagePC by "
-            f"positioning them side-by-side and using 'Win + PrtSc' combination. Remove any extra "
-            f"screenshots stored in the folder before proceeding."
-        )
-        console.echo(message=message, level=LogLevel.ERROR)
-        input("Enter anything to continue: ")
-        screenshots = [screenshot for screenshot in mesodata_path.glob("*.png")]
-
-    # Moves the screenshot from the ScanImagePC to the VRPC
-    screenshot_path: Path = screenshots[0]
-    sh.move(src=screenshot_path, dst=Path(session_data.raw_data.window_screenshot_path))
-
-    # Also saves the screenshot to the animal's persistent data folder, so that it can be reused during the next
-    # runtime.
-    sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
-
-    message = f"Cranial window and red-dot alignment screenshot: Saved."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Forces the user to update the mesoscope positions file with current mesoscope data.
-    mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-        file_path=Path(session_data.raw_data.mesoscope_positions_path)
-    )
-    while (
-        mesoscope_positions.mesoscope_x == 0.0
-        and mesoscope_positions.mesoscope_y == 0.0
-        and mesoscope_positions.mesoscope_z == 0.0
-        and mesoscope_positions.mesoscope_roll == 0.0
-        and mesoscope_positions.mesoscope_fast_z == 0.0
-        and mesoscope_positions.mesoscope_tip == 0.0
-        and mesoscope_positions.mesoscope_tilt == 0.0
-    ):
-        message = (
-            "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data directory "
-            "has been updated to include the mesoscope objective positions used during runtime. Manually edit the "
-            "mesoscope_positions.yaml file and replace the default text under the necessary mesoscope axis position "
-            "fields with coordinates displayed in the ScanImage software or the ThorLabs pad. Make sure to save the "
-            "changes to the file by using 'CTRL+S' combination."
-        )
-        console.echo(message=message, level=LogLevel.ERROR)
-        input("Enter anything to continue: ")
-
-        # Reloads the mesoscope positions data each time to verify whether the user ahs edited the data.
-        mesoscope_positions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(session_data.raw_data.mesoscope_positions_path)
-        )
-
-    # Dumps the updated data into the persistent_data folder of the animal
-    mesoscope_positions.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
-
-    message = f"Mesoscope-VR and cranial window state snapshot: Generated."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    # Helps with removing the animal from the enclosure by retracting the lick-port in the Y-axis (moving it away
-    # from the animal).
-    message = f"Retracting the lick-port away from the animal..."
-    console.echo(message=message, level=LogLevel.INFO)
-
-    zaber_motors.unmount_position()
-
-    message = "Motor Positioning: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
-
-    message = "Uninstall the mesoscope objective and REMOVE the animal from the VR rig."
-    console.echo(message=message, level=LogLevel.WARNING)
-    input("Enter anything to continue: ")
-
-    # Resets zaber motors for the next runtime
-    zaber_motors.park_position()
-    zaber_motors.disconnect()
-    message = "Zaber motors: Reset."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+    # Resets Zaber motors to their original positions.
+    _reset_zaber_motors(zaber_motors=zaber_motors)
 
     # Terminates the face camera
     cameras.stop()
@@ -3427,7 +3399,7 @@ def window_checking_logic(
     preprocess_session_data(session_data=session_data)
 
     # Ends the runtime
-    message = f"Window checking runtime: Terminated."
+    message = f"Window checking runtime: Complete."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
 

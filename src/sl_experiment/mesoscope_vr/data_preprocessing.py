@@ -504,8 +504,8 @@ def _pull_mesoscope_data(
 
     This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
     before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
-    contains only the frames acquired during the current session runtime and the MotionEstimator.me file used for
-    motion registration.
+    contains only the frames acquired during the current session runtime alongside additional data, such as
+    MotionEstimation .csv files.
 
     Notes:
         It is safe to call this function for sessions that did not acquire mesoscope frames. It is designed to
@@ -517,10 +517,6 @@ def _pull_mesoscope_data(
 
         This function is configured to parallelize data transfer and verification to optimize runtime speeds where
         possible.
-
-        When the function is called for the first time for a particular project and animal combination, it also
-        'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
-        reference for all further motion estimation procedures carried out during future sessions.
 
     Args:
         session_data: The SessionData instance for the processed session.
@@ -560,16 +556,6 @@ def _pull_mesoscope_data(
         file_names: tuple[str, ...] = tuple([file.name for file in files])
         error = False  # Resets the error tracker at the beginning of each cycle
 
-        # Ensures the folder contains motion estimator data files
-        if "MotionEstimator.me" not in file_names:
-            message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
-                f"required MotionEstimator.me file."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            error = True
-
         # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file.
         # More recent runtimes also generate a zstack.tif file and a zstack.mat file.
         if len(files) < 2:
@@ -603,13 +589,6 @@ def _pull_mesoscope_data(
             f"data processing and terminating the preprocessing runtime."
         )
         console.error(message=message, error=RuntimeError)
-
-    # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
-    # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
-    # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = Path(mesoscope_data.scanimagepc_data.motion_estimator_path)
-    if not persistent_motion_estimator_path.exists():
-        sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
 
     # Generates the checksum for the source folder if transfer integrity verification is enabled.
     if verify_transfer_integrity:
@@ -784,12 +763,6 @@ def _preprocess_mesoscope_directory(
     metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
     np.savez_compressed(frame_variant_metadata_path, **metadata_dict)
 
-    # Moves motion estimator files to the mesoscope_frames directory. This way, ALL mesoscope-related data is stored
-    # under mesoscope_frames.
-    sh.move(
-        src=image_directory.joinpath("MotionEstimator.me"),
-        dst=output_directory.joinpath("MotionEstimator.me"),
-    )
     # If configured, the processing function ensures that
     if remove_sources:
         _delete_directory(image_directory)
