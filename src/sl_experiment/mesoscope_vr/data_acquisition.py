@@ -429,6 +429,7 @@ class _MesoscopeVRSystem:
             monitored_topics = (
                 self._cue_sequence_topic,  # Used as part of Unity (re) initialization
                 self._unity_termination_topic,  # Used to detect Unity shutdown events
+                self._unity_startup_topic,  # Used to detect Unity startup events
                 self._microcontrollers.valve.mqtt_topic,  # Allows Unity to operate the valve
             )
             self._unity = MQTTCommunication(monitored_topics=monitored_topics)
@@ -510,6 +511,7 @@ class _MesoscopeVRSystem:
 
         # Resets the _started tracker
         self._started = False
+        self._terminated = False
 
         message = "Terminating Mesoscope-VR system runtime..."
         console.echo(message=message, level=LogLevel.INFO)
@@ -864,18 +866,19 @@ class _MesoscopeVRSystem:
         console.echo(message=message, level=LogLevel.INFO)
 
         while True:
-            # Advances the Unity scene forward by 0.01 Unity unit (~ 0.1 cm)
-            json_string = dumps(obj={"movement": 0.01})
+            delay_timer.delay_noblock(delay=100)  # Prevents the motion from being too fast
+
+            # Advances the Unity scene forward by 0.1 Unity unit (~ 10 mm)
+            json_string = dumps(obj={"movement": 0.1})
             byte_array = json_string.encode("utf-8")
             self._unity.send_data(topic=self._microcontrollers.wheel_encoder.mqtt_topic, payload=byte_array)
 
             # Parses incoming data
             if self._unity.has_data:
-                delay_timer.delay_noblock(delay=200)  # Ensures that the motion is capped at ~ 50 mm / second
                 topic, _ = self._unity.get_data()
 
                 # If received data is a termination message, asks the user if the loop needs to be broken
-                if topic == self._unity_startup_topic:
+                if topic == self._unity_termination_topic:
                     message = f"Unity termination: Detected. Do you want to end the Unity verification runtime?"
                     console.echo(message=message, level=LogLevel.INFO)
                     answer = input(
@@ -1548,11 +1551,11 @@ class _MesoscopeVRSystem:
                 message = "Mesoscope acquisition trigger: Sent. Waiting for the mesoscope frame acquisition to start..."
                 console.echo(message=message, level=LogLevel.INFO)
 
-                # Waits at most 2 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take
+                # Waits at most 5 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take
                 # ~ 1 second of downtime.
                 timeout_timer.reset()
-                while timeout_timer.elapsed < 2:
-                    if self._microcontrollers.mesoscope_frame_count < 10:
+                while timeout_timer.elapsed < 5:
+                    if self._microcontrollers.mesoscope_frame_count > 10:
                         # Ends the runtime
                         message = "Mesoscope frame acquisition: Started."
                         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1565,7 +1568,7 @@ class _MesoscopeVRSystem:
                 # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
                 message = (
                     f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to "
-                    f"receive 10 frame acquisition triggers over 2 seconds. It is likely that the mesoscope has not "
+                    f"receive 10 frame acquisition triggers over 5 seconds. It is likely that the mesoscope has not "
                     f"been armed for externally-triggered frame acquisition or that the mesoscope frame monitoring "
                     f"module is not functioning. Make sure the Mesoscope is configured for data acquisition before "
                     f"continuing and retry the mesoscope activation."
