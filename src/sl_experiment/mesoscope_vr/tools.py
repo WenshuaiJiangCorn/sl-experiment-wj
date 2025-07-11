@@ -144,15 +144,31 @@ class _ScanImagePCData:
     """Stores the path to the 'reference' motion estimator file generated during the first experiment session of each 
     animal. This file is kept on the ScanImagePC to image the same population of cells across all experiment 
     sessions."""
+    roi_path: Path = field(default_factory=Path, init=False)
+    """Stores the path to the 'reference' fov.roi file generated during the first experiment session of each animal. 
+    This file is kept on the ScanImagePC in addition to the motion estimator file. It contains the snapshot of the 
+    ROI used during imaging."""
+    kinase_path: Path = field(default_factory=Path, init=False)
+    """Stores the path to the 'kinase.bin' file. The MATLAB runtime function (setupAcquisition.m) that runs on the 
+    ScanImagePC uses the presence of the file as a signal that the VRPC is currently acquiring a session. In turn, this
+    locks the function into data acquisition mode until the kinase marker is removed by the VRPC."""
+    phosphatase_path: Path = field(default_factory=Path, init=False)
+    """Stores the path to the 'phosphatase.bin' file. This marker is used together with the 'kinase.bin' marker. The 
+    presence of the 'phosphatase.bin' file is used to disable the acquisition state lock and allows the MATLAB runtime 
+    function to end its runtime even if the acquisition has never been started. This is used to gracefully end runtimes
+    that encountered an error during the initialization process."""
 
     def __post_init__(
         self,
     ) -> None:
         # Resolves additional paths using the input root paths
         self.motion_estimator_path = self.persistent_data_path.joinpath("MotionEstimator.me")
+        self.roi_path = self.persistent_data_path.joinpath("fov.roi")
         self.session_specific_path = self.meso_data_path.joinpath(self.session_name)
         self.ubiquitin_path = self.session_specific_path.joinpath("ubiquitin.bin")
         self.mesoscope_data_path = self.meso_data_path.joinpath("mesoscope_data")
+        self.kinase_path = self.mesoscope_data_path.joinpath("kinase.bin")
+        self.phosphatase_path = self.mesoscope_data_path.joinpath("phosphatase.bin")
 
         # Ensures that the shared data directory and the persistent data directory exist.
         ensure_directory_exists(self.mesoscope_data_path)

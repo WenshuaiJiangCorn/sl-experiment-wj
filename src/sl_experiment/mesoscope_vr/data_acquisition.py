@@ -20,7 +20,7 @@ from ataraxis_time import PrecisionTimer
 from sl_shared_assets import (
     SessionData,
     ExperimentState,
-    TrialCueSequence,
+    ExperimentTrial,
     MesoscopePositions,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
@@ -108,6 +108,8 @@ class _MesoscopeVRSystem:
         _started: Tracks whether runtime assets have been initialized (started).
         _terminated: Tracks whether the user has terminated the runtime.
         _paused: Tracks whether the user has paused the runtime.
+        _asset_tracker: Tracks what runtime assets have been initialized and started to support proper shutdown and
+            cleanup if runtime terminates unexpectedly.
         descriptor: Stores the session descriptor instance of the managed session.
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session, if the
             session is of the 'mesoscope experiment' type.
@@ -206,6 +208,10 @@ class _MesoscopeVRSystem:
         self._terminated: bool = False
         self._paused: bool = False
 
+        # Tracks what assets have been initialized and started to support graceful shutdowns if initialization or
+        # start runtimes fail at any point
+        self._asset_tracker: set[str] = set()
+
         # Pre-runtime check to ensure that the PC has enough cores to run the system.
         # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
         # configuration (3 producers, 3 consumer), 1 core for the central process calling this method, 1 core for
@@ -300,6 +306,7 @@ class _MesoscopeVRSystem:
         self._zaber_motors: ZaberMotors = ZaberMotors(
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
+        self._asset_tracker.add("zaber")
 
         # Defines optional assets used by some, but not all runtimes. Most of these assets are initialized to None by
         # default and are overwritten by the start() method.
@@ -349,6 +356,7 @@ class _MesoscopeVRSystem:
 
         # Starts the data logger
         self._logger.start()
+        self._asset_tracker.add("logger")
 
         # Generates and logs the onset timestamp for the Mesoscope-VR system as a whole. This class generates
         # log entries similar to other data acquisition classes, so it requires a temporal reference point for all
@@ -372,10 +380,12 @@ class _MesoscopeVRSystem:
         # Begins acquiring and displaying frames with the face camera. Does not start body cameras and does not save
         # face camera frames to disk at this time to conserve disk space.
         self._cameras.start_face_camera()
+        self._asset_tracker.add("cameras")
 
         # If necessary, carries out the Zaber motor setup and animal mounting sequence. Once this call returns, the
         # runtime assumes that the animal is mounted in the mesoscope enclosure.
         self._setup_zaber_motors()
+        self._asset_tracker.add("restored")
 
         # Generates a snapshot of all zaber motor positions. This serves as an early checkpoint in case the runtime has
         # to be aborted in a non-graceful way (without running the stop() sequence). This way, next runtime will restart
@@ -396,6 +406,7 @@ class _MesoscopeVRSystem:
 
         # Starts all microcontroller interfaces
         self._microcontrollers.start()
+        self._asset_tracker.add("axmcs")
 
         # Sets the runtime into the Idle state before instructing the user to finalize runtime preparations.
         self.idle()
@@ -406,6 +417,7 @@ class _MesoscopeVRSystem:
 
         # Initializes the runtime control GUI.
         self._ui.start()
+        self._asset_tracker.add("ui")
 
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
@@ -418,6 +430,7 @@ class _MesoscopeVRSystem:
             )
             self._unity = MQTTCommunication(monitored_topics=monitored_topics)
             self._unity.connect()  # Establishes communication with the MQTT broker.
+            self._asset_tracker.add("mqtt")
 
             # Instructs the user to configure the VR scene and verify that it properly interfaces with the VR
             # screens.
@@ -436,6 +449,7 @@ class _MesoscopeVRSystem:
 
             # Instructs the user to prepare the mesoscope for data acquisition.
             self._setup_mesoscope()
+            self._asset_tracker.add("mesoscope")
 
             # Initializes the milliseconds-precise timer used to track the delay between consecutive mesoscope
             # frame pulses.
@@ -445,10 +459,16 @@ class _MesoscopeVRSystem:
         # in the QT backend, which is used by all three assets. Also, since the visualizer runs in a concurrent thread,
         # it is best to initialize it as close as possible to the beginning of the main runtime cycle loop.
         self._visualizer.open()
+        self._asset_tracker.add("visualizer")
 
         # Enters into a manual checkpoint loop. This loop holds the runtime and allows the user to use the GUI to test
         # various runtime components.
         self._checkpoint()
+
+        # If the user chooses to abort (terminate) the runtime during checkpoint, shorts to the graceful resource
+        # de-allocation via stop() method.
+        if self._terminated:
+            self.stop()
 
         message = f"Initiating data acquisition..."
         console.echo(message=message, level=LogLevel.INFO)
@@ -484,8 +504,9 @@ class _MesoscopeVRSystem:
         safely transfer it to the long-term storage destinations.
         """
 
-        # Prevents stopping an already stopped process.
-        if not self._started:
+        # Prevents stopping an already stopped process. Note, since it is possible to terminate the runtime from
+        # the start() method runtime, if the terminated flag is set, also attempts to carry out the stop procedure.
+        if not self._started and not self._terminated:
             return
 
         # Resets the _started tracker
@@ -494,28 +515,38 @@ class _MesoscopeVRSystem:
         message = "Terminating Mesoscope-VR system runtime..."
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Shuts down the UI and the visualizer
-        self._ui.shutdown()
-        self._visualizer.close()
-
         # Switches the system into the IDLE state. Since IDLE state has most modules set to stop-friendly states,
         # this is used as a shortcut to prepare the VR system for shutdown. Also, this clearly marks the end of the
         # main runtime period.
-        self.idle()
+        if "axmcs" in self._asset_tracker:
+            self.idle()
+
+        # Shuts down the UI and the visualizer
+        if "ui" in self._asset_tracker:
+            self._ui.shutdown()
+
+        if "visualizer" in self._asset_tracker:
+            self._visualizer.close()
+
+        if "mqtt" in self._asset_tracker and self._unity is not None:
+            self._unity.disconnect()
 
         # Stops all cameras.
-        self._cameras.stop()
+        if "cameras" in self._asset_tracker:
+            self._cameras.stop()
 
-        # Stops mesoscope frame acquisition and monitoring if the runtime is a Mesoscope experiment.
-        if self._session_data.session_type == _experiment:
-            self._stop_mesoscope()
-            self._microcontrollers.disable_mesoscope_frame_monitoring()
+        if "axmcs" in self._asset_tracker:
+            # Stops mesoscope frame acquisition and monitoring if the runtime uses Mesoscope.
+            if "mesoscope" in self._asset_tracker:
+                self._stop_mesoscope()
+                self._microcontrollers.disable_mesoscope_frame_monitoring()
 
-        # Stops all microcontroller interfaces
-        self._microcontrollers.stop()
+            # Stops all microcontroller interfaces
+            self._microcontrollers.stop()
 
         # Stops the data logger instance
-        self._logger.stop()
+        if "logger" in self._asset_tracker:
+            self._logger.stop()
 
         message = "Data Logger: Stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -531,17 +562,20 @@ class _MesoscopeVRSystem:
         if self._session_data.session_type == _experiment:
             self._generate_mesoscope_position_snapshot()
 
-        # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
-        # to be done before Zaber motors are potentially reset back to parking position.
-        self._generate_zaber_snapshot()
+        if "zaber" in self._asset_tracker:
+            # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
+            # to be done before Zaber motors are potentially reset back to parking position. Skips generating zaber
+            # snapshot if the runtime terminated before motors were restored to the previous day's imaging position.
+            if self._asset_tracker.add("restored"):
+                self._generate_zaber_snapshot()
 
-        # Optionally resets Zaber motors by moving them to the dedicated parking position before shutting down Zaber
-        # connection.
-        self._reset_zaber_motors()
+            # Optionally resets Zaber motors by moving them to the dedicated parking position before shutting down Zaber
+            # connection.
+            self._reset_zaber_motors()
 
-        # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors before
-        # disconnecting.
-        self._zaber_motors.disconnect()
+            # Disconnects from Zaber motors. This does not change motor positions, but does lock (park) all motors
+            # before disconnecting.
+            self._zaber_motors.disconnect()
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -614,6 +648,11 @@ class _MesoscopeVRSystem:
             if self._ui.show_reward != self._show_reward_zone_boundary:
                 self._show_reward_zone_boundary = self._ui.show_reward
                 self._toggle_show_reward(show_reward=self._show_reward_zone_boundary)
+
+            # If the user decides to terminate the runtime at the checkpoint, transitions into the shutdown state
+            if self._ui.exit_signal:
+                self._terminated = True
+                break
 
         # Ensures the valve is closed before continuing.
         self._microcontrollers.close_valve()
@@ -1242,7 +1281,7 @@ class _MesoscopeVRSystem:
             return
 
         # Extracts the list of trial cue sequences supported by the managed experiment runtime.
-        trials: list[TrialCueSequence] = [trial for trial in self._experiment_configuration.trial_structures.values()]
+        trials: list[ExperimentTrial] = [trial for trial in self._experiment_configuration.trial_structures.values()]
 
         # Extracts trial motif (cue sequences for each trial type) and their corresponding distances in cm.
         trial_motifs: list[NDArray[np.uint8]] = [np.array(trial.cue_sequence, dtype=np.uint8) for trial in trials]
@@ -1386,20 +1425,19 @@ class _MesoscopeVRSystem:
         raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
     def _start_mesoscope(self) -> None:
-        """Starts sending the frame acquisition start TTL pulses to the mesoscope and waits for the frame acquisition to
-        begin.
+        """Generates the acquisition start marker file on the ScanImagePC and waits for the frame acquisition to begin.
 
         This method is used internally to start the mesoscope frame acquisition as part of the runtime startup
         process and to verify that the mesoscope is available and properly configured to acquire frames
-        based on the input triggers. Also, it is used to recover from unexpected mesoscope terminations.
+        based on the input triggers.
 
         Notes:
             This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
             prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
 
         Raises:
-            RuntimeError: If the mesoscope does not confirm frame acquisition within 20 seconds after the
-                acquisition trigger is sent and the user chooses to abort the runtime.
+            RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
+                acquisition marker file is created and the user chooses to abort the runtime.
         """
 
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
@@ -1410,50 +1448,66 @@ class _MesoscopeVRSystem:
         while outcome != "abort":
             self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame counter
 
-            # Ensures that the mesoscope is not acquiring frames. This critical to ensure that the mesoscope data folder
-            # does nto contain any unwanted / unexpected data.
-            self._stop_mesoscope()
+            # Ensures that the mesoscope is not currently acquiring frames. If it is acquiring frames, then it has not
+            # been set up correctly for acquisition.
+            timeout_timer.delay_noblock(1)  # Waits for 1 second to assess whether the mesoscope is acquiring frames.
 
-            # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data inside
-            # the mesoscope folder always perfectly aligns with the number of frame acquisition triggers.
-            for pattern in ["*.tif", "*.tiff"]:
-                for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
-                    # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
-                    # of the acquisition setup.
-                    if "zstack" not in file.name:
-                        file.unlink(missing_ok=True)
+            # If mesoscope has acquired frames over the delay period, it is not prepared for acquisition.
+            if self._microcontrollers.mesoscope_frame_count > 0:
+                message = (
+                    f"Unable to trigger mesoscope frame acquisition, as the mesoscope is already acquiring frames. "
+                    f"This indicates that the setupAcquisition function did not run as expected, as that function is "
+                    f"meant to lock the mesoscope down for acquisition and wait for VRPC to trigger it. Re-run the "
+                    f"setupAcquisition function before retrying."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
 
-            # Sends mesoscope frame acquisition trigger. Calling this method instructs the Actor microcontroller to
-            # repeatedly send the trigger at 5 ms intervals.
-            self._microcontrollers.start_mesoscope()
+            # Otherwise, proceeds with the startup process
+            else:
 
-            # Ensures that the frame acquisition starts as expected
-            message = "Mesoscope acquisition trigger: Sent. Waiting for the mesoscope frame acquisition to start..."
-            console.echo(message=message, level=LogLevel.INFO)
+                # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data
+                # inside the mesoscope folder always perfectly aligns with the number of frame acquisition triggers
+                # recorded by the frame monitor module.
+                for pattern in ["*.tif", "*.tiff"]:
+                    for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
+                        # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
+                        # of the acquisition setup procedure.
+                        if "zstack" not in file.name:
+                            file.unlink(missing_ok=True)
 
-            # Waits at most 10 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take ~ 1
-            # second of downtime.
-            timeout_timer.reset()
-            while timeout_timer.elapsed < 10:
-                if self._microcontrollers.mesoscope_frame_count < 10:
-                    # Ends the runtime
-                    message = "Mesoscope frame acquisition: Started."
-                    console.echo(message=message, level=LogLevel.SUCCESS)
+                # Starts the acquisition process by creating the kinase.bin marker. The acquisition function running
+                # on the ScanImagePC starts the acquisition process as soon as it detects the presence of the marker
+                # file.
+                self._mesoscope_data.scanimagepc_data.kinase_path.touch()
 
-                    # Prepares assets use to detect and recover from unwanted acquisition interruptions.
-                    self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
-                    self._mesoscope_timer.reset()  # type: ignore
-                    return
+                # Ensures that the frame acquisition starts as expected
+                message = "Mesoscope acquisition trigger: Sent. Waiting for the mesoscope frame acquisition to start..."
+                console.echo(message=message, level=LogLevel.INFO)
 
-            # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
-            message = (
-                f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to receive "
-                f"10 frame acquisition triggers over 10 seconds. It is likely that the mesoscope has not been armed "
-                f"for externally-triggered frame acquisition or that the mesoscope trigger or frame monitoring modules "
-                f"are not functional. Make sure the Mesoscope is configured for data acquisition before continuing and "
-                f"retry the mesoscope activation."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
+                # Waits at most 2 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take
+                # ~ 1 second of downtime.
+                timeout_timer.reset()
+                while timeout_timer.elapsed < 2:
+                    if self._microcontrollers.mesoscope_frame_count < 10:
+
+                        # Ends the runtime
+                        message = "Mesoscope frame acquisition: Started."
+                        console.echo(message=message, level=LogLevel.SUCCESS)
+
+                        # Prepares assets use to detect and recover from unwanted acquisition interruptions.
+                        self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
+                        self._mesoscope_timer.reset()  # type: ignore
+                        return
+
+                # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
+                message = (
+                    f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to "
+                    f"receive 10 frame acquisition triggers over 2 seconds. It is likely that the mesoscope has not "
+                    f"been armed for externally-triggered frame acquisition or that the mesoscope frame monitoring "
+                    f"module is not functioning. Make sure the Mesoscope is configured for data acquisition before "
+                    f"continuing and retry the mesoscope activation."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
 
         message = f"Runtime aborted due to user request."
@@ -1470,23 +1524,26 @@ class _MesoscopeVRSystem:
             triggers.
         """
 
-        # Sends acquisition stop trigger to the mesoscope.
-        self._microcontrollers.stop_mesoscope()
+        # As a fall-back mechanism for terminating runtimes that failed to initialize, generates the phosphatase.bin
+        # marker. The presence of this marker ends the runtime of the MATLAB function if the kinase.bin marker was
+        # never created.
+        self._mesoscope_data.scanimagepc_data.phosphatase_path.touch()
+
+        # Removes the acquisition marker file, which causes the runtime control MATLAB function to stop the acquisition.
+        self._mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
 
         # Blocks until the Mesoscope stops sending frame acquisition pulses to the microcontroller.
         message = "Waiting for the Mesoscope to stop acquiring frames..."
         console.echo(message=message, level=LogLevel.INFO)
-        previous_frame_count = self._microcontrollers.mesoscope_frame_count
+        self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array
         while True:
             # Delays for 2 seconds. Mesoscope acquires frames at 10 Hz, so if there are no incoming triggers for that
             # period of time, it is safe to assume that the acquisition has stopped.
             self._timestamp_timer.delay_noblock(delay=2000000)
-            if previous_frame_count == self._microcontrollers.mesoscope_frame_count:
+            if self._microcontrollers.mesoscope_frame_count == 0:
                 break  # Breaks the loop
             else:
-                # Re-sends the stop trigger.
-                self._microcontrollers.stop_mesoscope()
-                previous_frame_count = self._microcontrollers.mesoscope_frame_count
+                self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array and waits more
 
     def _toggle_lick_guidance(self, enable_guidance: bool) -> None:
         """Sets the VR task to either require the animal to lick in the reward zone to get water or to get rewards
@@ -1984,6 +2041,10 @@ class _MesoscopeVRSystem:
                 # only done when guided trials are enabled.
                 if self._guided_trials != 0:  # More efficient comparison, should not dip below zero.
                     self._guided_trials -= 1
+
+                    # If the cycle decremented the guided trials tracker to 0, disables guidance mode.
+                    if self._guided_trials == 0:
+                        self._toggle_lick_guidance(enable_guidance=False)
 
                 # Also flips the trial reward flag to 1 if the animal receives the reward during this trial.
                 self._trial_rewarded = True

@@ -7,7 +7,7 @@ import click
 from sl_shared_assets import (
     SessionData,
     ExperimentState,
-    TrialCueSequence,
+    ExperimentTrial,
     MesoscopeSystemConfiguration,
     MesoscopeExperimentConfiguration,
     get_system_configuration_data,
@@ -181,7 +181,7 @@ def generate_project_data_structure(project: str) -> None:
     "--trial_count",
     type=int,
     required=True,
-    help="The total number of unique trial motifs (wall cue sequences) in the experiment.",
+    help="The total number of unique trial types used in the experiment.",
 )
 def generate_experiment_configuration_file(project: str, experiment: str, state_count: int, trial_count: int) -> None:
     """Generates a precursor experiment configuration .yaml file for the target experiment inside the project's
@@ -222,20 +222,20 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
             recovery_guided_trials=3,
         )
 
-    # Loops over the number of requested trial motifs and, for each, generates a precursor trial motif inside the
-    # 'trials' dictionary.
+    # Loops over the number of requested trial motifs and, for each, generates an ExperimentTrial instance.
     trials = {}
     for trial in range(trial_count):
-        trials[f"trial_motif_{trial + 1}"] = TrialCueSequence(
-            cue_sequence=[0, 1, 0, 2, 0, 3, 0, 4],
+        trials[f"trial_type_{trial + 1}"] = ExperimentTrial(
+            cue_sequence=[1, 0, 2, 0, 3, 0, 4, 0],
             trial_length_cm=240,
             trial_length_unity_unit=24,
+            trial_reward_size_ul=5.0
         )
 
     # Depending on the acquisition system, packs state data into the appropriate experiment configuration class and
     # saves it to the project's configuration folder as a .yaml file.
     if acquisition_system.name == "mesoscope-vr":
-        experiment_configuration = MesoscopeExperimentConfiguration(experiment_states=states)
+        experiment_configuration = MesoscopeExperimentConfiguration(experiment_states=states, trial_structures=trials)
 
     else:
         message = (

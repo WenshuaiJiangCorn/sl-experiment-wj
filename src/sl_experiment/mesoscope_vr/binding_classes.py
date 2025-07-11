@@ -437,8 +437,6 @@ class MicroControllerInterfaces:
         _encoder_monitoring: Tracks the current encoder monitoring state.
         _break_state: Tracks the current break state.
         _delay_timer: Stores a millisecond-precise timer used by certain sequential command methods.
-        mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
-        mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
         wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
         valve: The interface that controls the solenoid water valve that delivers water to the animal.
         screens: The interface that controls the power state of the VR display screens.
@@ -484,14 +482,6 @@ class MicroControllerInterfaces:
         # TTL trigger, etc.
 
         # Module interfaces:
-        self.mesoscope_start: TTLInterface = TTLInterface(
-            module_id=np.uint8(1),  # Hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.mesoscope_stop: TTLInterface = TTLInterface(
-            module_id=np.uint8(2),  # Hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
         self.wheel_break = BreakInterface(
             minimum_break_strength=self._system_configuration.microcontrollers.minimum_break_strength_g_cm,
             maximum_break_strength=self._system_configuration.microcontrollers.maximum_break_strength_g_cm,
@@ -513,7 +503,7 @@ class MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,  # Hardcoded
             microcontroller_usb_port=self._system_configuration.microcontrollers.actor_port,
             data_logger=data_logger,
-            module_interfaces=(self.mesoscope_start, self.mesoscope_stop, self.wheel_break, self.valve, self.screens),
+            module_interfaces=(self.wheel_break, self.valve, self.screens),
         )
 
         # SENSOR. Sensor AMC controls the hardware that collects data at regular intervals. This includes lick sensors,
@@ -609,15 +599,6 @@ class MicroControllerInterfaces:
             delta_threshold=self._system_configuration.microcontrollers.wheel_encoder_delta_threshold_pulse,
         )
 
-        # Configures mesoscope start and stop trigger pulse durations
-        ttl_pulse_duration: float = convert_time(  # type: ignore
-            time=self._system_configuration.microcontrollers.mesoscope_ttl_pulse_duration_ms,
-            from_units="ms",
-            to_units="us",
-        )
-        self.mesoscope_start.set_parameters(pulse_duration=np.uint32(ttl_pulse_duration))
-        self.mesoscope_stop.set_parameters(pulse_duration=np.uint32(ttl_pulse_duration))
-
         # Configures screen trigger pulse duration
         screen_pulse_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.screen_trigger_pulse_duration_ms,
@@ -705,25 +686,6 @@ class MicroControllerInterfaces:
         if self._encoder_monitoring:
             self.wheel_encoder.reset_command_queue()
             self._encoder_monitoring = False
-
-    def start_mesoscope(self) -> None:
-        """Starts sending acquisitions start TTL triggers to the mesoscope at 5-millisecond intervals.
-
-        ScanImage version 2023 is configured to ignore acquisition start triggers while an acquisition is already
-        in-progress. The current approach of sending 'keep alive' triggers ensures that if a DAQ bug is encountered and
-        ScanImage stops the acquisition, the acquisition restarts within 5 milliseconds of the bug.
-        """
-        self.mesoscope_start.send_pulse(repetition_delay=np.uint32(5000))
-
-    def stop_mesoscope(self) -> None:
-        """Sends the acquisition stop TTL pulse to the mesoscope."""
-        self.mesoscope_start.reset_command_queue()  # Stops sending acquisition start triggers
-        self._delay_timer.delay_noblock(delay=200)  # Delays for 200 msec to ensure that the start triggers are off.
-        self.mesoscope_stop.send_pulse()  # Sends the acquisition stop trigger
-
-        # As a safety measure, sends a follow-up trigger after 200 milliseconds.
-        self._delay_timer.delay_noblock(delay=200)
-        self.mesoscope_stop.send_pulse()
 
     def enable_break(self) -> None:
         """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
