@@ -77,6 +77,8 @@ class _MesoscopeVRSystem:
         _state_map: Maps the integer state-codes used to represent VR system states to human-readable string-names.
         _unity_termination_topic: Stores the MQTT topic used by Unity task environment to announce when it terminates
             the active game state (stops 'playing' the task environment).
+        _unity_startup_topic: Stores the MQTT topic used by Unity task environment to announce when it starts
+            the active game state (starts 'playing' the task environment).
         _cue_sequence_topic: Stores the MQTT topic used by Unity task environment to respond to the request of the VR
             wall cue sequence sent to the '_cue_sequence_request_topic'.
         _cue_sequence_request_topic: Stores the MQTT topic used to request the Unity virtual task to send the sequence
@@ -176,6 +178,7 @@ class _MesoscopeVRSystem:
 
     # Stores the names of MQTT topics that need to be monitored for incoming messages sent by Unity game engine.
     _unity_termination_topic: str = "Gimbl/Session/Stop"
+    _unity_startup_topic: str = "Gimbl/Session/Start"
     _cue_sequence_topic: str = "CueSequence/"
     _cue_sequence_request_topic: str = "CueSequenceTrigger/"
     _disable_guidance_topic: str = "MustLick/True/"
@@ -191,7 +194,7 @@ class _MesoscopeVRSystem:
     _distance_snapshot_code: int = 5
 
     # Statically assigns mesoscope frame checking window and speed calculation window, both in milliseconds
-    _mesoscope_frame_delay: int = 115
+    _mesoscope_frame_delay: int = 300
     _speed_calculation_window: int = 50
 
     # Reserves logging source ID code 1 for this class
@@ -433,13 +436,9 @@ class _MesoscopeVRSystem:
             self._asset_tracker.add("mqtt")
 
             # Instructs the user to configure the VR scene and verify that it properly interfaces with the VR
-            # screens.
+            # screens. This also queries the task cue (segment) sequence from Unity. The extracted sequence data is
+            # logged as a sequence of byte values.
             self._setup_unity()
-
-            # Queries the task cue (segment) sequence from Unity. This also acts as a check for whether Unity is
-            # running and is configured appropriately. The extracted sequence data is logged as a sequence of byte
-            # values.
-            self._get_cue_sequence()
 
             # Configures the VR task to match the initial GUI state
             self._enable_guidance = self._ui.enable_guidance
@@ -564,9 +563,10 @@ class _MesoscopeVRSystem:
 
         if "zaber" in self._asset_tracker:
             # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
-            # to be done before Zaber motors are potentially reset back to parking position. Skips generating zaber
-            # snapshot if the runtime terminated before motors were restored to the previous day's imaging position.
-            if self._asset_tracker.add("restored"):
+            # to be done before Zaber motors are potentially reset back to parking position. Skips generation of the
+            # zaber snapshot if the runtime terminated before motors were restored to the previous day's imaging
+            # position.
+            if "restored" in self._asset_tracker:
                 self._generate_zaber_snapshot()
 
             # Optionally resets Zaber motors by moving them to the dedicated parking position before shutting down Zaber
@@ -779,15 +779,17 @@ class _MesoscopeVRSystem:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def _setup_unity(self) -> None:
-        """Pauses runtime until Unity sends a termination message and instructs the user to check that the virtual
-        environment displays on the VR screens as intended.
+        """Guides the user through verifying that Unity is configured to correctly display the task environment on the
+        VR screens.
 
-        This method is used to ensure that the user starts and stops Unity game engine at least once. This forces each
-        user to check that their virtual task properly displays on the VR screens to avoid issues with experiment
-        runtimes that rely on delivering visual feedback to the animal via the VR screens.
+        This method forces each user to check that their virtual task properly displays on the VR screens to avoid
+        issues with experiment runtimes that rely on delivering visual feedback to the animal. To do so, it generates
+        an artificial motion signal and enables / disables the VR screens for the user to verify and, if necessary,
+        tweak the screen allocation. As part of its runtime, the method ensures that the Unity task starts at least
+        once.
 
         Raises:
-            RuntimeError: If Unity does not send a termination message within 10 minutes of this runtime starting and
+            RuntimeError: If Unity does not send a start message within 10 minutes of this runtime starting and
                 the user chooses to abort the runtime.
         """
 
@@ -800,7 +802,7 @@ class _MesoscopeVRSystem:
 
         # Delays the runtime for 2 seconds to ensure that the VR screen controllers receive the activation pulse and
         # activate the screens before prompting the user to cycle Unity task states.
-        delay_timer = PrecisionTimer("s")
+        delay_timer = PrecisionTimer("ms")
         delay_timer.delay_noblock(delay=2)
 
         # Discards all data received from Unity up to this point. This is done to ensure that the user carries out the
@@ -811,52 +813,104 @@ class _MesoscopeVRSystem:
 
         # Instructs the user to check the displays.
         message = (
-            f"Start Unity game engine and load your experiment task (scene). Ensure that the task properly displays on "
-            f"the VR screens inside the Mesoscope enclosure. The runtime will not advance until the task is started "
-            f"(played) and STOPPED at least once."
+            f"Start Unity game engine and load your experiment task (scene). The runtime will not advance until the "
+            f"task is started (played)."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
         # Blocks until Unity sends the task termination message or until the user manually aborts the runtime.
         outcome = ""
         while outcome != "abort":
-            # Blocks for at most 10 minutes at a time.
+            # Blocks for at most 10 minutes (600 seconds, 600000 milliseconds) at a time.
             delay_timer.reset()
-            while delay_timer.elapsed < 600:
+            while delay_timer.elapsed < 600000:
                 # Parses all data received from Unity game engine.
                 if self._unity.has_data:
                     topic: str
                     topic, _ = self._unity.get_data()
 
-                    # If received data is a termination message, breaks the loop
-                    if topic == self._unity_termination_topic:
-                        # Disables the VR screens before returning.
-                        self._microcontrollers.disable_vr_screens()
+                    # If received data is a startup message, breaks the loop
+                    if topic == self._unity_startup_topic:
+                        break
+            else:
+                # If the loop above is not broken, this is due to not receiving any message from Unity for 10 minutes.
+                message = (
+                    f"The Mesoscope-VR system did not receive a Unity runtime start message after waiting for 10 "
+                    f"minutes. It is likely that the Unity game engine is not running or is not configured to work "
+                    f"with Mesoscope-VR system. Make sure Unity game engine is started and configured before "
+                    f"continuing."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
 
-                        message = "VR Display Check: Passed."
-                        console.echo(message=message, level=LogLevel.SUCCESS)
+            # Breaks the outer loop if the timer loop was broken due to receiving the expected topic.
+            if outcome != "abort":
+                break
 
-                        # Instructs the user to restart the task (re-arm Unity).
-                        message = (
-                            f"Arm (start) the Virtual Reality task. Do not stop the task until the end of the runtime."
-                        )
-                        console.echo(message=message, level=LogLevel.INFO)
-                        input("Enter anything to continue: ")
+        else:
+            # The only way to enter this clause if by triggering the 'abort' sequence. In that case,a borts with an
+            # error.
+            message = f"Runtime aborted due to user request."
+            console.error(message=message, error=RuntimeError)
+            raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
-                        return
+        # Guides the user through the verification process and ensures that Unity is cycled off at the end of the
+        # verification process
+        message = (
+            f"Verify that the virtual reality task displays on the screens as intended. This runtime will send "
+            f"slow motion triggers to gradually advance the VR scene forward. Verify that the scene displays "
+            f"correctly during motion. Disable (end) Unity runtime to advance to the next preparation step."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
 
-            # If the loop above is escaped, this is due to not receiving any message from Unity for 10 minutes.
-            message = (
-                f"The Mesoscope-VR system did not receive a Unity runtime termination message after waiting for 10 "
-                f"minutes. It is likely that the Unity game engine is not running or is not configured to work with "
-                f"Mesoscope-VR system. Make sure Unity game engine is started and configured before continuing."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+        while True:
+            # Advances the Unity scene forward by 0.01 Unity unit (~ 0.1 cm)
+            json_string = dumps(obj={"movement": 0.01})
+            byte_array = json_string.encode("utf-8")
+            self._unity.send_data(topic=self._microcontrollers.wheel_encoder.mqtt_topic, payload=byte_array)
 
-        message = f"Runtime aborted due to user request."
-        console.error(message=message, error=RuntimeError)
-        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+            # Parses incoming data
+            if self._unity.has_data:
+                delay_timer.delay_noblock(delay=200)  # Ensures that the motion is capped at ~ 50 mm / second
+                topic, _ = self._unity.get_data()
+
+                # If received data is a termination message, asks the user if the loop needs to be broken
+                if topic == self._unity_startup_topic:
+                    message = f"Unity termination: Detected. Do you want to end the Unity verification runtime?"
+                    console.echo(message=message, level=LogLevel.INFO)
+                    answer = input(
+                        "Enter 'yes' to advance to the next step, enter anything else to stay in the "
+                        "verification loop: "
+                    ).lower()
+
+                    # Breaks the verification loop.
+                    if answer == "yes":
+                        break
+
+        # Instructs the user to restart the task (re-arm Unity).
+        message = (
+            f"Make sure that the Unity is task is armed (started). Keep it armed through the acquisition process. You "
+            f"may need to restart the task for the start trigger to be registered by this runtime. The runtime will "
+            f"not advance until it receives the start trigger."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # Blocks until Unity sends another start message. Since at this point the Unity-VRPC connection is known to
+        # be working, does not use timeout or abort logic.
+        while True:
+            if self._unity.has_data:
+                topic, _ = self._unity.get_data()
+                if topic == self._unity_startup_topic:
+                    break
+
+        # Disables the VR screens before returning.
+        self._microcontrollers.disable_vr_screens()
+
+        # Requests and resolves the Virtual Reality cue sequence for the current VR task.
+        self._get_cue_sequence()
+
+        message = "Unity setup: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
     def _setup_mesoscope(self) -> None:
         """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data.
@@ -907,9 +961,9 @@ class _MesoscopeVRSystem:
         # Step 2: Carry out the red-dot alignment process
         message = (
             "Withdraw the objective ~1000 um away from the imaging plane and tape up the light shield. Confirm that "
-            "there are no bubbles present above the imaging plane and carry out the red-dot alignment. Then, move the "
-            "objective back to the imaging plane and re-align it to the reference MotionEstimator file state (if one "
-            "exists)."
+            "there are no bubbles present above the imaging plane and carry out the red-dot (re) alignment. Then, move "
+            "the objective back to the imaging plane and re-align it to the reference MotionEstimator file state "
+            "(if one is available)."
         )
         console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
@@ -953,7 +1007,7 @@ class _MesoscopeVRSystem:
         message = (
             "Call the setupAcquisition(hSI, hSICtl) function via MATLAB command line on the ScanImagePC. The function "
             "will carry out the rest of the required preparation steps, including configuring the acquisition "
-            "parameters."
+            "parameters and starting the acquisition upon receiving a trigger from the VRPC."
         )
         console.echo(message=message, level=LogLevel.INFO)
         input("Enter anything to continue: ")
@@ -1038,6 +1092,11 @@ class _MesoscopeVRSystem:
         This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
         positions that will be reused during the next session to restore the imaging field.
         """
+        # The presence of the 'nk.bin' marker indicates that the session has not been properly initialized. Since
+        # this method can be called as part of the emergency shutdown process for a session that encountered an
+        # initialization error, if the marker exists, ends the runtime early.
+        if self._session_data.raw_data.nk_path.exists():
+            return
 
         # Generates a precursor MesoscopePositions file and dumps it to the session raw_data folder.
         # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
@@ -1139,6 +1198,12 @@ class _MesoscopeVRSystem:
         Since this file combines both runtime-generated and user-generated data, this method also ensures that the
         user updates the descriptor file to include experimenter notes taken during runtime.
         """
+
+        # The presence of the 'nk.bin' marker indicates that the session has not been properly initialized. Since
+        # this method can be called as part of the emergency shutdown process for a session that encountered an
+        # initialization error, if the marker exists, ends the runtime early.
+        if self._session_data.raw_data.nk_path.exists():
+            return
 
         # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
         # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
@@ -1464,7 +1529,6 @@ class _MesoscopeVRSystem:
 
             # Otherwise, proceeds with the startup process
             else:
-
                 # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data
                 # inside the mesoscope folder always perfectly aligns with the number of frame acquisition triggers
                 # recorded by the frame monitor module.
@@ -1489,7 +1553,6 @@ class _MesoscopeVRSystem:
                 timeout_timer.reset()
                 while timeout_timer.elapsed < 2:
                     if self._microcontrollers.mesoscope_frame_count < 10:
-
                         # Ends the runtime
                         message = "Mesoscope frame acquisition: Started."
                         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -1946,6 +2009,9 @@ class _MesoscopeVRSystem:
                     if not self._trial_rewarded:
                         self._unrewarded_trial_sequence_length += 1
 
+                    # Resets the trial reward tracker for the next trial
+                    self._trial_rewarded = False
+
                 # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
                 # byte-string.
                 json_string = dumps(obj={"movement": position_delta})
@@ -2055,12 +2121,12 @@ class _MesoscopeVRSystem:
                 # Switches the runtime into the paused state and sets the unity termination tracker
                 self._unity_terminated = True
                 self._pause_runtime()
-                message = "Emergency pause: Engaged. Reason: Received unexpected Unity shutdown message."
+                message = "Emergency pause: Engaged. Reason: Unity sent a runtime termination message."
                 console.echo(message=message, level=LogLevel.ERROR)
 
-                # Reads the current position of the animal, in Unity units. Since this is done after cutting off the
-                # wheel motion stream (by transitioning into paused (idle) state), there should be minimal deviation of
-                # the read position and the physical position of the animal.
+                # Reads the total distance traveled by the animal at this point. Since this is done after cutting off
+                # the wheel motion stream (by transitioning into paused (idle) state), there should be minimal
+                # deviation of the read position and the physical position of the animal.
                 traveled_distance = float(self._microcontrollers.traveled_distance)
                 # Converts float to a byte array using little-endian format
                 distance_bytes = np.array([traveled_distance], dtype="<i8").view(np.uint8)
@@ -2127,16 +2193,14 @@ class _MesoscopeVRSystem:
             self._toggle_show_reward(show_reward=self._show_reward_zone_boundary)
 
     def _mesoscope_cycle(self) -> None:
-        """Checks whether mesoscope frame acquisition is active and, if not, attempts to restart the acquisition.
+        """Checks whether mesoscope frame acquisition is active and, if not, emergency pauses the runtime.
 
         This method is designed to be called repeatedly as part of the system runtime cycle. It monitors mesoscope
-        frame acquisition triggers and if it detects a pause longer than ~150 milliseconds, it attempts to send a new
-        acquisition trigger. If sending the acquisition trigger does not recover the mesoscope frame acquisition, the
-        method activates the emergency pause state, similar to how Unity termination messages are handled by
-        _unity_cycle() method.
+        frame acquisition triggers and if it detects an acquisition pause longer than ~300 milliseconds, it activates
+        the emergency pause state, similar to how Unity termination messages are handled by _unity_cycle() method.
         """
 
-        # Aborts early if mesoscope_timer is not initialized, it has been less than ~150 milliseconds since the last
+        # Aborts early if mesoscope_timer is not initialized, it has been less than ~300 milliseconds since the last
         # mesoscope frame acquisition check, or the mesoscope runtime appears to be terminated.
         if (
             self._mesoscope_timer is None
@@ -2152,23 +2216,14 @@ class _MesoscopeVRSystem:
             self._mesoscope_timer.reset()  # Resets the timer to start timing the next cycle
             return
 
-        # The only condition under which the mesoscope frame count is 0 is if the tracker was reset by the code below,
-        # but the mesoscope did not restart acquiring frames. Then, engages emergency pause mode.
-        elif self._microcontrollers.mesoscope_frame_count == 0:
-            self._mesoscope_terminated = True  # Sets the termination flag
-            self._pause_runtime()  # Pauses the runtime.
-            self._stop_mesoscope()  # Ensures that automated start triggers are no longer sent.
-            message = "Emergency pause: Engaged. Reason: Unable to restart mesoscope frame acquisition."
-            console.echo(message=message, level=LogLevel.ERROR)
-            return
-
-        # In version 3.0.0, the mesoscope start trigger has been switched to a cyclic TTL pulse emitted every
-        # 5 milliseconds. With this configuration, reaching this section is very unlikely and typically indicates that
-        # the Mesoscope has encountered a major runtime error. However, to fully confirm that the mesoscope is indeed
-        # not active, attempts to restart the acquisition for additional 150 ms period.
-        self._microcontrollers.reset_mesoscope_frame_count()  # Makes the tracked frame count 0
-        self._mesoscope_frame_count = np.uint64(0)  # Resets the instance tracker
-        self._mesoscope_timer.reset()
+        # Otherwise, if the mesoscope has not been acquiring frames for the past 300 milliseconds, enters emergency
+        # pause state.
+        self._mesoscope_terminated = True  # Sets the termination flag
+        self._pause_runtime()  # Pauses the runtime.
+        self._stop_mesoscope()  # Ensures that the mesoscope runtime markers are removed to facilitate restarting.
+        message = "Emergency pause: Engaged. Reason: Mesoscope stopped sending frame acquisition triggers."
+        console.echo(message=message, level=LogLevel.ERROR)
+        return
 
     def _pause_runtime(self) -> None:
         """Pauses the managed runtime.
@@ -2413,22 +2468,6 @@ def lick_training_logic(
     )
     mesoscope_data = MesoscopeData(session_data=session_data)
 
-    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
-    # both classes to run through the init checks. The classes are later re-instantiated during session data
-    # preprocessing
-    _ = WaterSheet(
-        animal_id=int(animal_id),
-        session_date=session_data.session_name,
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.water_log_sheet_id,
-    )
-    _ = SurgerySheet(
-        project_name=project_name,
-        animal_id=int(animal_id),
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.surgery_sheet_id,
-    )
-
     # If the managed animal has cached data from a previous lick training session and the function is
     # configured to load previous data, replaces all runtime-defining parameters passed to the function with data
     # loaded from the previous session's descriptor file
@@ -2499,8 +2538,28 @@ def lick_training_logic(
     runtime = _MesoscopeVRSystem(session_data=session_data, session_descriptor=descriptor)
 
     try:
+        # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so,
+        # instantiates both classes to run through the init checks. The classes are later re-instantiated during
+        # session data preprocessing
+        _ = WaterSheet(
+            animal_id=int(animal_id),
+            session_date=session_data.session_name,
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.water_log_sheet_id,
+        )
+        _ = SurgerySheet(
+            project_name=project_name,
+            animal_id=int(animal_id),
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.surgery_sheet_id,
+        )
+
         # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
         runtime.start()
+
+        # Marks the session as fully initialized. This prevents session data from being automatically removed by
+        # 'purge' runtimes.
+        session_data.mark_initialization()
 
         # Switches the system into lick-training mode
         runtime.lick_train()
@@ -2645,22 +2704,6 @@ def run_training_logic(
     )
     mesoscope_data = MesoscopeData(session_data=session_data)
 
-    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
-    # both classes to run through the init checks. The classes are later re-instantiated during session data
-    # preprocessing
-    _ = WaterSheet(
-        animal_id=int(animal_id),
-        session_date=session_data.session_name,
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.water_log_sheet_id,
-    )
-    _ = SurgerySheet(
-        project_name=project_name,
-        animal_id=int(animal_id),
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.surgery_sheet_id,
-    )
-
     # If the managed animal has cached data from a previous run training session and the function is
     # configured to load previous data, replaces all runtime-defining parameters passed to the function with data
     # loaded from the previous session's descriptor file
@@ -2755,8 +2798,28 @@ def run_training_logic(
     runtime = _MesoscopeVRSystem(session_data=session_data, session_descriptor=descriptor)
 
     try:
+        # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so,
+        # instantiates both classes to run through the init checks. The classes are later re-instantiated during
+        # session data preprocessing
+        _ = WaterSheet(
+            animal_id=int(animal_id),
+            session_date=session_data.session_name,
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.water_log_sheet_id,
+        )
+        _ = SurgerySheet(
+            project_name=project_name,
+            animal_id=int(animal_id),
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.surgery_sheet_id,
+        )
+
         # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
         runtime.start()
+
+        # Marks the session as fully initialized. This prevents session data from being automatically removed by
+        # 'purge' runtimes.
+        session_data.mark_initialization()
 
         # Switches the runtime into the run-training mode
         runtime.run_train()
@@ -2987,22 +3050,6 @@ def experiment_logic(
         sl_experiment_version=library_version,
     )
 
-    # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so, instantiates
-    # both classes to run through the init checks. The classes are later re-instantiated during session data
-    # preprocessing
-    _ = WaterSheet(
-        animal_id=int(animal_id),
-        session_date=session_data.session_name,
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.water_log_sheet_id,
-    )
-    _ = SurgerySheet(
-        project_name=project_name,
-        animal_id=int(animal_id),
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.surgery_sheet_id,
-    )
-
     # Uses initialized SessionData instance to load the experiment configuration data
     experiment_config: MesoscopeExperimentConfiguration = MesoscopeExperimentConfiguration.from_yaml(  # type: ignore
         file_path=Path(session_data.raw_data.experiment_configuration_path)
@@ -3036,8 +3083,28 @@ def experiment_logic(
     )
 
     try:
+        # Verifies that the Water Restriction log and the Surgery log Google Sheets are accessible. To do so,
+        # instantiates both classes to run through the init checks. The classes are later re-instantiated during
+        # session data preprocessing
+        _ = WaterSheet(
+            animal_id=int(animal_id),
+            session_date=session_data.session_name,
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.water_log_sheet_id,
+        )
+        _ = SurgerySheet(
+            project_name=project_name,
+            animal_id=int(animal_id),
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.surgery_sheet_id,
+        )
+
         # Initializes all runtime assets and guides the user through hardware-specific runtime preparation steps.
         runtime.start()
+
+        # Marks the session as fully initialized. This prevents session data from being automatically removed by
+        # 'purge' runtimes.
+        session_data.mark_initialization()
 
         # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
         # state

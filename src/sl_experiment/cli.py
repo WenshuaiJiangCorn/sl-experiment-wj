@@ -229,7 +229,10 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
             cue_sequence=[1, 0, 2, 0, 3, 0, 4, 0],
             trial_length_cm=240,
             trial_length_unity_unit=24,
-            trial_reward_size_ul=5.0
+            trial_reward_size_ul=5.0,
+            reward_zone_start_cm=208.0,
+            reward_zone_end_cm=222.0,
+            guidance_trigger_location_cm=208.0,
         )
 
     # Depending on the acquisition system, packs state data into the appropriate experiment configuration class and
