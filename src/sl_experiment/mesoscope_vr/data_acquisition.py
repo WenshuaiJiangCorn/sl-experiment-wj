@@ -19,6 +19,7 @@ from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from sl_shared_assets import (
     SessionData,
+    SessionTypes,
     ExperimentState,
     ExperimentTrial,
     MesoscopePositions,
@@ -38,13 +39,6 @@ from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
 from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, get_version_data
 from .data_preprocessing import purge_failed_session, preprocess_session_data
-
-# Statically defines the names used by supported session types to ensure that the name is used consistently across the
-# entire module.
-_experiment: str = "mesoscope experiment"
-_run: str = "run training"
-_lick: str = "lick training"
-_window: str = "window checking"
 
 
 # Defines some shared methods to make their use consistent between window checking and other runtimes.
@@ -130,6 +124,7 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
         and mesoscope_positions.mesoscope_fast_z == previous_mesoscope_positions.mesoscope_fast_z
         and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
         and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
+        and mesoscope_positions.laser_power_mw == previous_mesoscope_positions.laser_power_mw
     ):
         message = (
             "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
@@ -360,7 +355,7 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
         # Window checking does not use the light-shield and requires two alignment steps: red-dot and GenTeal
         message = (
             f"Install the mesoscope objective, and carry out the air red-dot alignment. Then, level the eyes of the "
-            f"animals as well as possible given the constraints of the craniotomy placement, clean the window, and "
+            f"animal as well as possible given the constraints of the craniotomy placement, clean the window, and "
             f"repeat the red-dot alignment using GenTeal. After alignment, discover and select the imaging plane. "
             f"Note, all future imaging sessions will use the same imaging plane as established during this window "
             f"checking runtime!"
@@ -444,25 +439,13 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
     # ensure that the function was called
     while not all(f.exists() for f in target_files):
         message = (
-            f"Unable to retrieve the necessary files from the ScanImagePC. Specifically, expected the following "
-            f"files to be present in the mesoscope_data folder of the ScanImagePC: "
-            f"{', '.join(f.name for f in target_files)}. Rerun the setupAcquisition(hSI, hSICtl) function to generate"
-            f"the requested files."
+            f"Unable to confirm that the ScanImagePC has generated the required acquisition data files. Specifically, "
+            f"expected the following files to be present in the mesoscope_data folder of the ScanImagePC: "
+            f"{', '.join(f.name for f in target_files)}, bu tat least one file is missing. Rerun the "
+            f"setupAcquisition(hSI, hSICtl) function to generate the requested files."
         )
         console.echo(message=message, level=LogLevel.ERROR)
         input("Enter anything to continue: ")
-
-    # If necessary, persists the MotionEstimator and the fov.roi files to the 'persistent data' folder of the processed
-    # animal on the ScanImagePC.
-    if not mesoscope_data.scanimagepc_data.roi_path.exists():
-        sh.copy2(target_files[1], mesoscope_data.scanimagepc_data.roi_path)
-    if not mesoscope_data.scanimagepc_data.motion_estimator_path.exists():
-        sh.copy2(target_files[0], mesoscope_data.scanimagepc_data.motion_estimator_path)
-
-    # Moves all files to the mesoscope_data directory
-    sh.move(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
-    sh.move(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
-    sh.move(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
 
     console.echo(message="Mesoscope Preparation: Complete.", level=LogLevel.SUCCESS)
 
@@ -834,7 +817,7 @@ class _MesoscopeVRSystem:
 
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
-        if self._session_data.session_type == _experiment:
+        if self._session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
             # Instantiates an MQTTCommunication instance to directly communicate with Unity.
             monitored_topics = (
                 self._cue_sequence_topic,  # Used as part of Unity (re) initialization
@@ -885,7 +868,7 @@ class _MesoscopeVRSystem:
         self._cameras.save_body_camera_frames()
 
         # Starts mesoscope frame acquisition if the runtime is a mesoscope experiment.
-        if self._session_data.session_type == _experiment:
+        if self._session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
             # Enables mesoscope frame monitoring
             self._microcontrollers.enable_mesoscope_frame_monitoring()
 
@@ -939,7 +922,7 @@ class _MesoscopeVRSystem:
         self._cameras.stop()
 
         # Stops mesoscope frame acquisition and monitoring if the runtime uses Mesoscope.
-        if self._session_data.session_type == _experiment:
+        if self._session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
             self._stop_mesoscope()
             self._microcontrollers.disable_mesoscope_frame_monitoring()
 
@@ -960,7 +943,7 @@ class _MesoscopeVRSystem:
         # has to be done before the objective is lifted to remove the animal from the Mesoscope enclosure. This data
         # is reused during the following experiment session to restore the imaging field to the same state as during
         # this session.
-        if self._session_data.session_type == _experiment:
+        if self._session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
             self._generate_mesoscope_position_snapshot()
 
         # Generates the snapshot of the current Zaber motor positions and saves them as a .yaml file. This has
@@ -1242,7 +1225,6 @@ class _MesoscopeVRSystem:
         # Experiment runtimes use all available hardware modules
         if self._experiment_configuration:
             hardware_state = MesoscopeHardwareState(
-                cue_map=self._experiment_configuration.cue_map,
                 cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
                 maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
                 minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
@@ -1255,7 +1237,7 @@ class _MesoscopeVRSystem:
                 system_state_codes=self._state_map,
             )
         # Lick training runtimes use a subset of hardware, including torque sensor
-        elif self._session_data.session_type == _lick:
+        elif self._session_data.session_type == SessionTypes.LICK_TRAINING:
             hardware_state = MesoscopeHardwareState(
                 torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
@@ -1265,7 +1247,7 @@ class _MesoscopeVRSystem:
             )
         # Run training runtimes use the same subset of hardware as the rest training runtime, except instead of torque
         # sensor, they monitor the encoder.
-        elif self._session_data.session_type == _run:
+        elif self._session_data.session_type == SessionTypes.RUN_TRAINING:
             hardware_state = MesoscopeHardwareState(
                 cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
                 lick_threshold=int(self._microcontrollers.lick.lick_threshold),
@@ -2569,7 +2551,7 @@ def lick_training_logic(
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
-        session_type=_lick,
+        session_type=SessionTypes.LICK_TRAINING,
         python_version=python_version,
         sl_experiment_version=library_version,
     )
@@ -2666,7 +2648,7 @@ def lick_training_logic(
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
-        session_data.mark_initialization()
+        session_data.runtime_initialized()
 
         # Switches the system into lick-training mode
         runtime.lick_train()
@@ -2805,7 +2787,7 @@ def run_training_logic(
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
-        session_type=_run,
+        session_type=SessionTypes.RUN_TRAINING,
         python_version=python_version,
         sl_experiment_version=library_version,
     )
@@ -2922,7 +2904,7 @@ def run_training_logic(
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
-        session_data.mark_initialization()
+        session_data.runtime_initialized()
 
         # Switches the runtime into the run-training mode
         runtime.run_train()
@@ -3138,7 +3120,7 @@ def experiment_logic(
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
-        session_type=_experiment,
+        session_type=SessionTypes.MESOSCOPE_EXPERIMENT,
         experiment_name=experiment_name,
         python_version=python_version,
         sl_experiment_version=library_version,
@@ -3198,7 +3180,7 @@ def experiment_logic(
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
-        session_data.mark_initialization()
+        session_data.runtime_initialized()
 
         # Main runtime loop. It loops over all submitted experiment states and ends the runtime after executing the last
         # state
@@ -3240,7 +3222,7 @@ def experiment_logic(
 
                     # If the animal accumulates a critical number of unrewarded (failed) trials, enables the guided mode
                     # for a portion of future trials.
-                    if runtime.unrewarded_trial_sequence_length >= state.failed_trial_threshold:
+                    if runtime.unrewarded_trial_sequence_length >= state.recovery_failed_trial_threshold:
                         runtime.enable_guided_trials(guided_trial_count=state.recovery_guided_trials)
 
                     # Updates the progress bar every second. Note, this calculation statically discounts the time spent
@@ -3319,7 +3301,7 @@ def window_checking_logic(
     session_data = SessionData.create(
         project_name=project_name,
         animal_id=animal_id,
-        session_type=_window,
+        session_type=SessionTypes.WINDOW_CHECKING,
         python_version=python_version,
         sl_experiment_version=library_version,
     )
@@ -3370,7 +3352,7 @@ def window_checking_logic(
     )
 
     # Removes the nk.bin marker.
-    session_data.mark_initialization()
+    session_data.runtime_initialized()
 
     # Prepares Zaber motors for data acquisition.
     _setup_zaber_motors(zaber_motors=zaber_motors)

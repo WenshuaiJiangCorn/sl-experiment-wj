@@ -218,7 +218,7 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
             system_state_code=0,
             state_duration_s=60,
             initial_guided_trials=3,
-            failed_trial_threshold=9,
+            recovery_failed_trial_threshold=9,
             recovery_guided_trials=3,
         )
 
@@ -228,7 +228,6 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
         trials[f"trial_type_{trial + 1}"] = ExperimentTrial(
             cue_sequence=[1, 0, 2, 0, 3, 0, 4, 0],
             trial_length_cm=240,
-            trial_length_unity_unit=24,
             trial_reward_size_ul=5.0,
             reward_zone_start_cm=208.0,
             reward_zone_end_cm=222.0,
@@ -628,6 +627,13 @@ def run_experiment(
 
 @click.command()
 @click.option(
+    "-u",
+    "--user",
+    type=str,
+    required=True,
+    help="The ID of the user supervising the experiment session.",
+)
+@click.option(
     "-p",
     "--project",
     type=str,
@@ -642,6 +648,7 @@ def run_experiment(
     help="The name of the animal undergoing the experiment session.",
 )
 def check_window(
+    user: str,
     project: str,
     animal: str,
 ) -> None:

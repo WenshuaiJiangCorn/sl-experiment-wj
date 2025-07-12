@@ -11,14 +11,6 @@ Authors: Ivan Kondratyev (Inkaros), Kushaan Gupta, Natalie Yeung, Katlynn Ryu, J
 
 from ataraxis_base_utilities import console
 
-
-# Defines a callback function to use instead of the default sys.exit call used by ataraxis console.
-def _pass_callback(__error: str | int | None = None) -> None:
-    pass
-
-
 # Ensures console is enabled whenever this library is imported.
 if not console.enabled:
-    console.set_reraise(enabled=True)
-    console.set_callback(callback=_pass_callback)
     console.enable()

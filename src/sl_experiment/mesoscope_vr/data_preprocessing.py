@@ -25,9 +25,11 @@ from sl_shared_assets import (
     Server,
     SessionData,
     SurgeryData,
+    SessionTypes,
     ProcessingTracker,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
+    WindowCheckingDescriptor,
     MesoscopeExperimentDescriptor,
     transfer_directory,
     calculate_directory_checksum,
@@ -37,13 +39,6 @@ from ataraxis_data_structures import compress_npy_logs
 
 from .tools import MesoscopeData, get_system_configuration
 from ..shared_components import WaterSheet, SurgerySheet
-
-# Statically defines the names used by supported session types to ensure that the name is used consistently across the
-# entire module.
-_experiment: str = "mesoscope experiment"
-_run: str = "run training"
-_lick: str = "lick training"
-_window: str = "window checking"
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -545,7 +540,7 @@ def _pull_mesoscope_data(
     ensure_directory_exists(destination)
 
     # Defines the set of extensions to look for when verifying source folder contents
-    extensions = {"*.me", "*.mat", "*.tiff", "*.tif"}
+    extensions = {"*.me", "*.tiff", "*.tif", ".roi"}
 
     # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
     # all files are present or fails five times in a row.
@@ -556,13 +551,42 @@ def _pull_mesoscope_data(
         file_names: tuple[str, ...] = tuple([file.name for file in files])
         error = False  # Resets the error tracker at the beginning of each cycle
 
-        # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file.
-        # More recent runtimes also generate a zstack.tif file and a zstack.mat file.
-        if len(files) < 2:
+        # Ensures the folder contains the MotionEstimator.me file
+        if "MotionEstimator.me" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"required MotionEstimator.me file."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Ensures the folder contains the fov.roi file
+        if "fov.roi" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"required fov.roi file."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Ensures the folder contains the zstack_00000_00001.tif file
+        if "zstack_00000_00001.tif" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"required zstack_00000_00001.tif file."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Prevents pulling an empty folder. At a minimum, expects 3 acquisition preparation files and 1 TIFF stack file.
+        if len(files) < 4:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
                 f"'mesoscope_frames' ScanImage PC for the session {session_name} does not contain the minimum expected "
-                f"number of files (2). This indicates that no frames were acquired during runtime or that the frames "
+                f"number of files (4). This indicates that no frames were acquired during runtime or that the frames "
                 f"were saved at a different location."
             )
             console.echo(message=message, level=LogLevel.ERROR)
@@ -667,7 +691,29 @@ def _preprocess_mesoscope_directory(
     if not image_directory.exists():
         return
 
-    # Otherwise, resolves the paths to the output directories and files
+    # Handles special acquisition files that need to be processed differently to the TIFF stacks. These files are
+    # generated directly by the setupAcquisition() MATLAB function as part of preparing for the main experiment runtime.
+    mesoscope_data = MesoscopeData(session_data=session_data)
+    target_files = (
+        image_directory.joinpath("MotionEstimator.me"),
+        image_directory.joinpath("fov.roi"),
+        image_directory.joinpath("zstack_00000_00001.tif"),
+    )
+
+    # If necessary, persists the MotionEstimator and the fov.roi files to the 'persistent data' folder of the processed
+    # animal on the ScanImagePC.
+    if not mesoscope_data.scanimagepc_data.roi_path.exists():
+        sh.copy2(target_files[1], mesoscope_data.scanimagepc_data.roi_path)
+    if not mesoscope_data.scanimagepc_data.motion_estimator_path.exists():
+        sh.copy2(target_files[0], mesoscope_data.scanimagepc_data.motion_estimator_path)
+
+    # Moves all files to the mesoscope_data directory without any further processing.
+    sh.move(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
+    sh.move(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
+    # Renames to 'zstack.tiff'
+    sh.move(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
+
+    # Resolves the paths to the output directories and files
     output_directory = Path(session_data.raw_data.mesoscope_data_path)
     ensure_directory_exists(output_directory)  # Generates the directory
     frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
@@ -692,15 +738,8 @@ def _preprocess_mesoscope_directory(
     frame_numbers = []
     starting_frame = 1
     for file in tiff_files:
-        # In version 3.0.0 the data acquisition pipeline was refactored to generate a 'zstack.tif' file as part
-        # of the motion detection setup procedure. Unlike 'session' files (main data acquisition files), zstack is kept
-        # largely unprocessed due to its unique acquisition nature and purpose.
-        if "zstack" in file.name:
-            file.rename(output_directory.joinpath("zstack.tiff"))
-            tiff_files.remove(file)
-
-        # All 'session' data files are now named 'session'.
-        elif "session" in file.name:
+        # All valid mesoscope data files are now named 'session'.
+        if "session" in file.name:
             stack_size = _check_stack_size(file)
             if stack_size > 0:
                 # Appends the starting frame number to the list and increments the stack list
@@ -709,8 +748,7 @@ def _preprocess_mesoscope_directory(
 
         else:
             # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
-            # processing. Also, all files other than 'session' and 'zstack' are not considered for further processing
-            # since 3.0.0.
+            # processing. Also, all files other than 'session' are not considered for further processing since 3.0.0.
             tiff_files.remove(file)
 
     # Converts to tuple for efficiency
@@ -850,14 +888,16 @@ def _resolve_telomere_marker(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the state of the 'incomplete' flag.
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    if session_data.session_type.lower() == _lick:
+    if session_data.session_type == SessionTypes.LICK_TRAINING:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == _run:
+    elif session_data.session_type == SessionTypes.RUN_TRAINING:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == _experiment:
+    elif session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
     else:
-        # Aborts early (without creating the telomere.bin marker file) for any other session type
+        # Aborts early (without creating the telomere.bin marker file) for any other session type. This statically
+        # ignores the descriptor of the Window Checking sessions, as all window checking sessions are considered
+        # incomplete.
         return
 
     # If the session is complete, generates the telomere.bin marker file. Note, window checking sessions are
@@ -893,19 +933,19 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
     quality: str | int = ""
-    if session_data.session_type.lower() == _lick:
+    if session_data.session_type == SessionTypes.LICK_TRAINING:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == _run:
+    elif session_data.session_type == SessionTypes.RUN_TRAINING:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == _experiment:
+    elif session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == _window:
-        # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
-        # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
-        # surgery, based on the window checking outcome
-        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 3:  # type: ignore
-            # Forces the user to provide a quality rating between 0 and 3 inclusive.
-            quality = input("Enter the surgery quality level between 0 and 3 inclusive: ")
+    elif session_data.session_type == SessionTypes.WINDOW_CHECKING:
+        window_descriptor: WindowCheckingDescriptor = WindowCheckingDescriptor.from_yaml(  # type: ignore
+            descriptor_path
+        )
+
+        # Ensures that the quality is always between 0 and 3 inclusive
+        quality = int(np.clip(np.uint8(window_descriptor.surgery_quality), a_min=np.uint8(0), a_max=np.uint8(3)))
     else:
         message = (
             f"Unable to extract the water restriction data from the session descriptor file for session "
@@ -1165,13 +1205,12 @@ def preprocess_session_data(session_data: SessionData) -> None:
     general_path = Path(mesoscope_data.scanimagepc_data.mesoscope_data_path)
     session_specific_path = Path(mesoscope_data.scanimagepc_data.session_specific_path)
 
-    # Note, the renaming only happens if the session-specific cache does not exist, the general
-    # mesoscope_frames cache exists, and it is not empty (has files inside).
+    # Note, the renaming only happens if the session-specific cache does not exist, the general mesoscope_frames cache
+    # exists, and it is not empty (has files inside).
     if (
         not session_specific_path.exists()
         and general_path.exists()
         and len([path for path in general_path.glob("*")]) > 0
-        and session_data.session_type != _window
     ):
         general_path.rename(session_specific_path)
         ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
@@ -1254,6 +1293,8 @@ def purge_redundant_data() -> None:
 
     # If there are no deletion candidates, returns without further processing
     if len(deletion_candidates) == 0:
+        message = "No redundant data to purge. Runtime: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
         return
 
     # Removes all discovered redundant data directories
