@@ -691,6 +691,8 @@ class _MesoscopeVRSystem:
         self._started: bool = False
         self._terminated: bool = False
         self._paused: bool = False
+        self._zaber_connected: bool = False
+        self._mesoscope_started: bool = False
 
         # Pre-runtime check to ensure that the PC has enough cores to run the system.
         # 3 cores for microcontrollers, 1 core for the data logger, 6 cores for the current video_system
@@ -1139,7 +1141,7 @@ class _MesoscopeVRSystem:
         )
 
     def _setup_mesoscope(self) -> None:
-        """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data.
+        """Prompts the user to prepare the mesoscope for acquiring brain activity data.
 
         This method is used as part of the start() method execution for experiment runtimes to ensure the
         mesoscope is ready for data acquisition. It guides the user through all mesoscope preparation steps and, at
@@ -1168,6 +1170,10 @@ class _MesoscopeVRSystem:
         # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
         timeout_timer = PrecisionTimer("s")
 
+        # Ensures that both acquisition marker files are removed before executing mesoscope startup sequence.
+        self._mesoscope_data.scanimagepc_data.phosphatase_path.unlink(missing_ok=True)
+        self._mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+
         # Keeps retrying to activate mesoscope acquisition until success or until the user aborts the acquisition
         outcome = ""
         while outcome != "abort":
@@ -1181,9 +1187,9 @@ class _MesoscopeVRSystem:
             if self._microcontrollers.mesoscope_frame_count > 0:
                 message = (
                     f"Unable to trigger mesoscope frame acquisition, as the mesoscope is already acquiring frames. "
-                    f"This indicates that the setupAcquisition function did not run as expected, as that function is "
-                    f"meant to lock the mesoscope down for acquisition and wait for VRPC to trigger it. Re-run the "
-                    f"setupAcquisition function before retrying."
+                    f"This indicates that the setupAcquisition() MATLAB function did not run as expected, as that "
+                    f"function is meant to lock the mesoscope down for acquisition and wait for VRPC to trigger it. "
+                    f"Re-run the setupAcquisition function before retrying."
                 )
                 console.echo(message=message, level=LogLevel.ERROR)
 
@@ -1191,13 +1197,15 @@ class _MesoscopeVRSystem:
             else:
                 # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data
                 # inside the mesoscope folder always perfectly aligns with the number of frame acquisition triggers
-                # recorded by the frame monitor module.
-                for pattern in ["*.tif", "*.tiff"]:
-                    for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
-                        # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
-                        # of the acquisition setup procedure.
-                        if "zstack" not in file.name:
-                            file.unlink(missing_ok=True)
+                # recorded by the frame monitor module. Note, this is performed only if this is the first call to the
+                # start_mesoscope() method during this runtime.
+                if not self._mesoscope_started:
+                    for pattern in ["*.tif", "*.tiff"]:
+                        for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
+                            # Specifically excludes 'zstack.tif' files from this process, as that stack is generated
+                            # as part of the acquisition setup procedure.
+                            if "zstack" not in file.name:
+                                file.unlink(missing_ok=True)
 
                 # Starts the acquisition process by creating the kinase.bin marker. The acquisition function running
                 # on the ScanImagePC starts the acquisition process as soon as it detects the presence of the marker
@@ -1220,6 +1228,7 @@ class _MesoscopeVRSystem:
                         # Prepares assets use to detect and recover from unwanted acquisition interruptions.
                         self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
                         self._mesoscope_timer.reset()  # type: ignore
+                        self._mesoscope_started = True
                         return
 
                 # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
@@ -3338,6 +3347,13 @@ def window_checking_logic(
     # instance.
     python_version, library_version = get_version_data()
 
+    # Generates the WindowCheckingDescriptor instance, caches it to disk, and forces the user to update the data
+    # in the descriptor file with their notes.
+    descriptor = WindowCheckingDescriptor(
+        experimenter=experimenter,
+        incomplete=True,
+    )
+
     # Initializes data-management classes for the runtime. Note, SessionData creates the necessary session directory
     # hierarchy as part of this initialization process
     session_data = SessionData.create(
@@ -3347,6 +3363,9 @@ def window_checking_logic(
         python_version=python_version,
         sl_experiment_version=library_version,
     )
+    # Caches descriptor file precursor to disk before starting the main runtime. This is consistent with the behavior of
+    # all other runtime functions.
+    descriptor.to_yaml(file_path=session_data.raw_data.session_descriptor_path)
 
     zaber_motors: ZaberMotors | None = None
     try:
@@ -3405,13 +3424,6 @@ def window_checking_logic(
 
         # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
         _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
-
-        # Generates the WindowCheckingDescriptor instance, caches it to disk, and forces the user to update the data
-        # in the descriptor file with their notes.
-        descriptor = WindowCheckingDescriptor(
-            experimenter=experimenter,
-            incomplete=True,
-        )
         _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
 
         # Retrieves current motor positions and packages them into a ZaberPositions object.
