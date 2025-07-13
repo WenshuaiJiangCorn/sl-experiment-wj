@@ -127,6 +127,7 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
         and mesoscope_positions.mesoscope_tip == previous_mesoscope_positions.mesoscope_tip
         and mesoscope_positions.mesoscope_tilt == previous_mesoscope_positions.mesoscope_tilt
         and mesoscope_positions.laser_power_mw == previous_mesoscope_positions.laser_power_mw
+        and mesoscope_positions.red_dot_alignment_z == previous_mesoscope_positions.red_dot_alignment_z
     ):
         message = (
             "Failed to verify that the mesoscope_positions.yaml file stored inside the session raw_data "
@@ -353,7 +354,8 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
             f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
             f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
             f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}, "
-            f"laser_power={previous_positions.laser_power_mw}."
+            f"laser_power={previous_positions.laser_power_mw}, "
+            f"red_dot_alignment_z={previous_positions.red_dot_alignment_z}."
         )
     elif not window_checking:
         # While it is somewhat unlikely that imaging plane is not established at this time, this is not impossible.
@@ -2739,6 +2741,10 @@ def lick_training_logic(
         # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
         if not session_data.raw_data.nk_path.exists():
             runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
+        else:
+            # If session runtime terminates before the session was initialized, removes session data from all sources
+            # before shutting down.
+            purge_failed_session(session_data)
 
         message = f"Lick training runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
@@ -3092,6 +3098,10 @@ def run_training_logic(
         # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
         if not session_data.raw_data.nk_path.exists():
             runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
+        else:
+            # If session runtime terminates before the session was initialized, removes session data from all sources
+            # before shutting down.
+            purge_failed_session(session_data)
 
         message = f"Run training runtime: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)

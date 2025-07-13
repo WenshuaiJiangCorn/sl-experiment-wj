@@ -1008,7 +1008,7 @@ class ZaberConnection:
         self._connection = Connection.open_serial_port(port_name=self._port, direct=False)
 
         # Sets the connection status to connected
-        self._is_connected = not self._connection.disconnected
+        self._is_connected = True
 
         # Gets the list of connected Zaber devices.
         devices: list[Device] = self._connection.detect_devices()
@@ -1046,10 +1046,8 @@ class ZaberConnection:
 
         # Actualizes the connection status and returns it to caller
         if self._connection is not None and self._is_connected:
-            self._is_connected = not self._connection.disconnected
-        else:
-            self._is_connected = False
-        return self._is_connected
+            return True
+        return False
 
     @property
     def port(self) -> str:

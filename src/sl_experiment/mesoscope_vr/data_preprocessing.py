@@ -71,15 +71,14 @@ def _delete_directory(directory_path: Path) -> None:
     # an optional delay step to give Windows time to release file handles.
     max_attempts = 5
     delay_timer = PrecisionTimer("ms")
-    for attempt in range(1, max_attempts + 1, 1):
+    for attempt in range(max_attempts):
         # noinspection PyBroadException
         try:
             os.rmdir(directory_path)
             break  # Breaks early if the call succeeds
         except Exception:
-            if attempt == 0:
-                break  # Breaks after 5 attempts
             delay_timer.delay_noblock(delay=500, allow_sleep=True)  # For each failed attempt, sleeps for 500 ms
+            continue
 
 
 def _check_stack_size(file: Path) -> int:
@@ -526,7 +525,7 @@ def _pull_mesoscope_data(
     # ScanImage PC.
     session_name = session_data.session_name
     mesoscope_data = MesoscopeData(session_data)
-    source = Path(mesoscope_data.scanimagepc_data.session_specific_path)
+    source = mesoscope_data.scanimagepc_data.session_specific_path
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -536,11 +535,11 @@ def _pull_mesoscope_data(
     # Otherwise, if the source exists and is not marked for deletion, pulls the frame to the target directory:
 
     # Precreates the temporary storage directory for the pulled data.
-    destination = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
+    destination = session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames")
     ensure_directory_exists(destination)
 
     # Defines the set of extensions to look for when verifying source folder contents
-    extensions = {"*.me", "*.tiff", "*.tif", ".roi"}
+    extensions = {"*.me", "*.tiff", "*.tif", "*.roi"}
 
     # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
     # all files are present or fails five times in a row.
@@ -606,6 +605,11 @@ def _pull_mesoscope_data(
             f"data processing and terminating the preprocessing runtime."
         )
         console.error(message=message, error=RuntimeError)
+
+    # Removes all binary files from the source directory prior to transferring. This ensures that the directory
+    # does not contain any marker files used during runtime.
+    for bin_file in source.glob("*.bin"):
+        bin_file.unlink(missing_ok=True)
 
     # Generates the checksum for the source folder if transfer integrity verification is enabled.
     if verify_transfer_integrity:
@@ -682,7 +686,7 @@ def _preprocess_mesoscope_directory(
             number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
-    image_directory = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
+    image_directory = session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames")
 
     # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
     # acquired at all. Aborts processing early.
@@ -754,6 +758,10 @@ def _preprocess_mesoscope_directory(
 
     # Ends the runtime early if there are no valid TIFF files to process after filtering
     if len(tiff_files) == 0:
+        # If configured, the processing function ensures that the temporary image directory with all TIFF source files is
+        # removed after processing.
+        if remove_sources:
+            _delete_directory(image_directory)
         return
 
     # Extracts frame invariant metadata using the first frame of the first TIFF stack. Since this metadata is the
@@ -798,7 +806,8 @@ def _preprocess_mesoscope_directory(
     metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
     np.savez_compressed(frame_variant_metadata_path, **metadata_dict)
 
-    # If configured, the processing function ensures that
+    # If configured, the processing function ensures that the temporary image directory with all TIFF source files is
+    # removed after processing.
     if remove_sources:
         _delete_directory(image_directory)
 
@@ -1199,8 +1208,8 @@ def preprocess_session_data(session_data: SessionData) -> None:
     # directory to include the session name. It is essential that this is done before preprocessing, as
     # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
     # session.
-    general_path = Path(mesoscope_data.scanimagepc_data.mesoscope_data_path)
-    session_specific_path = Path(mesoscope_data.scanimagepc_data.session_specific_path)
+    general_path = mesoscope_data.scanimagepc_data.mesoscope_data_path
+    session_specific_path = mesoscope_data.scanimagepc_data.session_specific_path
 
     # Note, the renaming only happens if the session-specific cache does not exist, the general mesoscope_frames cache
     # exists, and it is not empty (has files inside).
