@@ -263,6 +263,11 @@ def _reset_zaber_motors(zaber_motors: ZaberMotors) -> None:
         zaber_motors: The ZaberMotors instance that manages the Zaber motors used during runtime.
     """
 
+    # If at least one of the managed motor groups is not connected, does not run the reset sequence. While rare, this
+    # is one of the possible runtime errors.
+    if not zaber_motors.is_connected:
+        return
+
     # Determines whether to carry out the Zaber motor shutdown sequence.
     message = (
         f"Do you want to carry out Zaber motor shutdown sequence? If ending a successful runtime, enter 'yes'. "
@@ -326,19 +331,11 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     # Determines whether the target session is a Window Checking session.
     window_checking: bool = session_data.session_type == SessionTypes.WINDOW_CHECKING
 
-    # Step 0: Prepares the ScanImagePC and Laser
-    message = (
-        f"Launch ScanImage library on the ScanImagePC by calling 'scanimage' in Matlab command line interface and "
-        f"activate the laser by arming the interlock and turning the activation key."
-    )
-    console.echo(message=message, level=LogLevel.INFO)
-    input("Enter anything to continue: ")
-
     # Ensures that the mesoscope_data directory is reset before running mesoscope preparation sequence.
     for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*"):
         file.unlink(missing_ok=True)
 
-    # Step 1: Find the imaging plane and confirm there are no bubbles
+    # Step 1: Find the imaging plane.
     # If previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
     # augment the message to the user.
     if not window_checking and Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
@@ -347,9 +344,7 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
         )
         # Gives user time to mount the animal and requires confirmation before proceeding further.
         message = (
-            f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
-            f"window, and find the imaging plane. Do NOT tape the light-shield until you find the imaging "
-            f"plane and confirm no bubbles are present above the imaging plane. "
+            f"Follow the steps of the mesoscope preparation protocol available from the sl-protocols repository."
             f"Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
             f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
             f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
@@ -362,36 +357,21 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
         # In that case, instructs the user to choose the imaging plane instead of restoring it to the state used
         # during the previous runtime.
         message = (
-            f"Attach the light-shield to the ring of the headbar, install the mesoscope objective, clean the "
-            f"window, and choose the imaging plane. Do NOT tape the light-shield until you confirm no bubbles "
-            f"are present above the chosen imaging plane. Note, all future imaging sessions will use the same "
-            f"imaging plane as established during this runtime!"
+            f"Unable to discover any previous imaging data for the animal {session_data.animal_id}. Follow the steps "
+            f"of the window checking protocol available from the sl-protocols repository. Note, all future imaging "
+            f"sessions will use the same imaging plane as established during this runtime!"
         )
     else:
         # Window checking does not use the light-shield and requires two alignment steps: red-dot and GenTeal
         message = (
-            f"Install the mesoscope objective, and carry out the air red-dot alignment. Then, level the eyes of the "
-            f"animal as well as possible given the constraints of the craniotomy placement, clean the window, and "
-            f"repeat the red-dot alignment using GenTeal. After alignment, discover and select the imaging plane. "
+            f"Follow the steps of the window checking protocol available from the sl-protocols repository. "
             f"Note, all future imaging sessions will use the same imaging plane as established during this window "
             f"checking runtime!"
         )
     console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
-    # Step 2: Carry out the red-dot alignment process. This is not needed for window checking runtimes, as we do not
-    # use the light-shield
-    if not window_checking:
-        message = (
-            "Withdraw the objective ~1000 um away from the imaging plane and tape up the light shield. Confirm that "
-            "there are no bubbles present above the imaging plane and carry out the red-dot (re) alignment. Then, move "
-            "the objective back to the imaging plane and re-align it to the reference MotionEstimator file state "
-            "(if one is available)."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-    # Step 3: Generate the screenshot of the red-dot alignment and the cranial window
+    # Step 2: Generate the screenshot of the red-dot alignment and the cranial window.
     message = (
         "Generate the screenshot of the red-dot alignment, the imaging plane state (cell activity), and the "
         "ScanImage acquisition parameters using 'Win + PrtSc' combination."
@@ -434,9 +414,9 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
         mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
         mesoscope_data.scanimagepc_data.phosphatase_path.touch()
 
-    # Step 4: Generate the new MotionEstimator file and arm mesoscope for acquisition
+    # Step 3: Generate the new MotionEstimator file and arm the mesoscope for acquisition
     message = (
-        "Call the setupAcquisition(hSI, hSICtl) function via MATLAB command line on the ScanImagePC. The function "
+        "Call the 'setupAcquisition(hSI, hSICtl)' function via MATLAB command line on the ScanImagePC. The function "
         "will carry out the rest of the required preparation steps, including configuring the acquisition "
         "parameters and starting the acquisition upon receiving a trigger from the VRPC (only for experiment sessions)."
     )
@@ -593,6 +573,9 @@ class _MesoscopeVRSystem:
         _started: Tracks whether runtime assets have been initialized (started).
         _terminated: Tracks whether the user has terminated the runtime.
         _paused: Tracks whether the user has paused the runtime.
+        _zaber_connected: Tracks whether the Mesoscope-VR system has connected to Zaber motors as part of this runtime.
+        _mesoscope_started: ZTracks whether the Mesoscope-VR system has started Mesoscope frame acquisition as part of
+            this runtime.
         descriptor: Stores the session descriptor instance of the managed session.
         _experiment_configuration: Stores the MesoscopeExperimentConfiguration instance of the managed session, if the
             session is of the 'mesoscope experiment' type.
@@ -788,6 +771,8 @@ class _MesoscopeVRSystem:
         self._zaber_motors: ZaberMotors = ZaberMotors(
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
+        # Configures the runtime to attempt graceful zaber shutdown if it encounters a runtime error.
+        self._zaber_connected = True
 
         # Defines optional assets used by some, but not all runtimes. Most of these assets are initialized to None by
         # default and are overwritten by the start() method.
@@ -3450,7 +3435,7 @@ def window_checking_logic(
             purge_failed_session(session_data)
 
         # If Zaber motors were connected, attempts to gracefully shut down the motors.
-        if zaber_motors is not None and zaber_motors.is_connected:
+        if zaber_motors is not None:
             _reset_zaber_motors(zaber_motors=zaber_motors)
 
         # Ends the runtime

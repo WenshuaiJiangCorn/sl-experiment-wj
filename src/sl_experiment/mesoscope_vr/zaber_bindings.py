@@ -753,7 +753,8 @@ class ZaberAxis:
         """
         if self._shutdown_flag is not None and not self._shutdown_flag and not self.is_parked:
             # Issues the stop command
-            self.stop()
+            if self.is_busy:
+                self.stop()
 
             # Waits for the motor to seize movement
             while self._motor.is_busy():
@@ -982,12 +983,14 @@ class ZaberConnection:
 
     def __del__(self) -> None:
         """Ensures that the connection is shut down gracefully whenever the class instance is deleted."""
-        if self.is_connected and self._connection is not None:
+        if self._connection is not None and self.is_connected:
+
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
-            # involves motor parking and this may not be safe in all circumstances. Therefore, the user can only
-            # call shutdown manually.
+            # involves moving the motors to the parking position and this may not be safe in all circumstances.
+            # Therefore, the user can only call shutdown manually.
             for device in self._devices:
                 device.emergency_shutdown()
+
             self._connection.close()
 
     def connect(self) -> None:
@@ -1046,7 +1049,15 @@ class ZaberConnection:
 
         # Actualizes the connection status and returns it to caller
         if self._connection is not None and self._is_connected:
-            return True
+            try:
+                # Tries to detect available devices using the connection. If the connection is broken, this will
+                # necessarily fail with an error.
+                self._connection.detect_devices()
+                self._is_connected = True  # If device check succeeded connection is active
+                return True
+            except Exception:
+                # Otherwise, connection is broken
+                self._is_connected = False
         return False
 
     @property
