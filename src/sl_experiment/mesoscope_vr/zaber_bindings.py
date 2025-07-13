@@ -751,7 +751,7 @@ class ZaberAxis:
         called in the case of emergency, when the managing runtime crashes. Users should use the default 'shutdown'
         method.
         """
-        if self._shutdown_flag is not None and not self._shutdown_flag:
+        if self._shutdown_flag is not None and not self._shutdown_flag and not self.is_parked:
             # Issues the stop command
             self.stop()
 
