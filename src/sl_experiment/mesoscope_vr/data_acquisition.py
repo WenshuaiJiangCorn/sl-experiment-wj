@@ -26,6 +26,7 @@ from sl_shared_assets import (
     RunTrainingDescriptor,
     LickTrainingDescriptor,
     MesoscopeHardwareState,
+    WindowCheckingDescriptor,
     MesoscopeExperimentDescriptor,
     MesoscopeExperimentConfiguration,
 )
@@ -41,13 +42,13 @@ from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveI
 from .data_preprocessing import purge_failed_session, preprocess_session_data
 
 
-# Defines some shared methods to make their use consistent between window checking and other runtimes.
+# Defines shared methods to make their use consistent between window checking and other runtimes.
 def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_data: MesoscopeData) -> None:
     """Generates a precursor mesoscope_positions.yaml file and optionally forces the user to update it to reflect
     the current Mesoscope objective position coordinates.
 
-    This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
-    positions that will be reused during the next session to restore the imaging field.
+    This utility method is used as part of experiment and window checking runtimes shutdown sequence to generate a
+    snapshot of Mesoscope objective positions that will be reused during the next session to restore the imaging field.
 
     Args:
         session_data: The SessionData instance for the runtime for which the snapshot is generated.
@@ -306,7 +307,7 @@ def _reset_zaber_motors(zaber_motors: ZaberMotors) -> None:
     console.echo(message=message, level=LogLevel.SUCCESS)
 
 
-def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, window_checking: bool = False) -> None:
+def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -> None:
     """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data or checking the
     quality of the cranial window.
 
@@ -314,7 +315,14 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
     for data acquisition. It is also used by the window_checking runtime to guide the user through the process of
     generating the required data to potentially support future experiments. It guides the user through all mesoscope
     preparation steps and, at the end of runtime, ensures the mesoscope is ready for acquisition.
+
+    Args:
+        session_data: The SessionData instance for the runtime for which to set up the mesoscope.
+        mesoscope_data: The MesoscopeData instance for the runtime for which to set up the mesoscope.
     """
+
+    # Determines whether the target session is a Window Checking session.
+    window_checking: bool = session_data.session_type == SessionTypes.WINDOW_CHECKING
 
     # Step 0: Prepares the ScanImagePC and Laser
     message = (
@@ -323,6 +331,10 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
     )
     console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
+
+    # Ensures that the mesoscope_data directory is reset before running mesoscope preparation sequence.
+    for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*"):
+        file.unlink(missing_ok=True)
 
     # Step 1: Find the imaging plane and confirm there are no bubbles
     # If previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
@@ -339,7 +351,8 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
             f"Previous mesoscope coordinates were: x={previous_positions.mesoscope_x}, "
             f"y={previous_positions.mesoscope_y}, roll={previous_positions.mesoscope_roll}, "
             f"z={previous_positions.mesoscope_z}, fast_z={previous_positions.mesoscope_fast_z}, "
-            f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}."
+            f"tip={previous_positions.mesoscope_tip}, tilt={previous_positions.mesoscope_tilt}, "
+            f"laser_power={previous_positions.laser_power_mw}."
         )
     elif not window_checking:
         # While it is somewhat unlikely that imaging plane is not established at this time, this is not impossible.
@@ -448,6 +461,70 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData, w
         input("Enter anything to continue: ")
 
     console.echo(message="Mesoscope Preparation: Complete.", level=LogLevel.SUCCESS)
+
+
+def _verify_descriptor_update(
+    descriptor: MesoscopeExperimentDescriptor
+    | LickTrainingDescriptor
+    | RunTrainingDescriptor
+    | WindowCheckingDescriptor,
+    session_data: SessionData,
+    mesoscope_data: MesoscopeData,
+) -> None:
+    """Caches the input descriptor instance to the target session's raw_data folder and forces the user to update the
+    data stored inside the cached descriptor file with runtime notes.
+
+    This utility method is used to ensure that the user adds their runtime notes to the runtime descriptor file. It is
+    shared by all session (runtime) types.
+
+    Args:
+        descriptor: The session_descriptor.yaml-convertible class instance to cache to the target session's
+            raw_data folder.
+        session_data: The SessionData instance for the runtime for which to generate the descriptor .yaml file.
+        mesoscope_data: The MesoscopeData instance for the runtime for which to generate the descriptor .yaml file.
+    """
+
+    # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
+    descriptor.to_yaml(file_path=Path(session_data.raw_data.session_descriptor_path))
+    console.echo(message=f"Session descriptor precursor file: Created.", level=LogLevel.SUCCESS)
+
+    # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
+    # before processing so that the notes are properly transferred to long-term storage destinations.
+    message = (
+        f"Open the session descriptor file stored in the session's raw_data folder and update it with the notes "
+        f"taken during runtime."
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    input("Enter anything to continue: ")
+
+    # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
+    descriptor = descriptor.from_yaml(  # type: ignore
+        file_path=Path(session_data.raw_data.session_descriptor_path)
+    )
+    # noinspection PyUnresolvedReferences
+    while "Replace this with your notes." in descriptor.experimenter_notes:
+        message = (
+            "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
+            "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
+            "replace the default text under the 'experimenter_notes' field with the notes taken during the "
+            "runtime. Make sure to save the changes to the file by using 'CTRL+S' combination."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+
+        # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
+        descriptor = descriptor.from_yaml(  # type: ignore
+            file_path=Path(session_data.raw_data.session_descriptor_path),
+        )
+
+    # If the descriptor has passed the verification, backs it up to the animal's persistent directory. This is a
+    # feature primarily used during training to restore the training parameters between training sessions of the
+    # same type. The MesoscopeData resolves the paths to the persistent descriptor files in a way that
+    # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
+    sh.copy2(
+        src=session_data.raw_data.session_descriptor_path,
+        dst=mesoscope_data.vrpc_persistent_data.session_descriptor_path,
+    )
 
 
 class _MesoscopeVRSystem:
@@ -1059,6 +1136,245 @@ class _MesoscopeVRSystem:
         # Calls the shared method
         _reset_zaber_motors(zaber_motors=self._zaber_motors)
 
+    def _generate_zaber_snapshot(self) -> None:
+        """Creates a snapshot of current Zaber motor positions and saves them to the session raw_dat folder and the
+        persistent folder of the animal that participates in the runtime."""
+
+        # Calls the shared method
+        _generate_zaber_snapshot(
+            session_data=self._session_data, mesoscope_data=self._mesoscope_data, zaber_motors=self._zaber_motors
+        )
+
+    def _setup_mesoscope(self) -> None:
+        """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data.
+
+        This method is used as part of the start() method execution for experiment runtimes to ensure the
+        mesoscope is ready for data acquisition. It guides the user through all mesoscope preparation steps and, at
+        the end of runtime, ensures the mesoscope is ready for acquisition.
+        """
+
+        # Calls the shared method
+        _setup_mesoscope(session_data=self._session_data, mesoscope_data=self._mesoscope_data)
+
+    def _start_mesoscope(self) -> None:
+        """Generates the acquisition start marker file on the ScanImagePC and waits for the frame acquisition to begin.
+
+        This method is used internally to start the mesoscope frame acquisition as part of the runtime startup
+        process and to verify that the mesoscope is available and properly configured to acquire frames
+        based on the input triggers.
+
+        Notes:
+            This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
+            prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
+
+        Raises:
+            RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
+                acquisition marker file is created and the user chooses to abort the runtime.
+        """
+
+        # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
+        timeout_timer = PrecisionTimer("s")
+
+        # Keeps retrying to activate mesoscope acquisition until success or until the user aborts the acquisition
+        outcome = ""
+        while outcome != "abort":
+            self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame counter
+
+            # Ensures that the mesoscope is not currently acquiring frames. If it is acquiring frames, then it has not
+            # been set up correctly for acquisition.
+            timeout_timer.delay_noblock(1)  # Waits for 1 second to assess whether the mesoscope is acquiring frames.
+
+            # If mesoscope has acquired frames over the delay period, it is not prepared for acquisition.
+            if self._microcontrollers.mesoscope_frame_count > 0:
+                message = (
+                    f"Unable to trigger mesoscope frame acquisition, as the mesoscope is already acquiring frames. "
+                    f"This indicates that the setupAcquisition function did not run as expected, as that function is "
+                    f"meant to lock the mesoscope down for acquisition and wait for VRPC to trigger it. Re-run the "
+                    f"setupAcquisition function before retrying."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+
+            # Otherwise, proceeds with the startup process
+            else:
+                # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data
+                # inside the mesoscope folder always perfectly aligns with the number of frame acquisition triggers
+                # recorded by the frame monitor module.
+                for pattern in ["*.tif", "*.tiff"]:
+                    for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
+                        # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
+                        # of the acquisition setup procedure.
+                        if "zstack" not in file.name:
+                            file.unlink(missing_ok=True)
+
+                # Starts the acquisition process by creating the kinase.bin marker. The acquisition function running
+                # on the ScanImagePC starts the acquisition process as soon as it detects the presence of the marker
+                # file.
+                self._mesoscope_data.scanimagepc_data.kinase_path.touch()
+
+                # Ensures that the frame acquisition starts as expected
+                message = "Mesoscope acquisition trigger: Sent. Waiting for the mesoscope frame acquisition to start..."
+                console.echo(message=message, level=LogLevel.INFO)
+
+                # Waits at most 5 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take
+                # ~ 1 second of downtime.
+                timeout_timer.reset()
+                while timeout_timer.elapsed < 5:
+                    if self._microcontrollers.mesoscope_frame_count > 10:
+                        # Ends the runtime
+                        message = "Mesoscope frame acquisition: Started."
+                        console.echo(message=message, level=LogLevel.SUCCESS)
+
+                        # Prepares assets use to detect and recover from unwanted acquisition interruptions.
+                        self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
+                        self._mesoscope_timer.reset()  # type: ignore
+                        return
+
+                # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
+                message = (
+                    f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to "
+                    f"receive 10 frame acquisition triggers over 5 seconds. It is likely that the mesoscope has not "
+                    f"been armed for externally-triggered frame acquisition or that the mesoscope frame monitoring "
+                    f"module is not functioning. Make sure the Mesoscope is configured for data acquisition before "
+                    f"continuing and retry the mesoscope activation."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+
+        message = f"Runtime aborted due to user request."
+        console.error(message=message, error=RuntimeError)
+        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+
+    def _stop_mesoscope(self) -> None:
+        """Sends the frame acquisition stop TTL pulse to the mesoscope and waits for the frame acquisition to stop.
+
+        This method is used internally to stop the mesoscope frame acquisition as part of the stop() method runtime.
+
+        Notes:
+            This method contains an infinite loop that waits for the mesoscope to stop generating frame acquisition
+            triggers.
+        """
+
+        # As a fall-back mechanism for terminating runtimes that failed to initialize, generates the phosphatase.bin
+        # marker. The presence of this marker ends the runtime of the MATLAB function if the kinase.bin marker was
+        # never created.
+        self._mesoscope_data.scanimagepc_data.phosphatase_path.touch()
+
+        # Removes the acquisition marker file, which causes the runtime control MATLAB function to stop the acquisition.
+        self._mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+
+        # Blocks until the Mesoscope stops sending frame acquisition pulses to the microcontroller.
+        message = "Waiting for the Mesoscope to stop acquiring frames..."
+        console.echo(message=message, level=LogLevel.INFO)
+        self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array
+        while True:
+            # Delays for 2 seconds. Mesoscope acquires frames at 10 Hz, so if there are no incoming triggers for that
+            # period of time, it is safe to assume that the acquisition has stopped.
+            self._timestamp_timer.delay_noblock(delay=2000000)
+            if self._microcontrollers.mesoscope_frame_count == 0:
+                break  # Breaks the loop
+            else:
+                self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array and waits more
+
+    def _generate_mesoscope_position_snapshot(self) -> None:
+        """Generates a precursor mesoscope_positions.yaml file and optionally forces the user to update it to reflect
+        the current Mesoscope objective position coordinates.
+
+        This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
+        positions that will be reused during the next session to restore the imaging field.
+        """
+        # Calls the shared method
+        _generate_mesoscope_position_snapshot(session_data=self._session_data, mesoscope_data=self._mesoscope_data)
+
+    def _generate_hardware_state_snapshot(self) -> None:
+        """Resolves and generates the snapshot of hardware configuration parameters used by the Mesoscope-VR system
+        modules.
+
+        This method determines which modules are used by the executed runtime (session) type and caches their
+        configuration data into a HardwareStates object stored inside the session's raw_data folder.
+        """
+
+        # Experiment runtimes use all available hardware modules
+        if self._experiment_configuration:
+            hardware_state = MesoscopeHardwareState(
+                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+                maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
+                minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+                screens_initially_on=self._microcontrollers.screens.initially_on,
+                recorded_mesoscope_ttl=True,
+                system_state_codes=self._state_map,
+            )
+        # Lick training runtimes use a subset of hardware, including torque sensor
+        elif self._session_data.session_type == SessionTypes.LICK_TRAINING:
+            hardware_state = MesoscopeHardwareState(
+                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                system_state_codes=self._state_map,
+            )
+        # Run training runtimes use the same subset of hardware as the rest training runtime, except instead of torque
+        # sensor, they monitor the encoder.
+        elif self._session_data.session_type == SessionTypes.RUN_TRAINING:
+            hardware_state = MesoscopeHardwareState(
+                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
+                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
+                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
+                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
+                system_state_codes=self._state_map,
+            )
+        else:
+            # It should be impossible to satisfy this error clause, but is kept for safety reasons
+            message = (
+                f"Unsupported session type: {self._session_data.session_type} encountered when resolving the "
+                f"Mesoscope-VR runtime hardware state."
+            )
+            console.error(message=message, error=ValueError)
+            raise ValueError(message)  # A fall-back to appease mypy
+
+        # Caches the hardware state to disk
+        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
+        message = "Mesoscope-VR hardware state snapshot: Generated."
+        console.echo(message=message, level=LogLevel.SUCCESS)
+
+    def _generate_session_descriptor(self) -> None:
+        """Updates the contents of the locally stored session descriptor file with runtime data and caches it to
+        session's raw_data directory.
+
+        This utility method is used as part of the stop() method runtime to generate the session_descriptor.yaml file.
+        Since this file combines both runtime-generated and user-generated data, this method also ensures that the
+        user updates the descriptor file to include experimenter notes taken during runtime.
+        """
+
+        # The presence of the 'nk.bin' marker indicates that the session has not been properly initialized. Since
+        # this method can be called as part of the emergency shutdown process for a session that encountered an
+        # initialization error, if the marker exists, ends the runtime early.
+        if self._session_data.raw_data.nk_path.exists():
+            return
+
+        # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
+        # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
+        # that the reported water volumes are accurate:
+
+        # Runtime water volume. This should accurately reflect the volume of water consumed by the animal during
+        # runtime.
+        delivered_water = self._microcontrollers.delivered_water_volume - self._paused_water_volume
+        # Converts from uL to ml
+        self.descriptor.dispensed_water_volume_ml = float(round(delivered_water / 1000, ndigits=3))
+
+        # Same as above, but tracks the total volume of water dispensed during pauses. While the animal might
+        # have consumed some of that water, it is equally plausible that all water was wasted or not dispensed at all.
+        self.descriptor.pause_dispensed_water_volume_ml = float(round(self._paused_water_volume / 1000, ndigits=3))
+        self.descriptor.incomplete = False  # If the runtime reaches this point, the session is likely complete.
+
+        # Ensures that the user updates the descriptor file.
+        _verify_descriptor_update(
+            descriptor=self.descriptor, session_data=self._session_data, mesoscope_data=self._mesoscope_data
+        )
+
     def _setup_unity(self) -> None:
         """Guides the user through verifying that Unity is configured to correctly display the task environment on the
         VR screens.
@@ -1194,295 +1510,6 @@ class _MesoscopeVRSystem:
         message = "Unity setup: Complete."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def _setup_mesoscope(self) -> None:
-        """Prompts the user to carry out steps to prepare the mesoscope for acquiring brain activity data.
-
-        This method is used as part of the start() method execution for experiment runtimes to ensure the
-        mesoscope is ready for data acquisition. It guides the user through all mesoscope preparation steps and, at
-        the end of runtime, ensures the mesoscope is ready for acquisition.
-        """
-
-        # Calls the shared method
-        _setup_mesoscope(session_data=self._session_data, mesoscope_data=self._mesoscope_data, window_checking=False)
-
-    def _generate_zaber_snapshot(self) -> None:
-        """Creates a snapshot of current Zaber motor positions and saves them to the session raw_dat folder and the
-        persistent folder of the animal that participates in the runtime."""
-
-        # Calls the shared method
-        _generate_zaber_snapshot(
-            session_data=self._session_data, mesoscope_data=self._mesoscope_data, zaber_motors=self._zaber_motors
-        )
-
-    def _generate_hardware_state_snapshot(self) -> None:
-        """Resolves and generates the snapshot of hardware configuration parameters used by the Mesoscope-VR system
-        modules.
-
-        This method determines which modules are used by the executed runtime (session) type and caches them into
-        a HardwareStates object stored inside the session's raw_data folder.
-        """
-
-        # Experiment runtimes use all available hardware modules
-        if self._experiment_configuration:
-            hardware_state = MesoscopeHardwareState(
-                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
-                maximum_break_strength=float(self._microcontrollers.wheel_break.maximum_break_strength),
-                minimum_break_strength=float(self._microcontrollers.wheel_break.minimum_break_strength),
-                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-                screens_initially_on=self._microcontrollers.screens.initially_on,
-                recorded_mesoscope_ttl=True,
-                system_state_codes=self._state_map,
-            )
-        # Lick training runtimes use a subset of hardware, including torque sensor
-        elif self._session_data.session_type == SessionTypes.LICK_TRAINING:
-            hardware_state = MesoscopeHardwareState(
-                torque_per_adc_unit=float(self._microcontrollers.torque.torque_per_adc_unit),
-                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-                system_state_codes=self._state_map,
-            )
-        # Run training runtimes use the same subset of hardware as the rest training runtime, except instead of torque
-        # sensor, they monitor the encoder.
-        elif self._session_data.session_type == SessionTypes.RUN_TRAINING:
-            hardware_state = MesoscopeHardwareState(
-                cm_per_pulse=float(self._microcontrollers.wheel_encoder.cm_per_pulse),
-                lick_threshold=int(self._microcontrollers.lick.lick_threshold),
-                valve_scale_coefficient=float(self._microcontrollers.valve.scale_coefficient),
-                valve_nonlinearity_exponent=float(self._microcontrollers.valve.nonlinearity_exponent),
-                system_state_codes=self._state_map,
-            )
-        else:
-            # It should be impossible to satisfy this error clause, but is kept for safety reasons
-            message = (
-                f"Unsupported session type: {self._session_data.session_type} encountered when resolving the "
-                f"Mesoscope-VR runtime hardware state."
-            )
-            console.error(message=message, error=ValueError)
-            raise ValueError(message)  # A fall-back to appease mypy
-
-        # Caches the hardware state to disk
-        hardware_state.to_yaml(Path(self._session_data.raw_data.hardware_state_path))
-        message = "Mesoscope-VR hardware state snapshot: Generated."
-        console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def _generate_mesoscope_position_snapshot(self) -> None:
-        """Generates a precursor mesoscope_positions.yaml file and optionally forces the user to update it to reflect
-        the current Mesoscope objective position coordinates.
-
-        This utility method is used during the stop() method runtime to generate a snapshot of Mesoscope objective
-        positions that will be reused during the next session to restore the imaging field.
-        """
-        # Calls the shared method
-        _generate_mesoscope_position_snapshot(session_data=self._session_data, mesoscope_data=self._mesoscope_data)
-
-    def _generate_session_descriptor(self) -> None:
-        """Updates the contents of the locally stored session descriptor file with runtime data and caches it to
-        session's raw_data directory.
-
-        This utility method is used as part of the stop() method runtime to generate the session_descriptor.yaml file.
-        Since this file combines both runtime-generated and user-generated data, this method also ensures that the
-        user updates the descriptor file to include experimenter notes taken during runtime.
-        """
-
-        # The presence of the 'nk.bin' marker indicates that the session has not been properly initialized. Since
-        # this method can be called as part of the emergency shutdown process for a session that encountered an
-        # initialization error, if the marker exists, ends the runtime early.
-        if self._session_data.raw_data.nk_path.exists():
-            return
-
-        # Updates the contents of the pregenerated descriptor file and dumps it as a .yaml into the root raw_data
-        # session directory. This needs to be done after the microcontrollers and loggers have been stopped to ensure
-        # that the reported water volumes are accurate:
-
-        # Runtime water volume. This should accurately reflect the volume of water consumed by the animal during
-        # runtime.
-        delivered_water = self._microcontrollers.delivered_water_volume - self._paused_water_volume
-        # Converts from uL to ml
-        self.descriptor.dispensed_water_volume_ml = float(round(delivered_water / 1000, ndigits=3))
-
-        # Same as above, but tracks the total volume of water dispensed during pauses. While the animal might
-        # have consumed some of that water, it is equally plausible that all water was wasted or not dispensed at all.
-        self.descriptor.pause_dispensed_water_volume_ml = float(round(self._paused_water_volume / 1000, ndigits=3))
-
-        self.descriptor.incomplete = False  # If the runtime reaches this point, the session is likely complete.
-
-        # Dumps the updated descriptor as a .yaml, so that the user can edit it with user-generated data.
-        self.descriptor.to_yaml(file_path=Path(self._session_data.raw_data.session_descriptor_path))
-        console.echo(message=f"Session descriptor precursor file: Created.", level=LogLevel.SUCCESS)
-
-        # Prompts the user to add their notes to the appropriate section of the descriptor file. This has to be done
-        # before processing so that the notes are properly transferred to long-term storage destinations.
-        message = (
-            f"Open the session descriptor file stored in the session's raw_data folder and update it with the notes "
-            f"taken during runtime."
-        )
-        console.echo(message=message, level=LogLevel.INFO)
-        input("Enter anything to continue: ")
-
-        # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
-        self.descriptor = self.descriptor.from_yaml(  # type: ignore
-            file_path=Path(self._session_data.raw_data.session_descriptor_path)
-        )
-        # noinspection PyUnresolvedReferences
-        while "Replace this with your notes." in self.descriptor.experimenter_notes:
-            message = (
-                "Failed to verify that the session_descriptor.yaml file stored inside the session raw_data directory "
-                "has been updated to include experimenter notes. Manually edit the session_descriptor.yaml file and "
-                "replace the default text under the 'experimenter_notes' field with the notes taken during the "
-                "runtime. Make sure to save the changes to the file by using 'CTRL+S' combination."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            input("Enter anything to continue: ")
-
-            # Reloads the descriptor from disk each time to ensure experimenter notes have been modified.
-            self.descriptor = self.descriptor.from_yaml(  # type: ignore
-                file_path=Path(self._session_data.raw_data.session_descriptor_path),
-            )
-
-        # If the descriptor has passed the verification, backs it up to the animal's persistent directory. This is a
-        # feature primarily used during training to restore the training parameters between training sessions of the
-        # same type. The MesoscopeData resolves the paths to the persistent descriptor files in a way that
-        # allows to keep a copy of each supported descriptor without interfering with other descriptor types.
-        sh.copy2(
-            src=self._session_data.raw_data.session_descriptor_path,
-            dst=self._mesoscope_data.vrpc_persistent_data.session_descriptor_path,
-        )
-
-    @staticmethod
-    @njit(cache=True)  # type: ignore
-    def _decompose_sequence_numba_flat(
-        cue_sequence: NDArray[np.uint8],
-        motifs_flat: NDArray[np.uint8],
-        motif_starts: NDArray[np.int32],
-        motif_lengths: NDArray[np.int32],
-        motif_indices: NDArray[np.int32],
-        max_trials: int,
-    ) -> tuple[NDArray[np.int32], int]:
-        """Decomposes a long sequence of Virtual Reality (VR) wall cues into individual trial motifs.
-
-        This is a worker function used to speed up decomposition via numba-acceleration.
-
-        Args:
-            cue_sequence: The full cue sequence to decompose.
-            motifs_flat: All motifs concatenated into a single 1D array.
-            motif_starts: Starting index of each motif in motifs_flat.
-            motif_lengths: The length of each motif.
-            motif_indices: Original indices of motifs (before sorting).
-            max_trials: The maximum number of trials that can make up the cue sequence.
-
-        Returns:
-            A tuple of two elements. The first element stores the array of trial type-indices (the sequence of trial
-            type indices). The second element stores the total number of trials extracted from the cue sequence.
-        """
-        # Prepares runtime trackers
-        trial_indices = np.zeros(max_trials, dtype=np.int32)
-        trial_count = 0
-        sequence_pos = 0
-        sequence_length = len(cue_sequence)
-        num_motifs = len(motif_lengths)
-
-        # Decomposes the sequence into trial motifs using greedy matching. Longer motifs are matched over shorter ones.
-        # Pre-specifying the maximum number of trials serves as a safety feature to avoid processing errors.
-        while sequence_pos < sequence_length and trial_count < max_trials:
-            motif_found = False
-
-            for i in range(num_motifs):
-                motif_length = motif_lengths[i]
-
-                # If the current sequence position is within the bounds of the motif, checks if it matches the motif.
-                if sequence_pos + motif_length <= sequence_length:
-                    # Gets motif start position from the flat array
-                    motif_start = motif_starts[i]
-
-                    # Checks if the motif matches the evaluated sequence.
-                    match = True
-                    for j in range(motif_length):
-                        if cue_sequence[sequence_pos + j] != motifs_flat[motif_start + j]:
-                            match = False
-                            break
-                    # If the motif matches, records the trial type index and moves to the next sequence position.
-                    if match:
-                        trial_indices[trial_count] = motif_indices[i]
-                        trial_count += 1
-                        sequence_pos += motif_length
-                        motif_found = True
-                        break
-            # If the function is not able to pair a part of the sequence with a motif, aborts with an error.
-            if not motif_found:
-                return trial_indices, -1
-
-        return trial_indices[:trial_count], trial_count
-
-    def _decompose_cue_sequence_to_trial_lengths(self) -> None:
-        """Decomposes the Virtual Reality task wall cue sequence into trials into a sequence of cumulative traveled
-        distances, in Unity units, at the end of each trial.
-
-        Uses greedy longest-match approach to identify trial motifs in the cue sequence and maps them to their trial
-        distances based on the experiment_configuration file data. This is used to translate the sequence of wall cues
-        into the sequence of trial distances, in Unity units. The sequence is then accumulated to generate the NumPy
-        array that stores the cumulative traveled distance at the end of each trial block.
-
-        Raises:
-            RuntimeError: If the method is not able to fully decompose the experiment cue sequence into a set of trial
-                lengths.
-        """
-        # Mostly a fallback to appease mypy, this method should not be called for non-experiment runtimes.
-        if self._experiment_configuration is None:
-            return
-
-        # Extracts the list of trial cue sequences supported by the managed experiment runtime.
-        trials: list[ExperimentTrial] = [trial for trial in self._experiment_configuration.trial_structures.values()]
-
-        # Extracts trial motif (cue sequences for each trial type) and their corresponding distances in cm.
-        trial_motifs: list[NDArray[np.uint8]] = [np.array(trial.cue_sequence, dtype=np.uint8) for trial in trials]
-        trial_distances: list[float] = [float(trial.trial_length_cm) for trial in trials]
-
-        # Prepares the flattened motif data using the MotifDecomposer class.
-        motifs_flat, motif_starts, motif_lengths, motif_indices, distances_array = (
-            self._motif_decomposer.prepare_motif_data(trial_motifs, trial_distances)
-        )
-
-        # Estimates the maximum number of trials that can be theoretically extracted from the input cue sequence.
-        min_motif_length = min(len(motif) for motif in trial_motifs)
-        max_trials = len(self._cue_sequence) // min_motif_length + 1
-
-        # CallS Numba-accelerated worker method to decompose the sequence.
-        trial_indices_array, trial_count = self._decompose_sequence_numba_flat(
-            self._cue_sequence, motifs_flat, motif_starts, motif_lengths, motif_indices, max_trials
-        )
-
-        # Checks for decomposition errors
-        if trial_count == -1:
-            # Finds the position where decomposition failed for the error message
-            sequence_pos = 0
-            trial_indices_list = trial_indices_array[:max_trials].tolist()
-
-            # Reconstructs the position by summing the lengths of successfully matched trials
-            for idx in trial_indices_list:
-                if idx == 0 and sequence_pos > 0:  # Assumes 0 is not a valid trial index after first match
-                    break
-                sequence_pos += len(trial_motifs[idx])
-
-            remaining_sequence = self._cue_sequence[sequence_pos : sequence_pos + 10]
-            message = (
-                f"Unable to decompose the VR wall cue sequence received from Unity into a sequence of trial "
-                f"distances. No trial motif (trial cue sequence) matched at overall sequence position "
-                f"{sequence_pos}, remaining sequence: {remaining_sequence.tolist()}"
-            )
-            console.error(message=message, error=RuntimeError)
-            return
-
-        # Maps trial indices to distances and computes cumulative traveled distance at the end of each trial.
-        trial_indices_list = trial_indices_array[:trial_count].tolist()
-        trial_distance_array: NDArray[np.float32] = np.array(
-            [distances_array[trial_type] for trial_type in trial_indices_list], dtype=np.float32
-        )
-        self._trial_distances = np.cumsum(trial_distance_array, dtype=np.float32)
-
     def _get_cue_sequence(self) -> None:
         """Queries the sequence of virtual reality track wall cues for the current task from Unity.
 
@@ -1578,124 +1605,136 @@ class _MesoscopeVRSystem:
         console.error(message=message, error=RuntimeError)
         raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
-    def _start_mesoscope(self) -> None:
-        """Generates the acquisition start marker file on the ScanImagePC and waits for the frame acquisition to begin.
+    def _decompose_cue_sequence_to_trial_lengths(self) -> None:
+        """Decomposes the Virtual Reality task wall cue sequence into trials into a sequence of cumulative traveled
+        distances, in Unity units, at the end of each trial.
 
-        This method is used internally to start the mesoscope frame acquisition as part of the runtime startup
-        process and to verify that the mesoscope is available and properly configured to acquire frames
-        based on the input triggers.
-
-        Notes:
-            This method contains an infinite loop that allows retrying the failed mesoscope acquisition start. This
-            prevents the runtime from aborting unless the user purposefully chooses the hard abort option.
+        Uses greedy longest-match approach to identify trial motifs in the cue sequence and maps them to their trial
+        distances based on the experiment_configuration file data. This is used to translate the sequence of wall cues
+        into the sequence of trial distances, in Unity units. The sequence is then accumulated to generate the NumPy
+        array that stores the cumulative traveled distance at the end of each trial block.
 
         Raises:
-            RuntimeError: If the mesoscope does not confirm frame acquisition within 2 seconds after the
-                acquisition marker file is created and the user chooses to abort the runtime.
+            RuntimeError: If the method is not able to fully decompose the experiment cue sequence into a set of trial
+                lengths.
         """
+        # Mostly a fallback to appease mypy, this method should not be called for non-experiment runtimes.
+        if self._experiment_configuration is None:
+            return
 
-        # Initializes a second-precise timer to ensure the request is fulfilled within a 2-second timeout
-        timeout_timer = PrecisionTimer("s")
+        # Extracts the list of trial cue sequences supported by the managed experiment runtime.
+        trials: list[ExperimentTrial] = [trial for trial in self._experiment_configuration.trial_structures.values()]
 
-        # Keeps retrying to activate mesoscope acquisition until success or until the user aborts the acquisition
-        outcome = ""
-        while outcome != "abort":
-            self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame counter
+        # Extracts trial motif (cue sequences for each trial type) and their corresponding distances in cm.
+        trial_motifs: list[NDArray[np.uint8]] = [np.array(trial.cue_sequence, dtype=np.uint8) for trial in trials]
+        trial_distances: list[float] = [float(trial.trial_length_cm) for trial in trials]
 
-            # Ensures that the mesoscope is not currently acquiring frames. If it is acquiring frames, then it has not
-            # been set up correctly for acquisition.
-            timeout_timer.delay_noblock(1)  # Waits for 1 second to assess whether the mesoscope is acquiring frames.
+        # Prepares the flattened motif data using the MotifDecomposer class.
+        motifs_flat, motif_starts, motif_lengths, motif_indices, distances_array = (
+            self._motif_decomposer.prepare_motif_data(trial_motifs, trial_distances)
+        )
 
-            # If mesoscope has acquired frames over the delay period, it is not prepared for acquisition.
-            if self._microcontrollers.mesoscope_frame_count > 0:
-                message = (
-                    f"Unable to trigger mesoscope frame acquisition, as the mesoscope is already acquiring frames. "
-                    f"This indicates that the setupAcquisition function did not run as expected, as that function is "
-                    f"meant to lock the mesoscope down for acquisition and wait for VRPC to trigger it. Re-run the "
-                    f"setupAcquisition function before retrying."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
+        # Estimates the maximum number of trials that can be theoretically extracted from the input cue sequence.
+        min_motif_length = min(len(motif) for motif in trial_motifs)
+        max_trials = len(self._cue_sequence) // min_motif_length + 1
 
-            # Otherwise, proceeds with the startup process
-            else:
-                # Before starting the acquisition, clears any unexpected TIFF / TIF files. This ensures that the data
-                # inside the mesoscope folder always perfectly aligns with the number of frame acquisition triggers
-                # recorded by the frame monitor module.
-                for pattern in ["*.tif", "*.tiff"]:
-                    for file in self._mesoscope_data.scanimagepc_data.mesoscope_data_path.glob(pattern):
-                        # Specifically excludes 'zstack.tif' files from this process, as that stack is generated as part
-                        # of the acquisition setup procedure.
-                        if "zstack" not in file.name:
-                            file.unlink(missing_ok=True)
+        # CallS Numba-accelerated worker method to decompose the sequence.
+        trial_indices_array, trial_count = self._decompose_sequence_numba_flat(
+            self._cue_sequence, motifs_flat, motif_starts, motif_lengths, motif_indices, max_trials
+        )
 
-                # Starts the acquisition process by creating the kinase.bin marker. The acquisition function running
-                # on the ScanImagePC starts the acquisition process as soon as it detects the presence of the marker
-                # file.
-                self._mesoscope_data.scanimagepc_data.kinase_path.touch()
+        # Checks for decomposition errors
+        if trial_count == -1:
+            # Finds the position where decomposition failed for the error message
+            sequence_pos = 0
+            trial_indices_list = trial_indices_array[:max_trials].tolist()
 
-                # Ensures that the frame acquisition starts as expected
-                message = "Mesoscope acquisition trigger: Sent. Waiting for the mesoscope frame acquisition to start..."
-                console.echo(message=message, level=LogLevel.INFO)
+            # Reconstructs the position by summing the lengths of successfully matched trials
+            for idx in trial_indices_list:
+                if idx == 0 and sequence_pos > 0:  # Assumes 0 is not a valid trial index after first match
+                    break
+                sequence_pos += len(trial_motifs[idx])
 
-                # Waits at most 5 seconds for the mesoscope to acquire at least 10 frames. At ~ 10 Hz, it should take
-                # ~ 1 second of downtime.
-                timeout_timer.reset()
-                while timeout_timer.elapsed < 5:
-                    if self._microcontrollers.mesoscope_frame_count > 10:
-                        # Ends the runtime
-                        message = "Mesoscope frame acquisition: Started."
-                        console.echo(message=message, level=LogLevel.SUCCESS)
+            remaining_sequence = self._cue_sequence[sequence_pos : sequence_pos + 10]
+            message = (
+                f"Unable to decompose the VR wall cue sequence received from Unity into a sequence of trial "
+                f"distances. No trial motif (trial cue sequence) matched at overall sequence position "
+                f"{sequence_pos}, remaining sequence: {remaining_sequence.tolist()}"
+            )
+            console.error(message=message, error=RuntimeError)
+            return
 
-                        # Prepares assets use to detect and recover from unwanted acquisition interruptions.
-                        self._mesoscope_frame_count = self._microcontrollers.mesoscope_frame_count
-                        self._mesoscope_timer.reset()  # type: ignore
-                        return
+        # Maps trial indices to distances and computes cumulative traveled distance at the end of each trial.
+        trial_indices_list = trial_indices_array[:trial_count].tolist()
+        trial_distance_array: NDArray[np.float32] = np.array(
+            [distances_array[trial_type] for trial_type in trial_indices_list], dtype=np.float32
+        )
+        self._trial_distances = np.cumsum(trial_distance_array, dtype=np.float32)
 
-                # If the loop above is escaped, this is due to not receiving the mesoscope frame acquisition pulses.
-                message = (
-                    f"The Mesoscope-VR system has requested the mesoscope to start acquiring frames and failed to "
-                    f"receive 10 frame acquisition triggers over 5 seconds. It is likely that the mesoscope has not "
-                    f"been armed for externally-triggered frame acquisition or that the mesoscope frame monitoring "
-                    f"module is not functioning. Make sure the Mesoscope is configured for data acquisition before "
-                    f"continuing and retry the mesoscope activation."
-                )
-                console.echo(message=message, level=LogLevel.ERROR)
-            outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+    @staticmethod
+    @njit(cache=True)  # type: ignore
+    def _decompose_sequence_numba_flat(
+        cue_sequence: NDArray[np.uint8],
+        motifs_flat: NDArray[np.uint8],
+        motif_starts: NDArray[np.int32],
+        motif_lengths: NDArray[np.int32],
+        motif_indices: NDArray[np.int32],
+        max_trials: int,
+    ) -> tuple[NDArray[np.int32], int]:
+        """Decomposes a long sequence of Virtual Reality (VR) wall cues into individual trial motifs.
 
-        message = f"Runtime aborted due to user request."
-        console.error(message=message, error=RuntimeError)
-        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+        This is a worker function used to speed up decomposition via numba-acceleration.
 
-    def _stop_mesoscope(self) -> None:
-        """Sends the frame acquisition stop TTL pulse to the mesoscope and waits for the frame acquisition to stop.
+        Args:
+            cue_sequence: The full cue sequence to decompose.
+            motifs_flat: All motifs concatenated into a single 1D array.
+            motif_starts: Starting index of each motif in motifs_flat.
+            motif_lengths: The length of each motif.
+            motif_indices: Original indices of motifs (before sorting).
+            max_trials: The maximum number of trials that can make up the cue sequence.
 
-        This method is used internally to stop the mesoscope frame acquisition as part of the stop() method runtime.
-
-        Notes:
-            This method contains an infinite loop that waits for the mesoscope to stop generating frame acquisition
-            triggers.
+        Returns:
+            A tuple of two elements. The first element stores the array of trial type-indices (the sequence of trial
+            type indices). The second element stores the total number of trials extracted from the cue sequence.
         """
+        # Prepares runtime trackers
+        trial_indices = np.zeros(max_trials, dtype=np.int32)
+        trial_count = 0
+        sequence_pos = 0
+        sequence_length = len(cue_sequence)
+        num_motifs = len(motif_lengths)
 
-        # As a fall-back mechanism for terminating runtimes that failed to initialize, generates the phosphatase.bin
-        # marker. The presence of this marker ends the runtime of the MATLAB function if the kinase.bin marker was
-        # never created.
-        self._mesoscope_data.scanimagepc_data.phosphatase_path.touch()
+        # Decomposes the sequence into trial motifs using greedy matching. Longer motifs are matched over shorter ones.
+        # Pre-specifying the maximum number of trials serves as a safety feature to avoid processing errors.
+        while sequence_pos < sequence_length and trial_count < max_trials:
+            motif_found = False
 
-        # Removes the acquisition marker file, which causes the runtime control MATLAB function to stop the acquisition.
-        self._mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+            for i in range(num_motifs):
+                motif_length = motif_lengths[i]
 
-        # Blocks until the Mesoscope stops sending frame acquisition pulses to the microcontroller.
-        message = "Waiting for the Mesoscope to stop acquiring frames..."
-        console.echo(message=message, level=LogLevel.INFO)
-        self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array
-        while True:
-            # Delays for 2 seconds. Mesoscope acquires frames at 10 Hz, so if there are no incoming triggers for that
-            # period of time, it is safe to assume that the acquisition has stopped.
-            self._timestamp_timer.delay_noblock(delay=2000000)
-            if self._microcontrollers.mesoscope_frame_count == 0:
-                break  # Breaks the loop
-            else:
-                self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array and waits more
+                # If the current sequence position is within the bounds of the motif, checks if it matches the motif.
+                if sequence_pos + motif_length <= sequence_length:
+                    # Gets motif start position from the flat array
+                    motif_start = motif_starts[i]
+
+                    # Checks if the motif matches the evaluated sequence.
+                    match = True
+                    for j in range(motif_length):
+                        if cue_sequence[sequence_pos + j] != motifs_flat[motif_start + j]:
+                            match = False
+                            break
+                    # If the motif matches, records the trial type index and moves to the next sequence position.
+                    if match:
+                        trial_indices[trial_count] = motif_indices[i]
+                        trial_count += 1
+                        sequence_pos += motif_length
+                        motif_found = True
+                        break
+            # If the function is not able to pair a part of the sequence with a motif, aborts with an error.
+            if not motif_found:
+                return trial_indices, -1
+
+        return trial_indices[:trial_count], trial_count
 
     def _toggle_lick_guidance(self, enable_guidance: bool) -> None:
         """Sets the VR task to either require the animal to lick in the reward zone to get water or to get rewards
@@ -3246,7 +3285,7 @@ def experiment_logic(
 
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
-        # If the runtime was initialized properly, attempts to gracefully terminate its runtime.
+        # If the runtime was initialized properly, attempts to gracefully terminate it.
         if not session_data.raw_data.nk_path.exists():
             runtime.stop()  # Executes a graceful shutdown procedure. If shutdown was executed, ends the runtime.
 
@@ -3255,6 +3294,7 @@ def experiment_logic(
 
 
 def window_checking_logic(
+    experimenter: str,
     project_name: str,
     animal_id: str,
 ) -> None:
@@ -3273,6 +3313,7 @@ def window_checking_logic(
         automated data processing.
 
     Args:
+        experimenter: The id of the experimenter conducting the window checking session.
         project_name: The name of the project to which the checked animal belongs.
         animal_id: The numeric ID of the animal whose cranial window is being checked.
     """
@@ -3305,85 +3346,103 @@ def window_checking_logic(
         python_version=python_version,
         sl_experiment_version=library_version,
     )
-    mesoscope_data = MesoscopeData(session_data=session_data)
 
-    # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
-    # through the init checks. The class is later re-instantiated during session data preprocessing
-    _ = SurgerySheet(
-        project_name=project_name,
-        animal_id=int(animal_id),
-        credentials_path=system_configuration.paths.google_credentials_path,
-        sheet_id=system_configuration.sheets.surgery_sheet_id,
-    )
+    zaber_motors: ZaberMotors | None = None
+    try:
+        # Verifies that the Surgery log Google Sheet is accessible. To do so, instantiates its interface class to run
+        # through the init checks. The class is later re-instantiated during session data preprocessing
+        _ = SurgerySheet(
+            project_name=project_name,
+            animal_id=int(animal_id),
+            credentials_path=system_configuration.paths.google_credentials_path,
+            sheet_id=system_configuration.sheets.surgery_sheet_id,
+        )
+        mesoscope_data = MesoscopeData(session_data=session_data)
 
-    message = f"Initializing interface classes..."
-    console.echo(message=message, level=LogLevel.INFO)
+        # Establishes communication with Zaber motors
+        zaber_motors = ZaberMotors(zaber_positions_path=mesoscope_data.vrpc_persistent_data.zaber_positions_path)
 
-    # Initializes the data logger. This initialization follows the same procedure as the _MesoscopeVRSystem class
-    logger: DataLogger = DataLogger(
-        output_directory=Path(session_data.raw_data.raw_data_path),
-        instance_name="behavior",  # Creates behavior_log subfolder under raw_data
-        sleep_timer=0,
-        exist_ok=True,
-        process_count=1,
-        thread_count=10,
-    )
-    logger.start()
+        message = f"Initializing interface classes..."
+        console.echo(message=message, level=LogLevel.INFO)
 
-    # Initializes the face camera. Body cameras are not used during window checking.
-    cameras = VideoSystems(data_logger=logger, output_directory=session_data.raw_data.camera_data_path)
-    cameras.start_face_camera()
-    message = f"Face camera display: Started."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+        # Initializes the data logger. This initialization follows the same procedure as the _MesoscopeVRSystem class
+        logger: DataLogger = DataLogger(
+            output_directory=Path(session_data.raw_data.raw_data_path),
+            instance_name="behavior",  # Creates behavior_log subfolder under raw_data
+            sleep_timer=0,
+            exist_ok=True,
+            process_count=1,
+            thread_count=10,
+        )
+        logger.start()
 
-    # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
-    # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
-    message = (
-        "Preparing to connect to all Zaber motor controllers. Make sure that ZaberLauncher app is running before "
-        "proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually control Zaber motor "
-        "positions until you reset the runtime."
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
-    input("Enter anything to continue: ")
+        # Initializes the face camera. Body cameras are not used during window checking.
+        cameras = VideoSystems(data_logger=logger, output_directory=session_data.raw_data.camera_data_path)
+        cameras.start_face_camera()
+        message = f"Face camera display: Started."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
-    # Initializes the Zaber motors interface
-    zaber_motors: ZaberMotors = ZaberMotors(
-        zaber_positions_path=mesoscope_data.vrpc_persistent_data.zaber_positions_path
-    )
+        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
+        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
+        message = (
+            "Preparing to connect to all Zaber motor controllers. Make sure that ZaberLauncher app is running before "
+            "proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually control Zaber motor "
+            "positions until you reset the runtime."
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
+        input("Enter anything to continue: ")
 
-    # Removes the nk.bin marker.
-    session_data.runtime_initialized()
+        # Removes the nk.bin marker to avoid automatic session cleanup during post-processing.
+        session_data.runtime_initialized()
 
-    # Prepares Zaber motors for data acquisition.
-    _setup_zaber_motors(zaber_motors=zaber_motors)
+        # Prepares Zaber motors for data acquisition.
+        _setup_zaber_motors(zaber_motors=zaber_motors)
 
-    # Runs the user through the process of preparing the mesoscope and assessing the quality of the animal's cranial
-    # window.
-    _setup_mesoscope(session_data=session_data, mesoscope_data=mesoscope_data, window_checking=True)
+        # Runs the user through the process of preparing the mesoscope and assessing the quality of the animal's cranial
+        # window.
+        _setup_mesoscope(session_data=session_data, mesoscope_data=mesoscope_data)
 
-    # Retrieves current motor positions and packages them into a ZaberPositions object.
-    _generate_zaber_snapshot(session_data=session_data, mesoscope_data=mesoscope_data, zaber_motors=zaber_motors)
+        # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
+        _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
 
-    # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
-    _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
+        # Generates the WindowCheckingDescriptor instance, caches it to disk, and forces the user to update the data
+        # in the descriptor file with their notes.
+        descriptor = WindowCheckingDescriptor(
+            experimenter=experimenter,
+            incomplete=True,
+        )
+        _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
 
-    # Resets Zaber motors to their original positions.
-    _reset_zaber_motors(zaber_motors=zaber_motors)
+        # Retrieves current motor positions and packages them into a ZaberPositions object.
+        _generate_zaber_snapshot(session_data=session_data, mesoscope_data=mesoscope_data, zaber_motors=zaber_motors)
 
-    # Terminates the face camera
-    cameras.stop()
+        # Resets Zaber motors to their original positions.
+        _reset_zaber_motors(zaber_motors=zaber_motors)
 
-    # Stops the data logger
-    logger.stop()
+        # Terminates the face camera
+        cameras.stop()
 
-    # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline primarily just
-    # copies the session raw_data folder to the NAS and BioHPC server. Unlike other pipelines, window checking does
-    # not give user a choice. All window checking data is necessarily preprocessed.
-    preprocess_session_data(session_data=session_data)
+        # Stops the data logger
+        logger.stop()
 
-    # Ends the runtime
-    message = f"Window checking runtime: Complete."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+        # Triggers preprocessing pipeline. In this case, since there is no data to preprocess, the pipeline primarily
+        # just copies the session raw_data folder to the NAS and BioHPC server. Unlike other pipelines, window
+        # checking does not give user a choice. All window checking data is necessarily preprocessed.
+        preprocess_session_data(session_data=session_data)
+
+    finally:
+        # If session runtime terminates before the session was initialized, removes session data from all sources
+        # before shutting down.
+        if session_data.raw_data.nk_path.exists():
+            purge_failed_session(session_data)
+
+        # If Zaber motors were connected, attempts to gracefully shut down the motors.
+        if zaber_motors is not None and zaber_motors.is_connected:
+            _reset_zaber_motors(zaber_motors=zaber_motors)
+
+        # Ends the runtime
+        message = f"Window checking runtime: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 def maintenance_logic() -> None:

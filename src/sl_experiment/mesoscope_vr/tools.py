@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
 )
-from sl_shared_assets import SessionData, MesoscopeSystemConfiguration, get_system_configuration_data
+from sl_shared_assets import SessionData, SessionTypes, MesoscopeSystemConfiguration, get_system_configuration_data
 from ataraxis_base_utilities import console, ensure_directory_exists
 from ataraxis_data_structures import SharedMemoryArray
 
@@ -83,17 +83,20 @@ class _VRPCPersistentData:
         self.window_screenshot_path = self.persistent_data_path.joinpath("window_screenshot.png")
 
         # Resolves the session descriptor path based on the session type.
-        if self.session_type == "lick training":
+        if self.session_type == SessionTypes.LICK_TRAINING:
             self.session_descriptor_path = self.persistent_data_path.joinpath(f"lick_training_session_descriptor.yaml")
-        elif self.session_type == "run training":
+        elif self.session_type == SessionTypes.RUN_TRAINING:
             self.session_descriptor_path = self.persistent_data_path.joinpath(f"run_training_session_descriptor.yaml")
-        elif self.session_type == "mesoscope experiment":
+        elif self.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
             self.session_descriptor_path = self.persistent_data_path.joinpath(
                 f"mesoscope_experiment_session_descriptor.yaml"
             )
-        # Does not raise the error for window checking sessions, but also does not resolve the descriptor, as it is not
-        # used during window checking
-        elif self.session_type != "window checking":
+        elif self.session_type == SessionTypes.WINDOW_CHECKING:
+            self.session_descriptor_path = self.persistent_data_path.joinpath(
+                f"window_checking_session_descriptor.yaml"
+            )
+
+        else:  # Raises an error for unsupported session types
             message = (
                 f"Unsupported session type '{self.session_type}' encountered when initializing additional path "
                 f"dataclasses for the Mesoscope-VR data acquisition system. Supported session types are "

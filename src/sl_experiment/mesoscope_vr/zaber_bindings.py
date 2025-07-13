@@ -1001,20 +1001,20 @@ class ZaberConnection:
         """
 
         # If the connection is already established, prevents from attempting to re-establish the connection again.
-        if self._is_connected:
+        if self.is_connected:
             return
 
         # Establishes connection
         self._connection = Connection.open_serial_port(port_name=self._port, direct=False)
+
+        # Sets the connection status to connected
+        self._is_connected = not self._connection.disconnected
 
         # Gets the list of connected Zaber devices.
         devices: list[Device] = self._connection.detect_devices()
 
         # Packages each discovered Device into a ZaberDevice class instance and builds the internal device list.
         self._devices = tuple([ZaberDevice(device=device) for device in devices])
-
-        # Sets the connection status and returns True to indicate that the connection was successful
-        self._is_connected = True
 
     def disconnect(self) -> None:
         """Shuts down all controlled Zaber devices and closes the connection.
@@ -1027,7 +1027,7 @@ class ZaberConnection:
         pre-disconnection procedures. Then, disconnects from the serial port and clears the device list.
         """
         # Prevents the method from running if the connection is not established.
-        if not self._is_connected:
+        if not self.is_connected:
             return
 
         # Loops over each connected device and triggers the shutdown procedure
@@ -1043,6 +1043,12 @@ class ZaberConnection:
     @property
     def is_connected(self) -> bool:
         """Returns True if the class has established connection with the managed serial port."""
+
+        # Actualizes the connection status and returns it to caller
+        if self._connection is not None and self.is_connected:
+            self._is_connected = not self._connection.disconnected
+        else:
+            self._is_connected = False
         return self._is_connected
 
     @property

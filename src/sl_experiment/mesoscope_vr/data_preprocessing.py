@@ -5,7 +5,6 @@ efficiently and losslessly compressing the raw data and moving it to the BioHPC 
 
 import os
 import json
-import time
 import shutil as sh
 from typing import Any
 from pathlib import Path
@@ -62,24 +61,25 @@ def _delete_directory(directory_path: Path) -> None:
 
     # Deletes files in parallel
     with ThreadPoolExecutor() as executor:
-        list(executor.map(os.unlink, files))  # Forces completion of all tasks\
+        list(executor.map(os.unlink, files))  # Forces completion of all tasks
 
     # Recursively deletes subdirectories
     for subdir in subdirectories:
         _delete_directory(subdir)
 
-    # Removes the now-empty directory. Since Windows (ScanImagePC) is slow to release handles at some points, adds an
-    # optional delay step to give Windows time to release file handles.
+    # Removes the now-empty root directory. Since Windows (ScanImagePC) is sometimes slow to release file handles, adds
+    # an optional delay step to give Windows time to release file handles.
     max_attempts = 5
-    for attempt in range(max_attempts):
+    delay_timer = PrecisionTimer("ms")
+    for attempt in range(1, max_attempts + 1, 1):
         # noinspection PyBroadException
         try:
             os.rmdir(directory_path)
             break  # Breaks early if the call succeeds
         except Exception:
-            if attempt == max_attempts - 1:
+            if attempt == 0:
                 break  # Breaks after 5 attempts
-            time.sleep(0.5)  # For each failed attempt, sleeps for 500 ms
+            delay_timer.delay_noblock(delay=500, allow_sleep=True)  # For each failed attempt, sleeps for 500 ms
 
 
 def _check_stack_size(file: Path) -> int:
@@ -99,14 +99,14 @@ def _check_stack_size(file: Path) -> int:
         If the file is a stack, returns the number of frames (pages) in the stack. Otherwise, returns 0 to indicate that
         the file is not a stack.
     """
-    with tifffile.TiffFile(file) as tif:
+    with tifffile.TiffFile(file) as tiff:
         # Gets number of pages (frames) from tiff header
-        n_frames = len(tif.pages)
+        n_frames = len(tiff.pages)
 
         # Considers all files with more than one page and a 2-dimensional (monochrome) image as a stack. For these
         # stacks, returns the discovered stack size (number of frames). Also ensures that the files have the ScanImage
-        # metadata. This latter step will exclude already processed BigTiff files.
-        if n_frames > 1 and len(tif.pages[0].shape) == 2 and tif.scanimage_metadata is not None:
+        # metadata. This latter step will exclude already converted .tiff files from reprocessing.
+        if n_frames > 1 and len(tiff.pages[0].shape) == 2 and tiff.scanimage_metadata is not None:
             return n_frames
         # Otherwise, returns 0 to indicate that the file is not a stack.
         return 0
@@ -581,16 +581,9 @@ def _pull_mesoscope_data(
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
 
-        # Prevents pulling an empty folder. At a minimum, expects 3 acquisition preparation files and 1 TIFF stack file.
-        if len(files) < 4:
-            message = (
-                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                f"'mesoscope_frames' ScanImage PC for the session {session_name} does not contain the minimum expected "
-                f"number of files (4). This indicates that no frames were acquired during runtime or that the frames "
-                f"were saved at a different location."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-            error = True
+        # Since version 3.0.0, this runtime is designed to pull the mesoscope_data to VRPC even if it contains no TIFF
+        # stacks. THis is to support processing window checking runtime data, which only generates the
+        # MotionEstimator.me, the fov.roi, and the zstack_00000_00001.tif files.
 
         # Breaks the loop if all files are present
         if not error:
@@ -618,7 +611,7 @@ def _pull_mesoscope_data(
     if verify_transfer_integrity:
         calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
 
-    # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
+    # Transfers the mesoscope frames data from the ScanImagePC to the local machine.
     transfer_directory(
         source=source, destination=destination, num_threads=num_threads, verify_integrity=verify_transfer_integrity
     )
@@ -656,7 +649,7 @@ def _preprocess_mesoscope_directory(
     Notes:
         This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
         Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
-        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
+        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1_00001_00067.tif'. If the
         input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
         stacks do not contain ScanImage metadata, they will be excluded from processing.
 
@@ -668,6 +661,11 @@ def _preprocess_mesoscope_directory(
         In addition to frame compression and data extraction, this function also generates the ops.json configuration
         file. This file is used during suite2p cell registration, performed as part of our standard data processing
         pipeline.
+
+        This function is purposefully designed to collapse data from multiple acquisitions stored inside the same
+        directory into the same frame volume. This implementation was chosen based on the specific patterns of data
+        acquisition in the Sun lab, where all data acquired for a single session is necessarily expected to belong to
+        the same acquisition.
 
     Args:
         session_data: The SessionData instance for the processed session.
@@ -738,8 +736,7 @@ def _preprocess_mesoscope_directory(
     frame_numbers = []
     starting_frame = 1
     for file in tiff_files:
-        # All valid mesoscope data files are now named 'session'.
-        if "session" in file.name:
+        if "session" in file.name:  # All valid mesoscope data files acquired in the lab are named 'session'.
             stack_size = _check_stack_size(file)
             if stack_size > 0:
                 # Appends the starting frame number to the list and increments the stack list
@@ -851,7 +848,7 @@ def _preprocess_log_directory(
             remove_sources=remove_sources,
             memory_mapping=False,
             verbose=True,
-            compress=True,
+            compress=False,  # Does not compress the data, as compression greatly reduces the speed of post-processing.
             verify_integrity=verify_integrity,
             max_workers=num_processes,
         )
@@ -1314,26 +1311,31 @@ def purge_failed_session(session_data: SessionData) -> None:
     Args:
         session_data: The SessionData instance for the session whose data needs to be removed.
     """
-    message = (
-        f"Preparing to remove all data for session {session_data.session_name} from animal "
-        f"{session_data.animal_id}. Warning, this process is NOT reversible and removes ALL session data. Are you sure "
-        f"you want to proceed?"
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
 
-    # Locks and waits for user response
-    while True:
-        answer = input("Enter 'yes' (to proceed) or 'no' (to abort): ")
+    # If a session does not contain the nk.bin marker, this suggests that it was able to successfully initialize the
+    # runtime and likely contains valid data. IN this case, asks the user to confirm they intend to proceed with the
+    # deletion. Sessions with nk.bin markers are considered safe for removal at all times.
+    if not session_data.raw_data.nk_path.exists():
+        message = (
+            f"Preparing to remove all data for session {session_data.session_name} from animal "
+            f"{session_data.animal_id}. Warning, this process is NOT reversible and removes ALL session data. Are you "
+            f"sure you want to proceed?"
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
 
-        # Continues with the deletion
-        if answer.lower() == "yes":
-            break
+        # Locks and waits for user response
+        while True:
+            answer = input("Enter 'yes' (to proceed) or 'no' (to abort): ")
 
-        # Aborts without deleting
-        elif answer.lower() == "no":
-            message = f"Session {session_data.session_name} data purging: Aborted"
-            console.echo(message=message, level=LogLevel.SUCCESS)
-            return
+            # Continues with the deletion
+            if answer.lower() == "yes":
+                break
+
+            # Aborts without deleting
+            elif answer.lower() == "no":
+                message = f"Session {session_data.session_name} data purging: Aborted"
+                console.echo(message=message, level=LogLevel.SUCCESS)
+                return
 
     # Uses MesoscopeData to query the paths to all known session data directories. This includes the directories on the
     # NAS and the BioHPC server.
@@ -1349,6 +1351,10 @@ def purge_failed_session(session_data: SessionData) -> None:
     # Removes all session-specific data directories from all destinations
     for candidate in tqdm(deletion_candidates, desc="Deleting session directories", unit="directory"):
         _delete_directory(directory_path=candidate)
+
+    # Ensures that the mesoscope_data directory is reset, in case it has any lingering from the purged runtime.
+    for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*"):
+        file.unlink(missing_ok=True)
 
     message = "Session data purging: Complete"
     console.echo(message=message, level=LogLevel.SUCCESS)

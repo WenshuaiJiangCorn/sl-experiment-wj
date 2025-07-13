@@ -81,29 +81,32 @@ class ZaberMotors:
         # Retrieves the Mesoscope-VR system configuration parameters.
         system_configuration = get_system_configuration()
 
+        # Initializes the connection classes first to ensure all classes exist in case the runtime encounters
+        # an error during connection.
+        self._headbar: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.headbar_port)
+        self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
+        self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
+
         # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # headbar attached to the mouse's head in Z, Roll, and Pitch axes. Note, this assumes that the chaining
         # order of individual zaber devices is fixed and is always Z-Pitch-Roll.
-        self._headbar: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.headbar_port)
         self._headbar.connect()
         self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
         self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
         self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
 
-        # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
-        # the running wheel in the X axis.
-        self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
-        self._wheel.connect()
-        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
-
         # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # lick tube in Z, X, and Y axes. Note, this assumes that the chaining order of individual zaber devices is
         # fixed and is always Z-X-Y.
-        self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
         self._lickport.connect()
         self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
         self._lickport_y: ZaberAxis = self._lickport.get_device(1).axis
         self._lickport_x: ZaberAxis = self._lickport.get_device(2).axis
+
+        # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
+        # the running wheel in the X axis.
+        self._wheel.connect()
+        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
 
         # If the previous positions path points to an existing .yaml file, loads the data from the file into
         # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
@@ -396,6 +399,16 @@ class ZaberMotors:
         self._lickport_x.unpark()
         self._lickport_y.unpark()
         self._lickport_z.unpark()
+
+    @property
+    def is_connected(self) -> bool:
+        """Returns True if all managed motor connections are active and False if at least one connection is inactive."""
+        connections = [
+            self._headbar.is_connected,
+            self._lickport.is_connected,
+            self._wheel.is_connected,
+        ]
+        return all(connections)
 
 
 class MicroControllerInterfaces:

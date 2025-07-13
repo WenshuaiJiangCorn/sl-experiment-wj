@@ -660,7 +660,7 @@ def check_window(
     suit the animal. This command aggregates all steps necessary to verify and record the quality of the animal's window
     and to generate customized Mesoscope-VR parameters for the animal.
     """
-    window_checking_logic(project_name=project, animal_id=animal)
+    window_checking_logic(experimenter=user, project_name=project, animal_id=animal)
 
 
 @click.command()
