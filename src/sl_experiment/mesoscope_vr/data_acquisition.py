@@ -798,16 +798,6 @@ class _MesoscopeVRSystem:
         self._ui: RuntimeControlUI = RuntimeControlUI()
         self._visualizer: BehaviorVisualizer = BehaviorVisualizer()
 
-    def __del__(self) -> None:
-        message = (
-            "MesoscopeVRSystem has encountered an unexpected fatal error during runtime. Attempting to gracefully "
-            "reset zaber motors..."
-        )
-        # Always attempts to carry out graceful zaber motor shutdown procedure whenever possible.
-        console.echo(message=message, level=LogLevel.WARNING)
-        if self._zaber_motors is not None:
-            self._reset_zaber_motors()
-
     def start(self) -> None:
         """Initializes and configures all internal and external assets used during the runtime and guides the user
         through all runtime preparation steps.
