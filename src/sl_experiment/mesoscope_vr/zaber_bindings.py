@@ -1045,7 +1045,7 @@ class ZaberConnection:
         """Returns True if the class has established connection with the managed serial port."""
 
         # Actualizes the connection status and returns it to caller
-        if self._connection is not None and self.is_connected:
+        if self._connection is not None and self._is_connected:
             self._is_connected = not self._connection.disconnected
         else:
             self._is_connected = False

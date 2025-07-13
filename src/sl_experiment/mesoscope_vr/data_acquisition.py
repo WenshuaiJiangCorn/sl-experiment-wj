@@ -61,14 +61,15 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
     # animal.
     force_mesoscope_positions_update: bool = False
     if Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
-        sh.copy(
-            mesoscope_data.vrpc_persistent_data.mesoscope_positions_path,
-            session_data.raw_data.mesoscope_positions_path,
-        )
         # Loads the previous position data into memory
         previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=session_data.raw_data.mesoscope_positions_path
+            file_path=mesoscope_data.vrpc_persistent_data.mesoscope_positions_path
         )
+
+        # Dumps the data to the raw-data folder. If MesoscopePositions class includes any additional (new) fields
+        # relative to the cached data, adds new fields to the output file. THis allows 'live' updating the data if
+        # sl-experiment version changes between runtimes.
+        previous_mesoscope_positions.to_yaml(file_path=session_data.raw_data.mesoscope_positions_path)
 
         # Asks the user whether they want to update position data. If not, then there is no need to update the data
         # inside the precursor .YAML file.
