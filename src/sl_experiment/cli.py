@@ -187,7 +187,7 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
     """Generates a precursor experiment configuration .yaml file for the target experiment inside the project's
     configuration folder.
 
-    This command assists users in creating new experiment configurations, by statically resolving the structure (layout)
+    This command assists users in creating new experiment configurations by statically resolving the structure (layout)
     of the appropriate experiment configuration file for the acquisition system of the local machine (PC). Specifically,
     the generated precursor will contain the correct number of experiment state entries initialized to nonsensical
     default value. The user needs to manually edit the configuration file to properly specify their experiment runtime
@@ -255,7 +255,7 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
 
 @click.command()
 def maintain_acquisition_system() -> None:
-    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
+    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running-wheel break.
 
     This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
     used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or

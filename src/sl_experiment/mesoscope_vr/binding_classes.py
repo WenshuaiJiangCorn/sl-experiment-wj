@@ -134,37 +134,66 @@ class ZaberMotors:
             'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
             to work for most animals and provide an initial position for the animal to be mounted into the VR rig.
 
-            This method moves all Zaber axes in-parallel to optimize runtime speed. This relies on the Mesoscope-VR
+            This method moves all Zaber axes in parallel to optimize runtime speed. This relies on the Mesoscope-VR
             system to be assembled in a way where it is safe to move all motors at the same time.
         """
 
         # Disables the safety motor lock before moving the motors.
         self.unpark_motors()
 
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._previous_positions is None:
-            # Mounting position for the headbar and the wheel essentially mimics the parking position for the
-            # lickport motors.
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-            self._wheel_x.move(amount=self._wheel_x.mount_position, absolute=True, native=True)
-
-            # Since the goal of 'restore_positions' command is to set the system into a state compatible with imaging,
-            # the lickport is moved to the parking position. Parking position aligns it with the animal's face, whereas
-            # mounting position moves it to the far left corner.
-            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
-            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
-            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
-        else:
-            # Otherwise, restores Zaber positions for all motors.
-            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
-            self._wheel_x.move(amount=self._previous_positions.wheel_x, absolute=True, native=True)
-            self._lickport_z.move(amount=self._previous_positions.lickport_z, absolute=True, native=True)
-            self._lickport_x.move(amount=self._previous_positions.lickport_x, absolute=True, native=True)
-            self._lickport_y.move(amount=self._previous_positions.lickport_y, absolute=True, native=True)
+        # If previous position data is available, restores all motors to the positions used during previous sessions.
+        # Otherwise, sets HeadBar and Wheel to mounting position and the LickPort to parking position. For LickPort,
+        # the only difference between parking and mounting positions is that the mounting position is retracted further
+        # away from the animal than the parking position.
+        self._headbar_z.move(
+            amount=self._headbar_z.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_z,
+            absolute=True,
+            native=True,
+        )
+        self._headbar_pitch.move(
+            amount=self._headbar_pitch.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_pitch,
+            absolute=True,
+            native=True,
+        )
+        self._headbar_roll.move(
+            amount=self._headbar_roll.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_roll,
+            absolute=True,
+            native=True,
+        )
+        self._wheel_x.move(
+            amount=self._wheel_x.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.wheel_x,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_z.move(
+            amount=self._lickport_z.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_z,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_x.move(
+            amount=self._lickport_x.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_x,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_y.move(
+            amount=self._lickport_y.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_y,
+            absolute=True,
+            native=True,
+        )
 
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
@@ -181,7 +210,7 @@ class ZaberMotors:
         method is called after this method to set the motors into the desired position.
 
         Notes:
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -210,7 +239,7 @@ class ZaberMotors:
 
         Notes:
             The motors are moved to the parking positions stored in the non-volatile memory of each motor controller.
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -239,7 +268,7 @@ class ZaberMotors:
         etc.).
 
         Notes:
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
 
             Formerly, the only maintenance step was the calibration of the water-valve, so some low-level functions
             still reference it as 'valve-position' and 'calibrate-position'.
@@ -270,7 +299,7 @@ class ZaberMotors:
         animal is mounted into the VR rig to provide the experimenter with easy access to the head bar holder.
 
         Notes:
-            This method moves all MOTOR axes in-parallel to optimize runtime speed.
+            This method moves all MOTOR axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -332,9 +361,9 @@ class ZaberMotors:
 
     def generate_position_snapshot(self) -> ZaberPositions:
         """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
-        instance, and returns it to caller.
+        instance, and returns it to the caller.
 
-        This method is used by runtime classes to update ZaberPositions instance c ached on disk for each animal.
+        This method is used by runtime classes to update the ZaberPositions instance cached on disk for each animal.
         The method also updates the local ZaberPositions copy stored inside the class instance with the data from the
         generated snapshot. Primarily, this has to be done to support the Zaber motor shutdown sequence.
         """
@@ -472,7 +501,7 @@ class MicroControllerInterfaces:
         self._system_configuration = get_system_configuration()
 
         # Converts the general sensor polling delay and stores it in class attribute. Unless other duration / delay
-        # parameters, this one is frequently queries by class methods, so it is beneficial to statically compute
+        # parameters, this one is frequently queried by class methods, so it is beneficial to statically compute
         # it once.
         self._sensor_polling_delay: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.sensor_polling_delay_ms, from_units="ms", to_units="us"
@@ -682,7 +711,7 @@ class MicroControllerInterfaces:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def enable_encoder_monitoring(self) -> None:
-        """Enables wheel encoder monitoring at 2 kHz rate.
+        """Enables wheel encoder monitoring at a 2 kHz rate.
 
         This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
         at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
@@ -829,7 +858,7 @@ class MicroControllerInterfaces:
     def simulate_reward(self, tone_duration: int = 300) -> None:
         """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.
 
-        This method is used during training when animal refuses to consume water rewards. In this case, the water
+        This method is used during training when the animal refuses to consume water rewards. In this case, the water
         rewards are not delivered, but the tones are still played to notify the animal it is performing the task as
         required.
 
@@ -1127,7 +1156,7 @@ class VideoSystems:
         """Starts face camera frame acquisition.
 
         This method sets up both the frame acquisition (producer) process and the frame saver (consumer) process.
-        However, the consumer process will not save any frames until save_face_camera_frames() method is called.
+        However, the consumer process will not save any frames until the save_face_camera_frames () method is called.
         """
 
         # Prevents executing this method if the face camera is already running
@@ -1148,8 +1177,8 @@ class VideoSystems:
         """Starts left and right (body) camera frame acquisition.
 
         This method sets up both the frame acquisition (producer) process and the frame saver (consumer) process for
-        both cameras. However, the consumer processes will not save any frames until save_body_camera_frames() method is
-        called.
+        both cameras. However, the consumer processes will not save any frames until the save_body_camera_frames ()
+        method is called.
         """
 
         # Prevents executing this method if the body cameras are already running

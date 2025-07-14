@@ -16,10 +16,10 @@ ___
 
 This library functions as the central hub for collecting and preprocessing the data for all current and future projects 
 in the Sun lab. To do so, it exposes the API to interface with all data acquisition systems in the lab. Primarily, this 
-relies on specializing varius general-purpose libraries released as part of the 'Ataraxis' science-automation project
+relies on specializing various general-purpose libraries released as part of the 'Ataraxis' science-automation project
 to work within the specific hardware implementations available in the lab.
 
-This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab,
+This library is explicitly designed to work with the specific hardware and data handling strategies used in the Sun lab 
 and will likely not work in other contexts without extensive modification. The library broadly consists of two 
 parts: the shared assets and the acquisition-system-specific bindings. The shared assets are reused by all acquisition 
 systems and are mostly inherited from the [sl-shared-assets](https://github.com/Sun-Lab-NBB/sl-shared-assets) library. 
@@ -47,7 +47,7 @@ ___
 
 ### Source
 
-Note, installation from source is ***highly discouraged*** for everyone who is not an active project developer.
+Note, installation from source is ***highly discouraged*** for anyone who is not an active project developer.
 
 1. Download this repository to your local machine using your preferred method, such as Git-cloning. Use one
    of the stable releases from [GitHub](https://github.com/Sun-Lab-NBB/sl-experiment/releases).
@@ -62,18 +62,18 @@ ___
 
 ## Data Acquisition Systems
 
-A Data Acquisition (and Runtime Control) system can be broadly defined as a collection of hardware and software tools 
-used to conduct experiments and acquire scientific data. Each data acquisition system can use one or more machines
-(PCs) to acquire the data, with this library typically running on the **main** data acquisition machine. Additionally, 
-each system typically uses a Network Attached Storage (NAS), a remote storage server, or both to store
-the data after the acquisition safely (with redundancy and parity).
+A data acquisition (and runtime control) system can be broadly defined as a collection of hardware and software tools 
+used to conduct training or experiment sessions that acquire scientific data. Each data acquisition system can use one 
+or more machines (PCs) to acquire the data, with this library (sl-experiment) typically running on the **main** data 
+acquisition machine. Additionally, each system typically uses a Network Attached Storage (NAS), a remote storage server,
+or both to store the data after the acquisition safely (with redundancy and parity).
 
-Primarily, each data acquisition system is built around the main tool used to acquire brain activity data. For example, 
-the main system in the Sun lab is the [Mesoscope-VR](#mesoscope-vr-data-acquisition-system) system, which uses the 
-[2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472). All other components of that 
+In the Sun lab, each data acquisition system is built around the main tool used to acquire the brain activity data. For
+example, the main system in the Sun lab is the [Mesoscope-VR](#mesoscope-vr-data-acquisition-system) system, which uses 
+the [2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472). All other components of that 
 system are built around the Mesoscope to facilitate the acquisition of the brain activity data. Due to this inherent 
 specialization, each data acquisition system in the lab is treated as an independent unit that requires custom software
-to both acquire and process the resultant data.
+to acquire, preprocess, and process the resultant data.
 
 ***Note!*** Since each data acquisition system is unique, the section below will be iteratively expanded to include 
 system-specific assembly instructions for **each supported acquisition system**. Commonly, updates to this section 
@@ -83,28 +83,29 @@ coincide with major or minor library version updates.
 
 ## Mesoscope-VR Data Acquisition System
 
-This is the main ddata acquisition system currently used in the Sun lab. The system broadly consists of four major 
+This is the main data acquisition system currently used in the Sun lab. The system broadly consists of four major 
 parts: 
 1. The [2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472), assembled by 
    [Thor Labs](https://www.thorlabs.com/newgrouppage9.cfm?objectgroup_id=10646) and controlled by 
    [ScanImage](https://www.mbfbioscience.com/products/scanimage/) software. The Mesoscope control and data acquisition 
    are performed by a dedicated computer referred to as the **'ScanImagePC'** or, (less frequently) the
-   **'Mesoscope PC.'**. This PC is assembled and configured by the [MBF Bioscience](https://www.mbfbioscience.com/). The
+   **'Mesoscope PC'**. This PC is assembled and configured by the [MBF Bioscience](https://www.mbfbioscience.com/). The
    only modification carried out by the Sun lab during assembly was the configuration of a Server Message Block (SMB)
    protocol access to the root folder used by the ScanImage software to save the mesoscope data.
 2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
    experiments to control the task environment and resolve the task logic. The virtual environment runs on the main data
    acquisition computer referred to as the **'VRPC'** and relies on the [MQTT](https://mqtt.org/) communication protocol
-   and the [Sun lab implementation of the GIMBL](https://github.com/Sun-Lab-NBB/Unity-tasks) package to bidirectionally 
+   and the [Sun lab implementation of the GIMBL package](https://github.com/Sun-Lab-NBB/Unity-tasks) to bidirectionally 
    interface with the virtual task environment.
-3. The [microcontroller powered](https://github.com/Sun-Lab-NBB/sl-micro-controllers) hardware that allows 
-   bidirectionally interfacing with various physical components (modules) of the Mesoscope-VR systems.
-4. A set of visual and IR-range cameras used to acquire behavior video data.
+3. The [microcontroller-powered hardware](https://github.com/Sun-Lab-NBB/sl-micro-controllers) that allows the animal 
+   to bidirectionally interface with various physical components (modules) of the Mesoscope-VR systems.
+4. A set of visual and IR-range cameras, used to acquire behavior video data.
 
 ### Main Dependency
-- ***Linux*** operating system. While the library *may* also work on Windows and macOS, it has been explicitly written 
-  for and tested on the mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and Ubuntu 24.10 distribution of 
-  the GNU Linux operating system.
+- ***Linux*** operating system. While the library *may* also work on Windows and (less likely) macOS, it has been 
+  explicitly written for and tested on the mainline [6.11 kernel](https://kernelnewbies.org/Linux_6.11) and 
+  Ubuntu 24.10 distribution of the GNU Linux operating system using [Wayland](https://wayland.freedesktop.org/) window
+  system architecture.
 
 ### Software Dependencies
 ***Note!*** This list only includes *external dependencies*, which are installed *in addition* to all 
@@ -112,30 +113,32 @@ dependencies automatically installed from pip / conda as part of library install
 be installed and configured on the **VRPC** before calling runtime commands via the command-line interface (CLI) exposed
 by this library.
 
-- [MQTT broker](https://mosquitto.org/). The broker should be running locally and can use the **default** IP
-  (27.0.0.1) and Port (1883) configuration.
+- [MQTT broker](https://mosquitto.org/) version **2.0.21**. The broker should be running locally and can use 
+  the **default** IP (27.0.0.1) and Port (1883) configuration.
 - [FFMPEG](https://www.ffmpeg.org/download.html). As a minimum, the version of FFMPEG should support H265 and H264 
-  codecs with hardware acceleration (Nvidia GPU). It is typically safe to use the latest available version.
+  codecs with hardware acceleration (Nvidia GPU). This library was tested with the version **7.1.1-1ubuntu1.1**.
 - [MvImpactAcquire](https://assets-2.balluff.com/mvIMPACT_Acquire/). This library is tested with version **2.9.2**, 
   which is freely distributed. Higher GenTL producer versions will likely work too, but they require purchasing a 
   license.
-- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download). Use the latest available release.
-- [Unity Game Engine](https://unity.com/products/unity-engine). Use the latest available release.
+- [Zaber Launcher](https://software.zaber.com/zaber-launcher/download) version **2025.6.2-1**.
+- [Unity Game Engine](https://unity.com/products/unity-engine) version **2022.3.46f1**.
 
 ### Hardware Dependencies
 
 **Note!** These dependencies only apply to the **VRPC**. Hardware dependencies for the **ScanImagePC** are determined 
-and controlled by MBF and ThorLabs.
+and controlled by MBF and ThorLabs. This library benefits from the **ScanImagePC** being outfitted with a 10-GB network 
+card, but this is not a strict requirement. 
 
 - [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
-  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with RTX 4090.
+  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with 
+  [RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
 - A CPU with at least 12, preferably 16, physical cores. This library has been tested with 
   [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
   It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
   for predictable performance of all library components.
 - A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
   required for the high-quality machine vision camera used to record videos of the animal’s face. We also use 10-Gigabit
-  lines for transferring the data between the PCs used in the data acquisition process and destinations used for 
+  lines for transferring the data between the PCs used in the data acquisition process and destination machines used for 
   long-term data storage (see [acquired data management section](#acquired-data-structure-and-management) for more 
   details).
 
@@ -152,10 +155,10 @@ in the [main Mesoscope-VR assembly section](#mesoscope-vr-assembly).
 ### Zaber Motors
 All brain activity recordings with the Mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
 the Virtual Reality treadmill (running wheel) and promote task performance, we use three groups of motors controlled 
-though Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
+through Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
 Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this allows for a wide range of 
-motion necessary to align the Mesoscope objective with the brain imaging plane. The second group of 
-motors, the **LickPort**, controls the position of the water delivery port (and sensor) in X, Y, and Z axes. This
+motions necessary to align the Mesoscope objective with the brain imaging plane. The second group of 
+motors, the **LickPort**, controls the position of the water delivery port (tube) (and sensor) in X, Y, and Z axes. This
 is used to ensure all animals have comfortable access to the water delivery tube, regardless of their head position.
 The third group of motors, the **Wheel**, controls the position of the running wheel in the X-axis relative to the 
 head-fixed animal’s body and is used to position the animal on the running wheel to promote good running behavior.
@@ -175,9 +178,9 @@ the data expected by this library:
 1. **User Data 0**: Device CRC Code. This variable should store the CRC32-XFER checksum of the device’s name 
    (user-defined name). During runtime, the library generates the CRC32-XFER checksum of each device’s name and compares
    it against the value stored inside the User Data 0 variable to ensure that each device is configured appropriately to
-   work with the sl-experiment library. **Tip!** Use the `sl-crc` console command to generate the CRC32-XFER checksum 
+   work with the sl-experiment library. **Hint!** Use the `sl-crc` console command to generate the CRC32-XFER checksum 
    for each device during manual configuration, as it uses the same code as used during runtime and, therefore, 
-   guarantees that the checksums will be matching.
+   guarantees that the checksums will match.
 2. **User Data 1**: Device ShutDown Flag. This variable is used as a secondary safety measure to ensure each device has 
    been properly shut down during previous runtimes. As part of the manual device configuration, make sure that this 
    variable is set to **1**. Otherwise, the library will not start any runtime that involves that Zaber motor. During 

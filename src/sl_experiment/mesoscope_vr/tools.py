@@ -212,12 +212,12 @@ class _VRPCDestinations:
 
 
 class MesoscopeData:
-    """This works together with SessionData class to define additional filesystem paths used by the Mesoscope-VR
+    """This works together with the SessionData class to define additional filesystem paths used by the Mesoscope-VR
     data acquisition system during runtime.
 
     Specifically, the paths from this class are used during both data acquisition and preprocessing to work with
-    the managed session's data across the machines (PCs) that make up the acquisition system, sucha s the VRPC and the
-    ScanImagePC, and long-term storage infrastructure used in the Sun lab, such as the NAS and the BioHPC server.
+    the managed session's data across the machines (PCs) that make up the acquisition system and long-term storage
+    infrastructure.
 
     Args:
         session_data: The SessionData instance for the managed session.
@@ -276,7 +276,7 @@ class RuntimeControlUI:
     the animal performance visualization.
 
     Notes:
-        This class is specialized to work with the Qt5 framework. In the future, it may be refactored to support the Qt6
+        This class is specialized to work with the Qt6 framework. In the future, it may be refactored to support the Qt6
         framework.
 
         The UI starts the runtime in the 'paused' state to allow the user to check the valve and all other runtime
@@ -284,11 +284,11 @@ class RuntimeControlUI:
 
     Attributes:
         _data_array: A SharedMemoryArray used to store the data recorded by the remote UI process.
-        _ui_process: The Process instance running the Qt5 UI.
+        _ui_process: The Process instance running the Qt6 UI.
         _started: A static flag used to prevent the __del__ method from shutting down an already terminated instance.
 
     Notes:
-        Since version 3.0.0, calling the initializer does not start the IO process. Call start() method to finish
+        Since version 3.0.0, calling the initializer does not start the IO process. Call the start() method to finish
         initializing all UI assets.
     """
 
@@ -303,7 +303,7 @@ class RuntimeControlUI:
         self._data_array.write_data(index=9, data=np.int32(0))  # Initially disables guidance for all runtimes
         self._data_array.write_data(index=5, data=np.int32(1))  # Ensures all runtimes start in a paused state
 
-        # Defines, but does not automatically start the UI process.
+        # Defines but does not automatically start the UI process.
         self._ui_process = Process(target=self._run_ui_process, daemon=True)
         self._started = False
 
@@ -349,23 +349,23 @@ class RuntimeControlUI:
         self._started = False
 
     def _run_ui_process(self) -> None:
-        """The main function that runs in the parallel process to display and manage the Qt5 UI.
+        """The main function that runs in the parallel process to display and manage the Qt6 UI.
 
-        This runs Qt5 in the main thread of the separate process, which is perfectly valid.
+        This runs Qt6 in the main thread of the separate process, which is perfectly valid.
         """
 
         # Connects to the shared memory array from the remote process
         self._data_array.connect()
 
-        # Create and run the Qt5 application in this process's main thread
+        # Create and run the Qt6 application in this process's main thread
         try:
             # Creates the QT5 GUI application
             app = QApplication(sys.argv)
             app.setApplicationName("Mesoscope-VR Control Panel")
             app.setOrganizationName("SunLab")
 
-            # Sets Qt5 application-wide style
-            app.setStyle("Fusion")  # Modern flat style available in Qt5
+            # Sets Qt6 application-wide style
+            app.setStyle("Fusion")  # Modern flat style available in Qt6
 
             # Creates the main application window
             window = _ControlUIWindow(self._data_array)
@@ -387,7 +387,7 @@ class RuntimeControlUI:
         """Sets the runtime pause state from outside the UI.
 
         This method is used to synchronize the remote GUI with the main runtime process if the runtime process enters
-        the paused state. Typically, this happens when a major external component, such as the Mesoscope or Unity
+        the paused state. Typically, this happens when a major external component, such as the Mesoscope or Unity,
         unexpectedly terminates its runtime.
 
         Args:
@@ -479,15 +479,15 @@ class RuntimeControlUI:
 
     @property
     def show_reward(self) -> bool:
-        """Returns True if reward zone collision boundary should be shown/displayed, False if it should be hidden."""
+        """Returns True if the reward zone collision boundary should be shown/displayed to the animal."""
         return bool(self._data_array.read_data(index=10, convert_output=True))
 
 
 class _ControlUIWindow(QMainWindow):
-    """Generates, renders, and maintains the main Mesoscope-VR acquisition system Graphical User Interface Qt5
+    """Generates, renders, and maintains the main Mesoscope-VR acquisition system Graphical User Interface Qt6
     application window.
 
-    This class specializes the Qt5 GUI elements and statically defines the GUI element layout used by the main interface
+    This class binds the Qt6 GUI elements and statically defines the GUI element layout used by the main interface
     window application. The interface enables sl-experiment users to control certain runtime parameters in real time via
     an interactive GUI.
 
@@ -498,7 +498,8 @@ class _ControlUIWindow(QMainWindow):
         _speed_modifier: The current user-defined modifier to apply to the running speed threshold.
         _duration_modifier: The current user-defined modifier to apply to the running epoch duration threshold.
         _guidance_enabled: A flag indicating whether lick guidance mode is enabled or not.
-        _show_reward: A flag indicating whether reward zone collision boundary should be shown/displayed to the animal.
+        _show_reward: A flag indicating whether the reward zone collision boundary should be shown/displayed to the
+            animal.
     """
 
     def __init__(self, data_array: SharedMemoryArray):
@@ -522,11 +523,11 @@ class _ControlUIWindow(QMainWindow):
         self._setup_ui()
         self._setup_monitoring()
 
-        # Applies Qt5-optimized styling and scaling parameters
+        # Applies Qt6-optimized styling and scaling parameters
         self._apply_qt6_styles()
 
     def _setup_ui(self) -> None:
-        """Creates and arranges all UI elements optimized for Qt5 with proper scaling."""
+        """Creates and arranges all UI elements optimized for Qt6 with proper scaling."""
 
         # Initializes the main widget container
         central_widget = QWidget()
@@ -645,7 +646,7 @@ class _ControlUIWindow(QMainWindow):
         # noinspection PyUnresolvedReferences
         self.volume_spinbox.valueChanged.connect(self._update_reward_volume)
 
-        # Adds volume controls to left side
+        # Adds volume controls to the left side
         valve_status_layout.addWidget(volume_label)
         valve_status_layout.addWidget(self.volume_spinbox)
 
@@ -1098,7 +1099,7 @@ class _ControlUIWindow(QMainWindow):
         Args:
             event: The Qt-generated window shutdown event object.
         """
-        # Sends runtime termination signal via the SharedMemoryArray before accepting the close event.
+        # Sends a runtime termination signal via the SharedMemoryArray before accepting the close event.
         # noinspection PyBroadException
         try:
             self._data_array.write_data(index=0, data=np.int32(1))
@@ -1137,8 +1138,8 @@ class _ControlUIWindow(QMainWindow):
         self.valve_status_label.setText("Reward: 🟢 Sent")
         self.valve_status_label.setStyleSheet("QLabel { color: #3498db; font-weight: bold; }")
 
-        # Resets the status to 'closed' after 1 second using Qt5 single shot timer. This is realistically the longest
-        # time the system would take to start and finish delivering the reward
+        # Resets the status to 'closed' after 1 second using the Qt6 single shot timer. This is realistically the
+        # longest time the system would take to start and finish delivering the reward
         QTimer.singleShot(2000, lambda: self.valve_status_label.setText("Valve: 🔒 Closed"))
         QTimer.singleShot(
             2000, lambda: self.valve_status_label.setStyleSheet("QLabel { color: #e67e22; font-weight: bold; }")
@@ -1163,17 +1164,17 @@ class _ControlUIWindow(QMainWindow):
         self._update_pause_ui()
 
     def _update_reward_volume(self) -> None:
-        """Updates the reward volume in the data array in response to user modifying the GUI field value."""
+        """Updates the reward volume in the data array in response to the user modifying the GUI field value."""
         volume = int(self.volume_spinbox.value())
         self._data_array.write_data(index=8, data=np.int32(volume))
 
     def _update_speed_modifier(self) -> None:
-        """Updates the speed modifier in the data array in response to user modifying the GUI field value."""
+        """Updates the speed modifier in the data array in response to the user modifying the GUI field value."""
         self._speed_modifier = int(self.speed_spinbox.value())
         self._data_array.write_data(index=3, data=np.int32(self._speed_modifier))
 
     def _update_duration_modifier(self) -> None:
-        """Updates the duration modifier in the data array in response to user modifying the GUI field value."""
+        """Updates the duration modifier in the data array in response to the user modifying the GUI field value."""
         self._duration_modifier = int(self.duration_spinbox.value())
         self._data_array.write_data(index=4, data=np.int32(self._duration_modifier))
 
@@ -1238,7 +1239,7 @@ class CachedMotifDecomposer:
     runtimes.
 
     Trial motifs are used during experiment runtimes to decompose a long sequence of VR wall cues into trials. In turn,
-    this is used to track animal's performance during runtime (for each trial) and, if necessary, enable or disable
+    this is used to track the animal's performance during runtime (for each trial) and, if necessary, enable or disable
     lick guidance. Since each experiment can use one or more trial motifs (cue sequences), this decomposition has to be
     performed at runtime for each experiment. To optimize runtime performance, this class prepares and stores the
     necessary dat to support numba-accelerated motif decomposition at runtime, especially in (rare) cases where it has

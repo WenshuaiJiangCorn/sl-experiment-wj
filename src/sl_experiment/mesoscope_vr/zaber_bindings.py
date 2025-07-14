@@ -1,6 +1,6 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR data acquisition system.
-Primarily, the module extends the bindings exposed by ZaberMotion library to work with the specific requirements of the
-Sun lab data collection pipelines."""
+Primarily, the module extends the bindings exposed by the ZaberMotion library to work with the specific requirements
+of the Sun lab data collection pipelines."""
 
 from typing import Any
 from dataclasses import field, dataclass
@@ -49,7 +49,7 @@ def _attempt_connection(port: str) -> dict[int, Any] | str:
 
     # If the port is not connectable via Zaber bindings, returns the formatted error message to the caller.
     except Exception as e:
-        # Formats and returns the error message to be handled by caller.
+        # Formats and returns the error message to be handled by the caller.
         return f"Error connecting to port {port}: {e}"
 
 
@@ -343,8 +343,8 @@ class ZaberAxis:
             park position is used.
         _mount_position: The absolute position relative to the home sensor position, in native motor units, the motor
             should be moved to before mounting a naive animal onto the VR rig. This position is used to provide
-            experimenters with more working room around the rig and ensure animal's comfort as it is mounted onto the
-            rig. This position is a fallback used when the animal does nto have a better, custom-calibrated position
+            experimenters with more working room around the rig and ensure the animal's comfort as it is mounted onto
+            the rig. This position is a fallback used when the animal does not have a better, custom-calibrated position
             available. Usually, this would only be the case when the animal is mounted onto the rig for the very first
             time.
         _max_limit: The maximum absolute position relative to the home sensor position, in native motor units,
@@ -568,7 +568,7 @@ class ZaberAxis:
         the animal onto the VR rig.
 
         Applying this position to the motor orients the headbar and lickport system in a way that makes it easier to
-        mount the animal, while also providing animal with comfortable position inside the VR rig.
+        mount the animal, while also providing the animal with a comfortable position inside the VR rig.
         """
         return self._mount_position
 
@@ -583,7 +583,7 @@ class ZaberAxis:
             been idle for a prolonged period of time.
 
             The method initializes the homing procedure but does not block until it is over. As such, it is likely
-            that the motor would still be moving when this method returns. This feature is designed to support homing
+            that the motor will still be moving when this method returns. This feature is designed to support homing
             multiple axes in parallel.
         """
 
@@ -867,7 +867,7 @@ class ZaberDevice:
         # Sets the device shutdown tracker to 0. This tracker is used to detect when a device is not properly shut
         # down, which may have implications for the use of the device, such as the ability to home the device.
         # During the proper shutdown procedure, the tracker is always set to 1, so setting it to 0 now allows
-        # detecting cases where shutdown is not carried out.
+        # detecting cases where the shutdown is not carried out.
         self._device.settings.set(setting=_ZaberSettings.device_shutdown_flag, value=0)
         self._shutdown_flag = False  # Also sets the local shutdown flag
 
@@ -894,7 +894,7 @@ class ZaberDevice:
         self._shutdown_flag = True  # Also sets the local shutdown flag
 
     def emergency_shutdown(self) -> None:
-        """Stops and parks the managed axis, but does not reset the shutdown flag.
+        """Stops and parks the managed motor axes, but does not reset the shutdown flag.
 
         This method is designed to be used exclusively by the __del__ method of the managing ZaberConnection class to
         end the runtime.
@@ -985,7 +985,7 @@ class ZaberConnection:
         """Ensures that the connection is shut down gracefully whenever the class instance is deleted."""
         if self._connection is not None and self.is_connected:
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
-            # involves moving the motors to the parking position and this may not be safe in all circumstances.
+            # involves moving the motors to the parking position, and this may not be safe in all circumstances.
             # Therefore, the user can only call shutdown manually.
             for device in self._devices:
                 device.emergency_shutdown()
@@ -1046,7 +1046,7 @@ class ZaberConnection:
     def is_connected(self) -> bool:
         """Returns True if the class has established connection with the managed serial port."""
 
-        # Actualizes the connection status and returns it to caller
+        # Actualizes the connection status and returns it to the caller
         if self._connection is not None and self._is_connected:
             try:
                 # Tries to detect available devices using the connection. If the connection is broken, this will
@@ -1055,7 +1055,7 @@ class ZaberConnection:
                 self._is_connected = True  # If device check succeeded connection is active
                 return True
             except Exception:
-                # Otherwise, connection is broken
+                # Otherwise, the connection is broken
                 self._is_connected = False
         return False
 

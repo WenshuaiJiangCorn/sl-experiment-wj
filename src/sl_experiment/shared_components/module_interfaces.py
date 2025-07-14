@@ -33,7 +33,7 @@ class EncoderInterface(ModuleInterface):
     handle the pulses sent by the two encoder channels.
 
     Notes:
-        This interface sends CW and CCW motion data to Unity via 'LinearTreadmill/Data' MQTT topic.
+        This interface sends CW and CCW motion data to Unity via the 'LinearTreadmill/Data' MQTT topic.
 
         The default initial encoder readout is zero (no CW or CCW motion). The class instance is zeroed at communication
         initialization.
@@ -125,13 +125,13 @@ class EncoderInterface(ModuleInterface):
         """Processes incoming data in real time.
 
         Motion data (codes 51 and 52) is converted into CW / CCW vectors, translated from pulses to Unity units, and
-        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via console.
+        is sent to Unity via MQTT. Encoder PPR data (code 53) is printed via the console.
 
         Also, keeps track of the total distance traveled by the animal since class initialization, relative to the
         initial position at runtime onset and updates the distance_tracker SharedMemoryArray.
 
         Notes:
-            If debug mode is enabled, motion data is also converted to centimeters and printed via console.
+            If debug mode is enabled, motion data is also converted to centimeters and printed via the console.
         """
         # Static guard to appease mypy, all processed module messages are ModuleData types at this point.
         if isinstance(message, ModuleState):
@@ -173,7 +173,7 @@ class EncoderInterface(ModuleInterface):
         absolute_position += signed_motion
         self._distance_tracker.write_data(index=1, data=absolute_position)
 
-        # If the class is in the debug mode, prints the motion data via console
+        # If the class is in the debug mode, prints the motion data via the console
         if self._debug:
             console.echo(message=f"Encoder moved {cm_motion * sign} cm.")  # Includes the sign here
 
@@ -353,7 +353,7 @@ class TTLInterface(ModuleInterface):
     Attributes:
         _report_pulses: Stores the report pulses flag.
         _debug: Stores the debug flag.
-        _pulse_tracker: When the class is initialized with the report_pulses flag, stores the SharedMemoryArray used
+        _pulse_tracker: When the class is initialized with the report_pulses flag, it stores the SharedMemoryArray used
             to track how many pulses the class has recorded since initialization.
     """
 
@@ -601,8 +601,8 @@ class BreakInterface(ModuleInterface):
     Attributes:
         _newton_per_gram_centimeter: Conversion factor from torque force in g cm to torque force in N cm.
         _minimum_break_strength: The minimum torque the break delivers at minimum voltage (break is disabled) in N cm.
-        _maximum_break_strength: The maximum torque the break delivers at maximum voltage (break is fully engaged) in N
-            cm.
+        _maximum_break_strength: The maximum torque the break delivers at maximum voltage (break is fully engaged)
+            in N cm.
         _torque_per_pwm: Conversion factor from break pwm levels to breaking torque in N cm.
         _force_per_pwm: Conversion factor from break pwm levels to breaking force in N at the edge of the object.
         _debug: Stores the debug flag.
@@ -843,8 +843,7 @@ class ValveInterface(ModuleInterface):
             some valves may have a minimum open time or dispensed fluid volume, which is captured by the intercept.
             This improves the precision of fluid-volume-to-valve-open-time conversions.
         _calibration_cov: Stores the covariance matrix that describes the quality of fitting the calibration data using
-            the power law. This is used to determine how well the valve performance is approximated by the power
-            law.
+            the power law. This is used to determine how well the valve performance is approximated by the power law.
         _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
         _valve_tracker: Stores the SharedMemoryArray that tracks the total volume of water dispensed by the valve
@@ -852,7 +851,7 @@ class ValveInterface(ModuleInterface):
         _previous_state: Tracks the previous valve state as Open (True) or Closed (False). This is used to accurately
             track delivered water volumes each time the valve opens and closes.
         _cycle_timer: A PrecisionTimer instance initialized in the Communication process to track how long the valve
-            stays open during cycling. This used together with the _previous_state to determine the volume of water
+            stays open during cycling. This is used together with the _previous_state to determine the volume of water
             delivered by the valve during runtime.
     """
 
@@ -1027,9 +1026,9 @@ class ValveInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
                 will only run once. The exact repetition delay will be further affected by other modules managed by the
                 same microcontroller and may not be perfectly accurate.
-            noblock: Determines whether the command should block the microcontroller while the valve is kept open or
-                not. Blocking ensures precise pulse duration and dispensed fluid volume. Non-blocking
-                allows the microcontroller to perform other operations while waiting, increasing its throughput.
+            noblock: Determines whether the command should block the microcontroller while the valve is kept open.
+                Blocking ensures precise pulse duration and dispensed fluid volume. Non-blocking allows the
+                microcontroller to perform other operations while waiting, increasing its throughput.
         """
         command: OneOffModuleCommand | RepeatedModuleCommand
         if repetition_delay == 0:
@@ -1110,8 +1109,8 @@ class ValveInterface(ModuleInterface):
             repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
                 will only run once. The exact repetition delay will be further affected by other modules managed by the
                 same microcontroller and may not be perfectly accurate.
-            noblock: Determines whether the command should block the microcontroller while the tone is delivered or
-                not. Blocking ensures precise tone duration. Non-blocking allows the microcontroller to perform other
+            noblock: Determines whether the command should block the microcontroller while the tone is delivered.
+                Blocking ensures precise tone duration. Non-blocking allows the microcontroller to perform other
                 operations while waiting, increasing its throughput.
         """
         command: OneOffModuleCommand | RepeatedModuleCommand
@@ -1313,7 +1312,7 @@ class LickInterface(ModuleInterface):
         """Processes incoming data.
 
         Lick data (code 51) comes in as a change in the voltage level detected by the sensor pin. This value is then
-        evaluated against the _lick_threshold and if the value exceeds the threshold, a binary lick trigger is sent to
+        evaluated against the _lick_threshold, and if the value exceeds the threshold, a binary lick trigger is sent to
         Unity via MQTT. Additionally, the method increments the total lick count stored in the _lick_tracker each time
         an above-threshold voltage readout is received from the module.
 

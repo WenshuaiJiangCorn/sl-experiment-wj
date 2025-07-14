@@ -126,7 +126,7 @@ def _convert_date_time_to_timestamp(date: str, time: str) -> int:
     full_datetime = datetime.combine(date=date_obj, time=time_obj)
     full_datetime = full_datetime.replace(tzinfo=timezone.utc)
 
-    # Gets and translates second timestamp (float) into microseconds (int). Then, returns it to caller
+    # Gets and translates the second timestamp (float) into microseconds (int). Then, returns it to the caller
     return int(full_datetime.timestamp() * 1_000_000)
 
 
@@ -353,7 +353,7 @@ class SurgerySheet:
         # Converts input animal ID to the same format as IDs stored in the id_list generated above for comparison
         formatted_id = str(self._animal_id).zfill(5)
 
-        # Checks if the animal ID exists in the tuple of all known animal IDs. If not, raises an error.
+        # Checks if the animal ID exists in the tuple of all known animal IDs. If not, it raises an error.
         if formatted_id not in self._animals:
             message = (
                 f"Unable to parse the surgery data for the project {project_name} and animal {animal_id}. The "
@@ -396,7 +396,7 @@ class SurgerySheet:
         row_values = _replace_empty_values(row_values)
 
         # Creates a dictionary mapping headers (column names) to the animal-specific extracted values for these
-        # headers. This procedure assumes that the headers are contiguous, start from row A and the animal has data for
+        # headers. This procedure assumes that the headers are contiguous, start from row A, and the animal has data for
         # all or most present headers in the same sequential order as headers are encountered.
         animal_data: dict[str, Any] = {}
         for i, header in enumerate(self._headers):
@@ -475,7 +475,7 @@ class SurgerySheet:
             implant_name = animal_data.get(base_key)  # Gets the name stored in the 'main' implant column
 
             # If the implant name is 'None', the processed subject does not have this implant, despite the
-            # header being present. If the name is a string, processes the rest of the data
+            # header being present. If the name is a string, it processes the rest of the data
             if implant_name is not None:
                 # Some surgeries (training ones) do not make use of stereotactic coordinates. In such cases, defaults
                 # to a set of zeroes to indicate no valid coordinates to parse.
@@ -608,7 +608,7 @@ class SurgerySheet:
 
         Returns:
             The column ID (e.g., "A", "B", "C") corresponding to the column name. If the target column header does not
-            exist, returns None to indicate the header is not available.
+            exist, the method returns None to indicate the header is not available.
         """
 
         if column_name.lower() in self._headers:
@@ -623,7 +623,7 @@ class WaterSheet:
     This class uses Google Sheets API to connect to and update the data stored in the water restriction log Google Sheet
     file. It functions as the central access point used to update the water restriction data for each animal after
     training and experiment sessions. Primarily, this is used as a convenience feature that allows experimenters to
-    synchronize runtime data with the Google Sheet tracker, instead of entering it manually.
+    synchronize runtime data with the Google Sheet tracker instead of entering it manually.
 
     The class is explicitly designed to work with the data of a single data acquisition session and animal, which
     matches the case of how the class is used during data acquisition in the lab. It carries out all necessary checks at

@@ -249,7 +249,7 @@ def _process_stack(
 
         # Computes the starting and ending frame number
         start_frame = first_frame_number  # This is precomputed to be correct, no adjustment needed
-        end_frame = first_frame_number + stack_size - 1  # Ending frame number is length - 1 + start
+        end_frame = first_frame_number + stack_size - 1  # The ending frame number is length - 1 + start
 
         # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
         output_path = output_directory.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
@@ -285,7 +285,7 @@ def _process_stack(
                             [compressed_stack.pages[i].asarray() for i in range(start_idx, end_idx)]
                         )
 
-                        # Compares with original batch
+                        # Compares with the original batch
                         if not np.array_equal(compressed_batch, original_batch):
                             message = (
                                 f"Compressed batch {batch_idx + 1}/{num_batches} in {output_path} does not match the "
@@ -405,7 +405,7 @@ def _generate_ops(
         data["dy"] = [round(min_positions[i, 0]) for i in range(nrois)]
         data["lines"] = [list(range(int(roi_rows[0, i]), int(roi_rows[1, i]))) for i in range(nrois)]
 
-    # Saves the generated config as JSON file (ops.json)
+    # Saves the generated config as a JSON file (ops.json)
     with open(ops_path, "w") as f:
         # noinspection PyTypeChecker
         json.dump(data, f, separators=(",", ":"), indent=None)  # Maximizes data compression
@@ -519,7 +519,7 @@ def _pull_mesoscope_data(
             this to True will only mark the data for removal. The removal is carried out by the dedicated data purging
             function that runs at the end of the session data preprocessing sequence.
         verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
-            performed before source folder is marked for removal from the ScanImagePC if remove_sources is True.
+            performed before the source folder is marked for removal from the ScanImagePC if remove_sources is True.
     """
     # Uses the input SessionData instance to determine the path to the folder that stores raw mesoscope data on the
     # ScanImage PC.
@@ -542,7 +542,7 @@ def _pull_mesoscope_data(
     extensions = {"*.me", "*.tiff", "*.tif", "*.roi"}
 
     # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
-    # all files are present or fails five times in a row.
+    # all files are present or fail five times in a row.
     error = False
     for attempt in range(5):  # A maximum of 5 reattempts is allowed
         # Extracts the names of files stored in the source folder
@@ -606,7 +606,7 @@ def _pull_mesoscope_data(
         )
         console.error(message=message, error=RuntimeError)
 
-    # Removes all binary files from the source directory prior to transferring. This ensures that the directory
+    # Removes all binary files from the source directory before transferring. This ensures that the directory
     # does not contain any marker files used during runtime.
     for bin_file in source.glob("*.bin"):
         bin_file.unlink(missing_ok=True)
@@ -688,8 +688,8 @@ def _preprocess_mesoscope_directory(
     # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
     image_directory = session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames")
 
-    # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
-    # acquired at all. Aborts processing early.
+    # If the raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were
+    # not acquired at all. Aborts processing early.
     if not image_directory.exists():
         return
 
@@ -999,7 +999,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
-    # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
+    # If the surgery quality value was obtained above, updates the surgery quality column value with the provided value
     if quality != "":
         sl_sheet.update_surgery_quality(quality=int(quality))
 
@@ -1086,7 +1086,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     This service function runs at the end of the data preprocessing pipeline, after the data has been transferred to
     the BioHPC server. Primarily, it is used to verify that the data was moved intact, and it is safe to delete the
-    local copy of the data stored on the VRPC. Additionally, it is the only function allowed to crate processed
+    local copy of the data stored on the VRPC. Additionally, it is the only function allowed to create processed
     data directories on the BioHPC server, which is a prerequisite for all further data processing steps.
 
     Notes:
@@ -1095,7 +1095,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         enough spare resources to run the job.
 
         If integrity verification fails, this job will delete the telomere.bin marker file stored in the session's
-        raw_data folder on the server. If it succeeds, the job will generate an ubiquitin.bin marker file in the
+        raw_data folder on the server. If it succeeds, the job will generate the 'ubiquitin.bin' marker file in the
         local (VRPC) session's raw_data folder, marking it for deletion. Generating the deletion marker file will not
         itself delete the data, that step is performed at a later time point by a dedicated 'purging' function.
 
@@ -1180,7 +1180,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         server.remove(remote_path=stderr_file, is_dir=False)
         server.remove(remote_path=stdout_file, is_dir=False)
 
-        # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
+        # Dumps the 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
         session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
 
     # Disconnects from the server
