@@ -984,7 +984,6 @@ class ZaberConnection:
     def __del__(self) -> None:
         """Ensures that the connection is shut down gracefully whenever the class instance is deleted."""
         if self._connection is not None and self.is_connected:
-
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
             # involves moving the motors to the parking position and this may not be safe in all circumstances.
             # Therefore, the user can only call shutdown manually.
