@@ -1109,6 +1109,10 @@ class _MesoscopeVRSystem:
         # Updates the paused water volume tracker to reflect the total volume of water delivered during the checkpoint.
         self._paused_water_volume += self._microcontrollers.delivered_water_volume
 
+        # Since deliver_reward() method automatically increments unconsumed reward counter, resets the tracker before
+        # starting runtime
+        self._unconsumed_reward_count = 0
+
     def _setup_zaber_motors(self) -> None:
         """If necessary, carries out the Zaber motor setup and positioning sequence.
 
@@ -2175,13 +2179,16 @@ class _MesoscopeVRSystem:
                 # If the completed trial was not rewarded, increments the unrewarded trial counter.
                 if not self._trial_rewarded:
                     self._failed_trials += 1
+                else:
+                    # Otherwise, resets the failed trial sequence to 0.
+                    self._failed_trials = 0
 
                 # Resets the trial reward tracker for the next trial
                 self._trial_rewarded = False
 
                 # If this trial was not rewarded and failing this trial caused the overall sequence of failed trials
                 # to exceed the threshold, re-enabled guidance for the pre-specified number of recovery trials.
-                if self._failed_trials > self._failed_trial_threshold:
+                if self._failed_trials >= self._failed_trial_threshold:
                     self._guided_trials = self._recovery_trials
                     self._ui.set_guidance_state(enabled=True)
 
@@ -2246,7 +2253,7 @@ class _MesoscopeVRSystem:
                 # This method either delivers the reward or simulates it with the tone, depending on the unconsumed
                 # reward tracker. The size of the reward matches the reward size for the current trial
                 # (for most trials it would be 5.0 uL).
-                self.resolve_reward(self._trial_rewards[self._completed_trials])
+                self.resolve_reward(reward_size=self._trial_rewards[self._completed_trials])
 
                 # Decrements the guided trial counter each time Unity instructs the runtime to deliver a reward.
                 # Receiving reward delivery commands indicates that the animal performs the task as expected. This is
@@ -2257,7 +2264,7 @@ class _MesoscopeVRSystem:
                     # If the cycle decremented the guided trials tracker to 0, disables lick guidance mode if it is
                     # enabled.
                     if self._guided_trials == 0:
-                        self._toggle_lick_guidance(enable_guidance=False)
+                        self._ui.set_guidance_state(enabled=False)
 
                 # Also flips the trial reward flag to True if the animal receives the reward during this trial.
                 self._trial_rewarded = True
@@ -2327,6 +2334,11 @@ class _MesoscopeVRSystem:
             # This specifically uses the '_deliver_reward' method to ensure the reward is delivered regardless of
             # the unconsumed reward tracker state. Also, always uses the reward volume specified by the GUI.
             self._deliver_reward(reward_size=self._ui.reward_volume)
+
+            # Ensures that manual rewards delivered during pause state are not counted against the unconsumed reward
+            # threshold.
+            if self._paused:
+                self._unconsumed_reward_count = 0
 
         # If the user changes the guidance state via the UI, instructs Unity to update the state to match GUI setting.
         if self._ui.enable_guidance != self._enable_guidance:
