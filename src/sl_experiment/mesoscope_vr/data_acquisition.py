@@ -1048,6 +1048,11 @@ class _MesoscopeVRSystem:
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
 
+        # If the session was not fully initialized, skips the preprocessing. The main runtime logic function will
+        # automatically execute 'failed session data purging' runtime based on the presence of the marker.
+        if self._session_data.raw_data.nk_path.exists():
+            return
+
         # Determines whether to carry out data preprocessing or purging.
         message = (
             f"Do you want to carry out data preprocessing or purge the data? CRITICAL! Only enter 'purge session' if "
@@ -1559,7 +1564,7 @@ class _MesoscopeVRSystem:
 
         Raises:
             RuntimeError: If the user chooses to abort the runtime when the method does not receive a response from
-                Unity in 20 seconds.
+                Unity in 5 seconds.
         """
 
         # Does not do anything if a Unity communication class is not initialized.
@@ -1575,9 +1580,9 @@ class _MesoscopeVRSystem:
             # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
             self._unity.send_data(topic=self._cue_sequence_request_topic)
 
-            # Waits at most 20 seconds to receive the response
+            # Waits at most 5 seconds to receive the response
             timeout_timer.reset()
-            while timeout_timer.elapsed < 20:
+            while timeout_timer.elapsed < 5:
                 # Repeatedly queries and checks incoming messages from Unity.
                 if self._unity.has_data:
                     topic: str
@@ -1624,12 +1629,16 @@ class _MesoscopeVRSystem:
                         console.echo(message=message, level=LogLevel.SUCCESS)
                         return
 
+                # Sends a second request if response is not received within 2 seconds
+                if timeout_timer.elapsed > 2:
+                    self._unity.send_data(topic=self._cue_sequence_request_topic)
+
             # If the loop above is escaped, this is due to not receiving any message from Unity. Raises an error.
             message = (
                 f"The Mesoscope-VR system has requested the Virtual task wall cue sequence by sending the trigger to "
-                f"the {self._cue_sequence_request_topic}' topic and received no response in 20 seconds. It is likely "
-                f"that the Unity game engine is not running or is not configured to work with Mesoscope-VR system. "
-                f"Make sure Unity game engine is started and configured before continuing."
+                f"the {self._cue_sequence_request_topic}' topic and received no response in 5 seconds after two "
+                f"requests. It is likely that the Unity game engine is not running or is not configured to work with "
+                f"Mesoscope-VR system. Make sure Unity game engine is started and configured before continuing."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
@@ -2401,9 +2410,9 @@ class _MesoscopeVRSystem:
         # pause state.
         self._mesoscope_terminated = True  # Sets the termination flag
         self._pause_runtime()  # Pauses the runtime.
-        self._stop_mesoscope()  # Ensures that the mesoscope runtime markers are removed to facilitate restarting.
         message = "Emergency pause: Engaged. Reason: Mesoscope stopped sending frame acquisition triggers."
         console.echo(message=message, level=LogLevel.ERROR)
+        self._stop_mesoscope()  # Ensures that the mesoscope runtime markers are removed to facilitate restarting.
         return
 
     def _pause_runtime(self) -> None:
@@ -2761,8 +2770,12 @@ def lick_training_logic(
         # If the user chose to terminate the runtime during initialization checkpoint, raises an error to jump to the
         # shutdown runtime sequence, bypassing all other runtime preparation steps.
         if runtime.terminated:
+            # Note, this specific type of errors should not be raised by any other runtime component. Therefore, it is
+            # possible to handle this type of exceptions as a unique marker for early user-requested runtime
+            # termination.
             message = f"The runtime was terminated early due to user request."
-            console.error(message=message, error=RuntimeError)
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            raise RecursionError
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
@@ -2812,6 +2825,11 @@ def lick_training_logic(
         # the maximum possible time interval as the delay interval.
         delay_timer.delay_noblock(maximum_reward_delay)
 
+    # RecursionErrors should not be raised by any runtime component except in the case that the user wants to terminate
+    # the runtime as part of the startup checkpoint. Therefore, silences the error.
+    except RecursionError:
+        pass
+
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
         # If the runtime was initialized, attempts to gracefully terminate runtime assets
@@ -2821,6 +2839,11 @@ def lick_training_logic(
         # If the session runtime terminates before the session was initialized, removes session data from all
         # sources before shutting down.
         if session_data.raw_data.nk_path.exists():
+            message = (
+                f"The runtime was unexpectedly terminated before it was able to initialize and start all assets. "
+                f"Removing all leftover data from the uninitialized session from all destinations..."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
             purge_failed_session(session_data)
 
         message = f"Lick training runtime: Complete."
@@ -3029,8 +3052,12 @@ def run_training_logic(
         # If the user chose to terminate the runtime during initialization checkpoint, raises an error to jump to the
         # shutdown runtime sequence, bypassing all other runtime preparation steps.
         if runtime.terminated:
+            # Note, this specific type of errors should not be raised by any other runtime component. Therefore, it is
+            # possible to handle this type of exceptions as a unique marker for early user-requested runtime
+            # termination.
             message = f"The runtime was terminated early due to user request."
-            console.error(message=message, error=RuntimeError)
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            raise RecursionError
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
@@ -3177,6 +3204,11 @@ def run_training_logic(
         # Closes the progress bar if runtime ends as expected
         progress_bar.close()
 
+    # RecursionErrors should not be raised by any runtime component except in the case that the user wants to terminate
+    # the runtime as part of the startup checkpoint. Therefore, silences the error.
+    except RecursionError:
+        pass
+
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
         # If the runtime was initialized, attempts to gracefully terminate runtime assets
@@ -3186,6 +3218,11 @@ def run_training_logic(
         # If the session runtime terminates before the session was initialized, removes session data from all
         # sources before shutting down.
         if session_data.raw_data.nk_path.exists():
+            message = (
+                f"The runtime was unexpectedly terminated before it was able to initialize and start all assets. "
+                f"Removing all leftover data from the uninitialized session from all destinations..."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
             purge_failed_session(session_data)
 
         message = f"Run training runtime: Complete."
@@ -3317,8 +3354,12 @@ def experiment_logic(
         # If the user chose to terminate the runtime during initialization checkpoint, raises an error to jump to the
         # shutdown runtime sequence, bypassing all other runtime preparation steps.
         if runtime.terminated:
+            # Note, this specific type of errors should not be raised by any other runtime component. Therefore, it is
+            # possible to handle this type of exceptions as a unique marker for early user-requested runtime
+            # termination.
             message = f"The runtime was terminated early due to user request."
-            console.error(message=message, error=RuntimeError)
+            console.echo(message=message, level=LogLevel.SUCCESS)
+            raise RecursionError
 
         # Marks the session as fully initialized. This prevents session data from being automatically removed by
         # 'purge' runtimes.
@@ -3384,6 +3425,11 @@ def experiment_logic(
                     console.echo(message=message, level=LogLevel.ERROR)
                     break  # Breaks the for loop
 
+    # RecursionErrors should not be raised by any runtime component except in the case that the user wants to terminate
+    # the runtime as part of the startup checkpoint. Therefore, silences the error.
+    except RecursionError:
+        pass
+
     # Ensures that the function always attempts the graceful shutdown procedure, even if it encounters runtime errors.
     finally:
         # If the runtime was initialized, attempts to gracefully terminate runtime assets
@@ -3393,6 +3439,11 @@ def experiment_logic(
         # If the session runtime terminates before the session was initialized, removes session data from all
         # sources before shutting down.
         if session_data.raw_data.nk_path.exists():
+            message = (
+                f"The runtime was unexpectedly terminated before it was able to initialize and start all assets. "
+                f"Removing all leftover data from the uninitialized session from all destinations..."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
             purge_failed_session(session_data)
 
         message = f"Experiment runtime: Complete."
@@ -3543,6 +3594,11 @@ def window_checking_logic(
         # If the session runtime terminates before the session was initialized, removes session data from all sources
         # before shutting down.
         if session_data.raw_data.nk_path.exists():
+            message = (
+                f"The runtime was unexpectedly terminated before it was able to initialize and start all assets. "
+                f"Removing all leftover data from the uninitialized session from all destinations..."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
             purge_failed_session(session_data)
 
         # If Zaber motors were connected, attempts to gracefully shut down the motors.
