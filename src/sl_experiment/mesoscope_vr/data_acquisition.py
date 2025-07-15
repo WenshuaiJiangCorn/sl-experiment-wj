@@ -428,7 +428,8 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
-    # When the preparation function runs successfully, it generates 3 files: MotionEstimator.me, fov.roi, and zstack.tif.
+    # When the preparation function runs successfully, it generates 3 files: MotionEstimator.me, fov.roi, and
+    # zstack.tif.
     target_files = (
         mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("MotionEstimator.me"),
         mesoscope_data.scanimagepc_data.mesoscope_data_path.joinpath("fov.roi"),

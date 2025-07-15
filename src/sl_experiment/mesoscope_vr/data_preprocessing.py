@@ -758,8 +758,8 @@ def _preprocess_mesoscope_directory(
 
     # Ends the runtime early if there are no valid TIFF files to process after filtering
     if len(tiff_files) == 0:
-        # If configured, the processing function ensures that the temporary image directory with all TIFF source files is
-        # removed after processing.
+        # If configured, the processing function ensures that the temporary image directory with all TIFF source files
+        # is removed after processing.
         if remove_sources:
             _delete_directory(image_directory)
         return

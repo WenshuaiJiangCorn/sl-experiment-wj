@@ -31,7 +31,7 @@ ___
 ## Table of Contents
 - [Installation](#installation)
 - [Data Acquisition Systems](#data-acquisition-systems)
-- [Mesoscope-VR System](#mesoscope-vr-data-acquisition-system)
+- [Mesoscope-VR System](#Mesoscope-vr-data-acquisition-system)
 - [Acquired Data Structure and Management](#acquired-data-structure-and-management)
 - [Acquiring Data in the Sun Lab](#acquiring-data-in-the-sun-lab)
 - [API Documentation](#api-documentation)
@@ -69,7 +69,7 @@ acquisition machine. Additionally, each system typically uses a Network Attached
 or both to store the data after the acquisition safely (with redundancy and parity).
 
 In the Sun lab, each data acquisition system is built around the main tool used to acquire the brain activity data. For
-example, the main system in the Sun lab is the [Mesoscope-VR](#mesoscope-vr-data-acquisition-system) system, which uses 
+example, the main system in the Sun lab is the [Mesoscope-VR](#Mesoscope-vr-data-acquisition-system) system, which uses 
 the [2-Photon Random Access Mesoscope (2P-RAM)](https://elifesciences.org/articles/14472). All other components of that 
 system are built around the Mesoscope to facilitate the acquisition of the brain activity data. Due to this inherent 
 specialization, each data acquisition system in the lab is treated as an independent unit that requires custom software
@@ -91,7 +91,7 @@ parts:
    are performed by a dedicated computer referred to as the **'ScanImagePC'** or, (less frequently) the
    **'Mesoscope PC'**. This PC is assembled and configured by the [MBF Bioscience](https://www.mbfbioscience.com/). The
    only modification carried out by the Sun lab during assembly was the configuration of a Server Message Block (SMB)
-   protocol access to the root folder used by the ScanImage software to save the mesoscope data.
+   protocol access to the root folder used by the ScanImage software to save the Mesoscope data.
 2. The [Unity game engine](https://unity.com/products/unity-engine) running the Virtual Reality game world used in all 
    experiments to control the task environment and resolve the task logic. The virtual environment runs on the main data
    acquisition computer referred to as the **'VRPC'** and relies on the [MQTT](https://mqtt.org/) communication protocol
@@ -137,10 +137,10 @@ card, but this is not a strict requirement.
   It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
   for predictable performance of all library components.
 - A 10-Gigabit capable motherboard or Ethernet adapter, such as [X550-T2](https://shorturl.at/fLLe9). Primarily, this is
-  required for the high-quality machine vision camera used to record videos of the animal’s face. We also use 10-Gigabit
-  lines for transferring the data between the PCs used in the data acquisition process and destination machines used for 
-  long-term data storage (see [acquired data management section](#acquired-data-structure-and-management) for more 
-  details).
+  required for the high-quality machine vision camera used to record videos of the animal’s face. The 10-Gigabit lines
+  are also used for transferring the data between the PCs used in the data acquisition process and destination machines 
+  used for long-term data storage (see [acquired data management section](#acquired-data-structure-and-management) for 
+  more details).
 
 ### System Assembly
 
@@ -150,12 +150,12 @@ section as a general system composition guide, but consult our publications over
 building specific system implementations used to acquire the data featured in different publications.
 
 Physical assembly and mounting of ***all*** hardware components mentioned in the specific subsections below is discussed
-in the [main Mesoscope-VR assembly section](#mesoscope-vr-assembly).
+in the [main Mesoscope-VR assembly section](#Mesoscope-vr-assembly).
 
 ### Zaber Motors
 All brain activity recordings with the Mesoscope require the animal to be head-fixed. To orient head-fixed animals on 
-the Virtual Reality treadmill (running wheel) and promote task performance, we use three groups of motors controlled 
-through Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
+the Virtual Reality treadmill (running wheel) and promote task performance, the system uses three groups of motors 
+controlled through Zaber motor controllers. The first group, the **HeadBar**, is used to position the animal’s head in 
 Z, Pitch, and Roll axes. Together with the movement axes of the Mesoscope, this allows for a wide range of 
 motions necessary to align the Mesoscope objective with the brain imaging plane. The second group of 
 motors, the **LickPort**, controls the position of the water delivery port (tube) (and sensor) in X, Y, and Z axes. This
@@ -194,39 +194,41 @@ the data expected by this library:
    conversions and motor positioning logic during runtimes.
 4. **User Data 11**: Device Park Position. This variable should be set to the position, in native motor units, where 
    the device should be moved as part of the 'park' command and the shut-down sequence. This is used to position all 
-   motors in a way that guarantees they can be safely 'homed' at the beginning of the next runtime. In other words, each
+   motors in a way that guarantees they can be safely 'homed' at the beginning of the next runtime. Therefore, each
    park position has to be selected so that each motor can move to their 'home' sensor without colliding with any other
    motor **simultaneously** moving towards their 'home' position. **Note!** The lick-port uses the 'park' position as 
-   the **default** imaging position. In other words, during runtime, it will move to the 'park' position if it has no 
-   animal-specific position to use during imaging. Therefore, make sure that the park position for the lick-port is 
-   always set so that it cannot possibly harm the animal mounted in the rig.
+   the **default** imaging position. During runtime, it will move to the 'park' position if it has no animal-specific 
+   position to use during imaging. Therefore, make sure that the park position for the lick-port is always set so that 
+   it cannot harm the animal mounted in the Mesoscope enclosure while moving to the park position from any other 
+   position.
 5. **User Data 12** Device Maintenance Position. This variable should be set to the position, in native motor units, 
    where the device should be moved as part of the 'maintain' command. Primarily, this position is used during water 
-   delivery system calibration and the running-wheel surface maintenance task. Typically, this position is calibrated to
+   delivery system calibration and the running-wheel surface maintenance. Typically, this position is calibrated to
    provide easy access to all hardware components of the system by moving all motors as far away from each other as 
    reasonable.
 6. **User Data 13**: Device Mount Position. This variable should be set to the position, in native motor units, where 
    the device should be moved as part of the 'mount' command. For the lick-port, this position is usually far away from 
    the animal, which facilitates mounting and unmounting the animal from the rig. For the head-bar and the wheel motor 
    groups, this position is used as the **default** imaging position. Therefore, set the head-bar and the wheel 'mount'
-   positions so that any (new) animal can be comfortably and safely mounted in the Mesoscope-VR system.
+   positions so that any (new) animal can be comfortably and safely mounted in the Mesoscope enclosure.
 
 ### Behavior Cameras
-To record the animal’s behavior, we use a group of three cameras. The **face_camera** is a high-end machine-vision 
-camera used to record the animal’s face with approximately 3-MegaPixel resolution. The **left-camera** and 
-**right_camera** are 1080P security cameras used to record the body of the animal. Only the data recorded by the 
-**face_camera** is currently used during data processing and analysis, but we save the data from all available cameras. 
-We use custom [ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system) bindings to interface with 
-and record the frames acquired by all cameras.
+To record the animal’s behavior, the system uses a group of three cameras. The **face_camera** is a high-end
+machine-vision camera used to record the animal’s face with approximately 3-MegaPixel resolution. The **left-camera** 
+and the **right_camera** are 1080P security cameras used to record the body of the animal. Only the data recorded by the
+**face_camera** is currently used during data processing and analysis, but the data from all available cameras is saved 
+during acquisition. To interface with the cameras, the system leverages customized
+[ataraxis-video-system](https://github.com/Sun-Lab-NBB/ataraxis-video-system) bindings.
 
-Specific information about the components used by the camera systems, as well as the snapshot of the configuration 
+Specific information about the cameras and related imaging hardware, as well as the snapshot of the configuration 
 parameters used by the **face_camera**, is available 
 [here]https://drive.google.com/drive/folders/1l9dLT2s1ysdA3lLpYfLT1gQlTXotq79l?usp=sharing).
 
 ### MicroControllers
-To interface with all components of the Mesoscope-VR system **other** than cameras and Zaber motors, we use Teensy 4.1 
-microcontrollers with specialized [ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller) 
-code. Currently, we use three isolated microcontroller systems: **Actor**, **Sensor**, and **Encoder**.
+To interface with all other hardware components **other** than cameras and Zaber motors, the Mesoscope-VR system uses 
+Teensy 4.1 microcontrollers with specialized 
+[ataraxis-micro-controller](https://github.com/Sun-Lab-NBB/ataraxis-micro-controller) code. Currently, The system 
+uses three isolated microcontroller subsystems: **Actor**, **Sensor**, and **Encoder**.
 
 For instructions on assembling and wiring the electronic components used in each microcontroller system, as well as the 
 code running on each microcontroller, see the 
@@ -234,27 +236,28 @@ code running on each microcontroller, see the
 
 ### Virtual Reality Task Environment (Unity)
 The task environment used in all Mesoscope-VR experiments is rendered and controlled by the Unity game engine. To make 
-Unity work with this library, each project-specific Unity task must use the bindings and assets released as part of our 
+Unity work with this library, each project-specific Unity task must use the bindings and assets released as part of the 
 [Unity-tasks repository](https://github.com/Sun-Lab-NBB/Unity-tasks). Follow the instructions from that repository to 
 set up Unity Game engine to interface with this library and to create new virtual task environments.
 
 **Note!** This library does not contain tools to initialize Unity Game engine. The desired Virtual Reality task
-has to be started ('armed') ***manually*** before initializing the main experiment runtime through this library. The 
-main Unity repository contains more details about starting the virtual reality tasks when running experiments. During 
+has to be started ('armed') ***manually*** before entering the main runtime (data acquisition session) cycle. The main 
+Unity repository contains more details about starting the virtual reality tasks when running experiments. During 
 CLI-driven experiment runtimes, the library instructs the user when to 'arm' the Unity game engine.
 
 ### Google Sheets API Integration
 
-This library interacts with project-specific Google Sheet files used in the Sun lab to track and communicate certain 
-information about the animals that participate in the project. Currently, this includes two files: the **surgery log** 
+This library interacts with the shared Google Sheet files used in the Sun lab to track and communicate certain 
+information about the animals that participate in all projects. Currently, this includes two files: the **surgery log** 
 and the **water restriction log**. Primarily, this integration is used to ensure that all information about each 
-experiment subject is stored in the same location (on the long-term storage machine(s)). Additionally, it is used in the
-lab to automate certain data logging tasks.
+experiment subject (animal) is stored in the same location (on the long-term storage machine(s)). Additionally, it is 
+used in the lab to automate certain data logging tasks.
 
 #### Setting up Google Sheets API Access
 
-**If you already have a service Google Sheets API account, skip to the next section.** Since we use the same 
-service account for all projects and log files, this section should generally be ignored by most lab members.
+**If you already have a service Google Sheets API account, skip to the next section.** Most lab members can safely 
+ignore this section, as all service accounts are managed at the acquisition-system level, rather than individual lab 
+members.
 
 1. Log into the [Google Cloud Console](https://console.cloud.google.com/welcome). 
 2. Create a new project.
@@ -269,48 +272,78 @@ To access the **surgery log** and the **water restriction log** Google Sheets as
 and share these log files with the email of the service account created above. The service account requires **Editor** 
 access to both files.
 
-**Note!** This feature expects that both log files are formatted according to the available Sun lab templates. 
-Otherwise, the parsing algorithm will not behave as expected, leading to runtime failure. Additionally, both log files 
+**Note!** This feature requires that both log files are formatted according to the available Sun lab templates. 
+Otherwise, the parsing algorithm will not behave as expected, leading to runtime failures. Additionally, both log files 
 have to be pre-filled in advance, as the processing code is not allowed to automatically generate new table (log) rows.
-**Tip!** Currently, we suggest pre-filling the data a month in-advance. Since most experiments last for at most a month,
-this usually covers the entire experiment period for any animal.
+**Hint!** Currently, it is advised to pre-fill the data a month in-advance. Since most experiments last for at most a 
+month, this usually covers the entire experiment period for any animal.
 
-### Mesoscope-VR Assembly:
-***This section is currently a placeholder. Since we are actively working on the final Mesoscope-VR design, it will be 
-populated once we have a final design implementation.***
+### Mesoscope-VR Assembly
+***This section is currently a placeholder. Since the final Mesoscope-VR system design is still a work in progress, it 
+will be populated once the final design implementation is constructed and tested in the lab.***
 
 The Mesoscope-VR assembly mostly consists of two types of components. First, it includes custom components manufactured 
 via 3D-printing or machining (for metalwork). Second, it consists of generic components available from vendors such as 
 ThorLabs, which are altered in workshops to fit the specific requirements of the Mesoscope-VR system. The blueprints and
 CAD files for all components of the Mesoscope-VR systems, including CAD renders of the assembled system, are available 
 [here](https://drive.google.com/drive/folders/1Oz2qWAg3HkMqw6VXKlY_c3clcz-rDBgi?usp=sharing).
+
+### ScanImage PC Assets
+As mentioned above, the ScanImagePC is largely assembled and configured by external contractors. However, the PC 
+requires additional assets and configurations to make it compatible with sl-experiment runtimes.
+
+#### File System Access
+All filesystems used in the data acquisition or storage must be mounted onto the main acquisition system PC. In the case
+of the Mesoscope-VR system, that is the **VRPC**. Since ScanImagePC uses Windows, it comes pre-equipped with 
+Server Message Block (SMB) protocol support, but the sharing is disabled by default. During runtime, the VRPC uses
+SMB3 to both access the data acquired by ScanImage software and directly control the Mesoscope acquisition via MATLAB 
+assets (see below). Therefore, it is important to ensure that ScanImagePC shares the root mesoscope data directory with
+the VRPC over the local network.
+
+#### MATLAB Assets
+ScanImage is written in MATLAB and controls all aspects of Mesoscope data acquisition. While some aspects of Mesoscope
+operation require manual intervention from the experimenter, most data acquisition runtimes can be configured and 
+executed using the **setupAcquisition** MATLAB function available from 
+[mesoscope assets repository](https://github.com/Sun-Lab-NBB/sl-mesoscope-assets). The function’s original purpose was 
+to set up online motion correction using a set of tools contributed by 
+[Pachitariu and Stringer lab](https://mouseland.github.io/). In the Sun lab, it was heavily refactored to also 
+acquire a high-definition zstack of the imaging plane and to allow the sl-experiment library to start and stop the 
+acquisition using binary marker files. All current Mesoscope-VR runtimes require the user to call the setupAcquisition 
+MATLAB function as part of the runtime preparation sequence.
+
+To configure MATLAB to access the mesoscope assets, git-clone the entire repository to the ScanImagePC. Then, follow the
+tutorials [here](https://www.mathworks.com/help/matlab/matlab_env/add-remove-or-reorder-folders-on-the-search-path.html)
+and add the path to the root mesoscope assets folder to MATLAB’s search path. MATLAB will then be able to use all 
+functions from that repository, including the acquisition setup function.
+
 ___
 
 ## Acquired Data Structure and Management
 
 The library defines a fixed structure for storing all acquired data which uses a 4-level directory tree hierarchy: 
 **root** (volume), **project**, **animal**, and **session**. This structure is reused by all acquisition systems, and 
-it is maintained across all data acquisition and long-term storage machines. After each data acquisition runtime, all 
-raw data will be found under the **root/project/animal/session/raw_data** directory stored on one or more machines 
-mentioned below. After each data processing pipeline runtime, all processed data generated by that pipeline will be 
-found under the **root/project/animal/session/processed_data**.
+it is maintained across all long-term storage destinations. After each data acquisition runtime (session), all 
+raw data is stored under the **root/project/animal/session/raw_data** directory stored on one or more machines mentioned
+below. After each data processing pipeline runtime, all processed data generated by that pipeline is stored under the 
+**root/project/animal/session/processed_data**.
 
 Currently, each data acquisition system in the lab uses at least three machines: 
 1. The **main data acquisition PC** is used to acquire and preprocess the data. For example, the *VRPC* of the 
-   *Mesoscope-VR* system is the main data acquisition PC for that system. This PC is sued to both **acquire** the data 
-   and, critically, to **preprocess** the data before it is moved to the long-term storage destination.
+   *Mesoscope-VR* system is the main data acquisition PC for that system. This PC is used to both **acquire** the data 
+   and, critically, to **preprocess** the data before it is moved to the long-term storage destinations.
 2. The **BioHPC compute server** is the main long-term storage destination and the machine used to process and 
-   analyze the data. This is the high-performance computing server owned by the lab and optionally extendable by renting
-   additional nodes from Cornell’s BioHPC cluster. The BioHPC server stores both the preprocessed raw data and the 
-   processed data generated by all Sun lab processing pipelines.
+   analyze the data. This is a high-performance computing server owned by the lab that can be optionally extended by 
+   renting additional nodes from Cornell’s BioHPC cluster. The BioHPC server stores both the raw data and the processed 
+   data generated by all Sun lab processing pipelines.
 3. The **Synology NAS** is the back-up 'cold' long-term storage destination. It only stores the raw data and is 
    physically located in a different building from the main BioHPC compute server to provide data storage redundancy. It
    is only used to back up raw data and is generally not intended to be accessed unless the main data storage becomes 
    compromised for any reason.
 
 ***Critical!*** Each data acquisition system is designed to **mount the BioHPC and the NAS to the main acquisition PC 
-filesystem using the SMB3 protocol**. Therefore, each data acquisition system operates on the assumption that all 
-storage component filesystems are used contiguously and can be freely accessed by the main acquisition PC OS.
+filesystem using the Server Message Block 3 (SMB3) protocol**. Therefore, each data acquisition system operates on the 
+assumption that all storage component filesystems are used contiguously and can be freely accessed by the main 
+acquisition PC OS.
 
 ***Note!*** The library tries to maintain at least two copies of data for long-term storage: one on the NAS and the 
 other on the BioHPC server. It is configured to purge redundant data from the data acquisition system machines if
@@ -438,11 +471,11 @@ raw data section:
 2. **zaber_positions.yaml**: Stores the snapshot of the positions used by the HeadBar, LickPort, and Wheel motor groups,
    taken at the end of the session’s data acquisition. All positions are stored in native motor units. This file is 
    created for all session types supported by the Mesoscope-VR system.
-3. **mesoscope_positions.yaml**: Stores the snapshot of the mesoscope objective position, taken at the end of the 
+3. **mesoscope_positions.yaml**: Stores the snapshot of the Mesoscope objective position, taken at the end of the 
    session’s data acquisition. **Note!** This file relies on the experimenter updating the stored positions if they 
    changed between runtimes. It is only created for window checking and experiment sessions.
 4. **window_screenshot.png**: Stores the screenshot of the ScanImagePC screen. The screenshot should contain the image
-   of the red-dot alignment, the view of the target cell layer, and the information about the position of the mesoscope
+   of the red-dot alignment, the view of the target cell layer, and the information about the position of the Mesoscope
    and the data acquisition parameters. Primarily, the screenshot is used by experimenters to quickly reference the 
    imaging quality from each experiment session. **Note!** This file is only created for window checking and experiment
    sessions.
@@ -522,14 +555,6 @@ library by comparing the checksum loaded from User Setting 0 to the checksum gen
 This command is used during initial system configuration to discover the USB ports assigned to all Zaber devices. This 
 is used when updating the project_configuration.yaml files that, amongst other information, communicate the USB ports 
 used by various Mesoscope-VR system components during runtime.
-
-### sl-replace-root
-This command is used to replace the path to the **root** directory on the VRPC (where all projects are saved), which is 
-stored in a user-specific default directory. When one of the main runtime commands from this library is used for the 
-**first ever time**, the library asks the user to define a directory where to save all projects. All future
-calls to this library use the same path and assume the projects are stored in that directory. Since the path is 
-stored in a typically hidden service directory, this command simplifies finding and replacing the path if this need 
-ever arises.
 
 ### sl-maintain-vr
 This command is typically used twice during each experiment or training day. First, it is used at the beginning of the 
@@ -633,20 +658,20 @@ terminate Mesoscope data acquisition via the ScanImage software. If the Mesoscop
 terminate the VRPC data acquisition.
 
 If VRPC is interrupted during data acquisition, follow this instruction:
-1. If the session involved mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
+1. If the session involved Mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
    files (frame stacks, motion estimator data, cranial window screenshot) have been generated adn saved to the 
    **mesoscope_frames** folder.
 2. Remove the animal from the Mesoscope-VR system.
 3. Use Zaber Launcher to **manually move the HeadBarRoll axis to have a positive angle** (> 0 degrees). This is 
    critical! If this is not done, the motor will not be able to home during the next session and will instead collide 
-   with the movement guard, at best damaging the motor and, at worst, the mesoscope or the animal.
+   with the movement guard, at best damaging the motor and, at worst, the Mesoscope or the animal.
 4. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device tab (NOT motor!) and navigate to its 
    User Data section. Then **flip Setting 1 from 0 to 1**. Without this, the library will refuse to operate the Zaber 
    Motors.
-5. If the session involved mesoscope imaging, **rename the mesoscope_frames folder to prepend the session name, using an
+5. If the session involved Mesoscope imaging, **rename the mesoscope_frames folder to prepend the session name, using an
    underscore to separate the folder name from the session name**. For example, from mesoscope_frames → 
    2025-11-11-05-03-234123_mesoscope_frames. Critical! if this is not done, the library may **delete** any leftover 
-   mesoscope files during the next runtime and will not be able to properly preprocess the frames for the interrupted
+   Mesoscope files during the next runtime and will not be able to properly preprocess the frames for the interrupted
    session during the next step.
 6. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
    will preprocess and transfer all collected data to the long-term storage destinations. This way, you can preserve 
@@ -665,7 +690,7 @@ interrupted runtime.
 
 ## Versioning
 
-We use [semantic versioning](https://semver.org/) for this project. For the versions available, see the 
+This project uses [semantic versioning](https://semver.org/). For the versions available, see the 
 [tags on this repository](https://github.com/Sun-Lab-NBB/sl-experiment/tags).
 
 ---

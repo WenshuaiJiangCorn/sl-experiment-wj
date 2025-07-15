@@ -141,7 +141,7 @@ class BehaviorVisualizer:
             training sessions.
         _running_speed: Stores the current running speed of the animal, averaged over a time-window of 50 ms. The speed
             is stored in cm / s.
-        _once: This flag is sued to limit certain visualizer operations to only be called once during runtime.
+        _once: This flag is used to limit certain visualizer operations to only be called once during runtime.
         _is_open: Tracks whether the visualizer plot has been created.
         _speed_threshold_text: Stores the text object used to display the speed threshold value to the user.
         _duration_threshold_text: Stores the text object used to display the running epoch duration value to the user.
