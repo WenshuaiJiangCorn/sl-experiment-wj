@@ -1187,6 +1187,32 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     server.close()
 
 
+def rename_mesoscope_directory(session_data: SessionData) -> None:
+    """This function renames the 'shared' mesoscope_data directory to use the name specific to the target session.
+
+    Since this is an essential step for the preprocessing pipeline to discover and pull the mesoscope data to VRPC
+    during preprocessing, it has to be done before running the mesoscope data preprocessing. Ideally, this function
+    should be called by the MesoscopeVRSystem stop() method, but it is also called by the preprocessing pipeline's
+    main function.
+    """
+    mesoscope_data = MesoscopeData(session_data)
+    # If necessary, renames the 'shared' mesoscope_data directory to use the name specific to the preprocessed session.
+    # It is essential that this is done before preprocessing, as the preprocessing pipeline uses this semantic for
+    # finding and pulling the mesoscope data for the processed session.
+    general_path = mesoscope_data.scanimagepc_data.mesoscope_data_path
+    session_specific_path = mesoscope_data.scanimagepc_data.session_specific_path
+
+    # Note, the renaming only happens if the session-specific cache does not exist, the general mesoscope_frames cache
+    # exists, and it is not empty (has files inside).
+    if (
+        not session_specific_path.exists()
+        and general_path.exists()
+        and len([path for path in general_path.glob("*")]) > 0
+    ):
+        general_path.rename(session_specific_path)
+        ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
+
+
 def preprocess_session_data(session_data: SessionData) -> None:
     """Aggregates all data on VRPC, compresses it for efficient network transmission, safely transfers the data to the
     BioHPC server and the Synology NAS for long-term storage, and removes all local data copies.
@@ -1201,25 +1227,9 @@ def preprocess_session_data(session_data: SessionData) -> None:
     message = f"Initializing session {session_data.session_name} data preprocessing..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Instantiates additional required dataclasses
-    mesoscope_data = MesoscopeData(session_data)
-
-    # If the instance manages a session that acquired mesoscope frames, renames the generic mesoscope_frames
-    # directory to include the session name. It is essential that this is done before preprocessing, as
-    # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
-    # session.
-    general_path = mesoscope_data.scanimagepc_data.mesoscope_data_path
-    session_specific_path = mesoscope_data.scanimagepc_data.session_specific_path
-
-    # Note, the renaming only happens if the session-specific cache does not exist, the general mesoscope_frames cache
-    # exists, and it is not empty (has files inside).
-    if (
-        not session_specific_path.exists()
-        and general_path.exists()
-        and len([path for path in general_path.glob("*")]) > 0
-    ):
-        general_path.rename(session_specific_path)
-        ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
+    # If necessary, ensures that the mesoscope_data ScanImagePC directory is renamed to include the processed session
+    # name.
+    rename_mesoscope_directory(session_data=session_data)
 
     # Compresses all log entries (.npy) into archive files (.npz)
     _preprocess_log_directory(session_data=session_data, num_processes=31, remove_sources=True, verify_integrity=False)

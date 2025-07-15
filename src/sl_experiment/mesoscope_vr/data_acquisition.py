@@ -39,7 +39,7 @@ from .tools import MesoscopeData, RuntimeControlUI, CachedMotifDecomposer, get_s
 from .visualizers import BehaviorVisualizer
 from .binding_classes import ZaberMotors, VideoSystems, MicroControllerInterfaces
 from ..shared_components import WaterSheet, SurgerySheet, BreakInterface, ValveInterface, get_version_data
-from .data_preprocessing import purge_failed_session, preprocess_session_data
+from .data_preprocessing import purge_failed_session, preprocess_session_data, rename_mesoscope_directory
 
 
 # Defines shared methods to make their use consistent between window checking and other runtimes.
@@ -336,9 +336,19 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     # Determines whether the target session is a Window Checking session.
     window_checking: bool = session_data.session_type == SessionTypes.WINDOW_CHECKING
 
-    # Ensures that the mesoscope_data directory is reset before running mesoscope preparation sequence.
-    for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*"):
-        file.unlink(missing_ok=True)
+    # Step 0: Clears out the mesoscope_data directory.
+    # Ensures that the mesoscope_data directory is reset before running mesoscope preparation sequence. To minimize
+    # the risk of important data loss, this procedure now requires the user to remove the files manually.
+    existing_files = [file for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*")]
+    while len(existing_files) > 0:
+        message = (
+            f"Unable to prepare the Mesoscope for data acquisition. The preparation requires the shared "
+            f"'mesoscope_data' ScanImagePC folder to be empty, but the folder contains {len(existing_files)} "
+            f"unexpected files. Clear the folder from all existing files before proceeding."
+        )
+        console.echo(message=message, level=LogLevel.ERROR)
+        input("Enter anything to continue: ")
+        existing_files = [file for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*")]
 
     # Step 1: Find the imaging plane.
     # If the previous session's mesoscope positions were saved, loads the objective coordinates and uses them to
@@ -579,7 +589,6 @@ class _MesoscopeVRSystem:
         _started: Tracks whether runtime assets have been initialized (started).
         _terminated: Tracks whether the user has terminated the runtime.
         _paused: Tracks whether the user has paused the runtime.
-        _zaber_connected: Tracks whether the Mesoscope-VR system has connected to Zaber motors as part of this runtime.
         _mesoscope_started: ZTracks whether the Mesoscope-VR system has started Mesoscope frame acquisition as part of
             this runtime.
         descriptor: Stores the session descriptor instance of the managed session.
@@ -688,7 +697,6 @@ class _MesoscopeVRSystem:
         self._started: bool = False
         self._terminated: bool = False
         self._paused: bool = False
-        self._zaber_connected: bool = False
         self._mesoscope_started: bool = False
 
         # Pre-runtime check to ensure that the PC has enough cores to run the system.
@@ -788,8 +796,6 @@ class _MesoscopeVRSystem:
         self._zaber_motors: ZaberMotors = ZaberMotors(
             zaber_positions_path=self._mesoscope_data.vrpc_persistent_data.zaber_positions_path
         )
-        # Configures the runtime to attempt graceful zaber shutdown if it encounters a runtime error.
-        self._zaber_connected = True
 
         # Defines optional assets used by some, but not all runtimes. Most of these assets are initialized to None by
         # default and are overwritten by the start() method.
@@ -851,9 +857,9 @@ class _MesoscopeVRSystem:
         message = "DataLogger: Started."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        # Begins acquiring and displaying frames with the face camera. Does not start body cameras and does not save
-        # face camera frames to disk at this time to conserve disk space.
+        # Begins acquiring and displaying frames with the all available cameras.
         self._cameras.start_face_camera()
+        self._cameras.start_body_cameras()
 
         # If necessary, carries out the Zaber motor setup and animal mounting sequence. Once this call returns, the
         # runtime assumes that the animal is mounted in the mesoscope enclosure.
@@ -881,13 +887,6 @@ class _MesoscopeVRSystem:
 
         # Sets the runtime into the Idle state before instructing the user to finalize runtime preparations.
         self.idle()
-
-        # Starts acquiring data from body cameras. Does not start camera frame saving at this point to avoid generating
-        # unnecessary data
-        self._cameras.start_body_cameras()
-
-        # Initializes the runtime control GUI.
-        self._ui.start()
 
         # Initializes external assets. Currently, these assets are only used as part of the experiment runtime, so this
         # section is skipped for all other runtime types.
@@ -919,6 +918,9 @@ class _MesoscopeVRSystem:
             # Initializes the milliseconds-precise timer used to track the delay between consecutive mesoscope
             # frame pulses.
             self._mesoscope_timer = PrecisionTimer("ms")
+
+        # Initializes the runtime control GUI.
+        self._ui.start()
 
         # Initializes the runtime visualizer. This HAS to be initialized after cameras and the UI to prevent collisions
         # in the QT backend, which is used by all three assets. Also, since the visualizer runs in a concurrent thread,
@@ -987,6 +989,7 @@ class _MesoscopeVRSystem:
         self._ui.shutdown()
         self._visualizer.close()
 
+        # Disconnects from the MQTT broker that facilitates communication with Unity.
         if self._unity is not None:
             self._unity.disconnect()
 
@@ -998,14 +1001,10 @@ class _MesoscopeVRSystem:
             self._stop_mesoscope()
             self._microcontrollers.disable_mesoscope_frame_monitoring()
 
-        # Stops all microcontroller interfaces
-        self._microcontrollers.stop()
-
-        # Stops the data logger instance
-        self._logger.stop()
-
-        message = "Data Logger: Stopped."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            # Renames the mesoscope data directory to include session name. This both clears the shared directory for
+            # the next acquisition and ensures that the mesoscope data collected during runtime will be preserved unless
+            # it is preprocessed or the user removes it manually.
+            rename_mesoscope_directory(session_data=self._session_data)
 
         # Updates the internally stored SessionDescriptor instance with runtime data, saves it to disk, and instructs
         # the user to add experimenter notes and other user-defined information to the descriptor file.
@@ -1028,6 +1027,23 @@ class _MesoscopeVRSystem:
         # connection. Regardless of whether the motors are moved, disconnects from the motors at the end of method
         # runtime.
         self._reset_zaber_motors()
+
+        # Microcontroller and data-logger stopping was moved to the end of the shutdown sequence to avoid an extremely
+        # rare issue related to one of the microcontrollers deadlocking internally. The idle() state combined with the
+        # mesoscope stop sequence should cut all microcontroller data streams, so there is no urgency in actually
+        # terminating these assets before the animal is safely removed from the Mesoscope enclosure and the user
+        # generates the necessary session metadata. Conversely, if microcontrollers cannot be stopped and the user has
+        # to perform a hard shutdown, having this done after resolving session metadata ensures that the user can
+        # manually call preprocessing as soon as the runtime is terminated.
+
+        # Stops all microcontroller interfaces
+        self._microcontrollers.stop()
+
+        # Stops the data logger instance
+        self._logger.stop()
+
+        message = "Data Logger: Stopped."
+        console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
@@ -1283,7 +1299,7 @@ class _MesoscopeVRSystem:
                 self._microcontrollers.reset_mesoscope_frame_count()  # Resets the frame tracker array and waits more
 
         # Removes the phosphatase marker once the Mesoscope stops sending acquisition triggers.
-        self._mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+        self._mesoscope_data.scanimagepc_data.phosphatase_path.unlink(missing_ok=True)
 
         # NOTE, purposefully avoids flipping the mesoscope_started flag.
 
