@@ -146,7 +146,7 @@ card, but this is not a strict requirement.
 
 The Mesoscope-VR system consists of multiple interdependent components. We are constantly making minor changes to the 
 system to optimize its performance and facilitate novel experiments and projects carried out in the lab. Treat this 
-section as a general system composition guide, but consult our publications over this section for instructions on 
+section as a general system composition guide, but consult lab publications over this section for instructions on 
 building specific system implementations used to acquire the data featured in different publications.
 
 Physical assembly and mounting of ***all*** hardware components mentioned in the specific subsections below is discussed
@@ -275,7 +275,7 @@ access to both files.
 **Note!** This feature requires that both log files are formatted according to the available Sun lab templates. 
 Otherwise, the parsing algorithm will not behave as expected, leading to runtime failures. Additionally, both log files 
 have to be pre-filled in advance, as the processing code is not allowed to automatically generate new table (log) rows.
-**Hint!** Currently, it is advised to pre-fill the data a month in-advance. Since most experiments last for at most a 
+**Hint!** Currently, it is advised to pre-fill the data a month in advance. Since most experiments last for at most a 
 month, this usually covers the entire experiment period for any animal.
 
 ### Mesoscope-VR Assembly
@@ -352,10 +352,10 @@ using xxHash-128 checksum before the data is removed from the data-acquisition s
 
 ### Root Directory (Volume)
 All data acquisition systems, the Synology NAS and the BioHPC server keep **ALL** Sun lab projects in the same **root** 
-directory. The BioHPC server uses **two roots**, one for the raw data and the other for the **processed data**. This 
-separation is due to the BioHPC server using both fast NVME drives and slow HDD drives to optimize storage cost against 
-processing performance. The exact location and name of the root directory on each machine is arbitrary, but is expected 
-to either change very infrequently or not at all. 
+directory. The BioHPC server uses **two roots**, one for the raw data and the other for the processed data. This 
+separation is due to the BioHPC server using a combination of fast NVME drives and slow HDD drives to optimize storage 
+cost and data processing performance. The exact location and name of the root directory on each machine is arbitrary  
+but should generally remain fixed (unchanging) over the entire lifetime of that specific machine. 
 
 ### Project Directory
 When a new project is created, a **project** directory **named after the project** is created under the **root** 
@@ -365,37 +365,36 @@ acquisition systems also create a **configuration** subdirectory under the root 
 
 ### Animal Directory
 When the library is used to acquire data for a new animal, it generates a new **animal** directory under the **root** 
-and **project** directory combination. The directory uses the ID of the animal, provided via the command argument as its
-name. Depending on the host machine, this animal directory may contain further subdirectories. For example, most data 
-acquisition systems also create a **persistent_data** subdirectory under the root animal directory, which is used to 
-store data that is reused between data acquisition sessions.
+and **project** directory combination. The directory uses the ID of the animal, as its name. Depending on the host
+machine, this animal directory may contain further subdirectories. For example, most data acquisition systems also 
+create a **persistent_data** subdirectory under the root animal directory, which is used to store data that is reused 
+between data acquisition sessions.
 
-***Critical!*** Current Sun lab convention stipulates that all animal IDs should be numeric. While some library 
-components do accept strings as inputs, it is expected that all animal IDs only consist of positive numbers. Failure to
+***Critical!*** The current Sun lab convention stipulates that all animal IDs should be numeric. While some library 
+components do accept strings as inputs, it is expected that all animal IDs only consist of positive integers. Failure to
 adhere to this naming convention can lead to runtime errors and unexpected behavior of all library components!
 
 ### Session Directory
 Each time the library is used to acquire data, a new session directory is created under the **root**, **project** and 
-**animal** directory combination. The session name is derived from the current ***UTC*** timestamp, accurate 
-to ***microseconds***. Primarily, this naming format was chosen to make all sessions acquired by the same acquisition 
-system have unique and chronologically sortable names. The session name format follows the order of 
-**YYYY-MM-DD-HH-MM-SS-US**.
+**animal** directory combination. The session name is derived from the current ***UTC*** timestamp at the time of the 
+session directory creation, accurate to ***microseconds***. Primarily, this naming format was chosen to make all 
+sessions acquired by the same acquisition system have unique and chronologically sortable names. The session name format
+follows the order of **YYYY-MM-DD-HH-MM-SS-US**.
 
 ### Raw Data and Processed Data:
 All data acquired by this library is stored under the **raw_data** subdirectory, generated for each session. Overall, 
 an example path to the acquired (raw) data can therefore look like this: 
 `/media/Data/Experiments/Template/666/2025-11-11-05-03-234123/raw_data/`. 
 
-Similarly, our data processing pipelines generate new files and subdirectories under the **processed_data** 
-subdirectory, generated for each session. An example path to the processed_data directory can therefore look like this: 
-`server/sun_data/Template/666/2025-11-11-05-03-234123/processed_data`.
+Similarly, all Sun lab data processing pipelines generate new files and subdirectories under the **processed_data** 
+subdirectory for each session. An example path to the processed_data directory can therefore look like this: 
+`/server/sun_data/Template/666/2025-11-11-05-03-234123/processed_data`.
 
-***Note!*** This lab treats **both** newly acquired and preprocessed data as **raw**. This is because preprocessing 
-**does not in any way change the information of the data**. Instead, preprocessing uses lossless compression to more 
-efficiently package the data for transmission and can at any time be converted back to the original format. Processing 
-the data, on the other hand, generates additional data and / or modifies the processed data values in ways that may not 
-necessarily be reversible. Therefore, all Sun lab data pipelines are designed to ensure the safety of raw data under all
-circumstances.
+***Note!*** This library treats **both** newly acquired and preprocessed data as **raw**. This is because preprocessing 
+**does not change the content of the data**. Instead, preprocessing uses lossless compression to more efficiently 
+package the data for transmission and can at any time be converted back to the original format. Processing the data, on 
+the other hand, generates additional data and / or modifies the processed data values in ways that may not necessarily 
+be reversible.
 
 ### Shared Raw Data
 
@@ -403,60 +402,59 @@ The section below briefly lists the data acquired by **all** Sun lab data acquis
 system also generates **system-specific** data, which is listed under acquisition-system-specific sections available 
 after this section.
 
-**Note!** For information about the **processed** data, see our 
+**Note!** For information about the **processed** data, see the 
 [main data processing library](https://github.com/Sun-Lab-NBB/sl-forgery).
 
 After acquisition and preprocessing, the **raw_data** folder of each acquisition system will, as a minimum, contain the 
 following files and subdirectories:
 1. **ax_checksum.txt**: Stores the xxHash-128 checksum used to verify data integrity when it is transferred to the 
    long-term storage destination. The checksum is generated before the data leaves the main data acquisition system PC
-   and, therefore, accurately captures the final state of the acquired and preprocessed data.
+   and, therefore, accurately captures the final state of the raw data before it enters storage.
 2. **hardware_state.yaml**: Stores the snapshot of the dynamically calculated parameters used by the data acquisition 
-   system modules used during runtime. These parameters are recalculated at the beginning of each data acquisition 
-   system and are rounded and stored using the appropriate floating point type to minimize floating point rounding 
-   errors. This improves the quality of processed data by ensuring the processing and the data acquisition pipelines use
-   the same floating-point parameter values. This file is also used during data processing to determine which modules 
-   were used during runtime and, consequently, which data can be parsed from the .npz log files (see below).
-3. **project_configuration.yaml**: Stores the configuration parameters of the project for which the session was 
-   acquired. Critically, this includes the IDs of the Google sheets used to store the water restriction and the surgery
-   data for all animals used in the project.
-4. **session_data.yaml**: Stores information necessary to maintain the same session data structure across all machines 
-   used during data acquisition and long-term storage. This file is used by all lab libraries as an entry point for 
+   system modules during runtime. These parameters are recalculated at the beginning of each data acquisition 
+   session and are rounded and stored using the appropriate floating point type (usually fp64) to minimize floating 
+   point rounding errors. This improves the quality of processed data by ensuring that the processing and the 
+   acquisition pipelines use the same floating-point parameter values. This file is also used to determine which modules 
+   were used during runtime and, consequently, which data can be parsed from the .npz log files generated at runtime
+   (see below).
+3. **session_data.yaml**: Stores information necessary to maintain the same session data structure across all machines 
+   used during data acquisition and long-term storage. This file is used by all Sun lab libraries as an entry point for 
    working with session’s data. The file also includes all available information about the identity and purpose of the 
-   session and can be used by human experimenters to identify the session.
-5. **session_descriptor.yaml**: Stores session-type-specific information, such as the training task parameters or 
-   experimenter notes. The contents of the file are overall different for each session type, although some fields are 
-   reused by all sessions. The contents for this file are partially written by the library and, partially, by the 
-   experimenter.
-6. **surgery_metadata.yaml**: Stores the data on the surgical intervention(s) performed on the animal that participated 
+   session and can be used by human experimenters to identify the session. Since version 3.0.0, the file also stores 
+   the version of the sl-experiment and Python that were used to acquire the data.
+4. **session_descriptor.yaml**: Stores session-type-specific information, such as the task parameters and experimenter 
+   notes. The contents of the file are overall different for each session type, although some fields are reused by all 
+   sessions. The contents for this file are partially written by the library (automatically) and, partially, by the
+   experimenter (manually, at the end of each session).
+5. **surgery_metadata.yaml**: Stores the data on the surgical intervention(s) performed on the animal that participated 
    in the session. This data is extracted from the **surgery log** Google Sheet and, for most animals, should be the 
    same across all sessions.
-7. **system_configuration.yaml**: Stores the configuration parameters of the data acquisition system that generated the
+6. **system_configuration.yaml**: Stores the configuration parameters of the data acquisition system that generated the
    session data. This is a snapshot of **all** dynamically addressable configuration parameters used by the system. 
-   When combined with the assembly instructions and the static code of the appropriate sl-experiment library version, it
-   allows completely replicating the data acquisition system used to acquire the session data.
-8. **behavior_data**: Stores compressed .npz log files that contain all non-video behavior data acquired by the system. 
+   When combined with the assembly instructions and the appropriate sl-experiment library version, it allows completely 
+   replicating the data acquisition system used to acquire the session data.
+7. **behavior_data**: Stores compressed .npz log files that contain all non-video behavior data acquired by the system. 
    This includes all messages sent or received by each microcontroller, the timestamps for the frames acquired by 
-   each camera and, often, the main brain activity recording device (e.g.: Mesoscope). This also includes data on the 
-   flow of each experiment or training session (trials, conditions, progression, etc.). Although the exact content of 
-   the behavior data folder can differ between acquisition systems, all systems used in the lab generate some form of 
-   non-video behavior data.
-9. **camera_data**: Stores the behavior videos recorded by video cameras used by the acquisition system. While not 
-   technically required, all Sun lab data acquisition systems use one or more cameras to acquire behavior videos, so 
-   this directory will be present and not empty for all lab projects.
-10. **experiment_configuration.yaml**: This file is only created for **experiment** sessions. It stores the 
+   each camera and (if applicable) the main brain activity recording device (e.g.: Mesoscope). These logs also include 
+   session metadata, such as trials, task conditions, and system and runtime state transitions. Although the exact 
+   content of the behavior data folder can differ between acquisition systems, all systems used in the lab generate some
+   form of non-video behavior data.
+8. **camera_data**: Stores the behavior videos recorded by video cameras used by the acquisition system. While not 
+   technically required for every system, all current Sun lab data acquisition systems use one or more cameras to 
+   acquire behavior videos.
+9. **experiment_configuration.yaml**: This file is only created for **experiment** sessions. It stores the 
    configuration of the experiment task performed by the animal during runtime. The contents of the file differ for each
    data acquisition system, but each system generates a version of this file. The file contains enough information to 
-   fully replicate the experiment runtime on the same acquisition system.
-11. **telomere.bin**: This marker is used to communicate whether the session data is **complete**. Incomplete sessions
-   appear due to session acquisition runtime being unexpectedly interrupted. This is very rare and is typically the 
-   result of emergencies, such as sudden power loss or other unforeseen events. Incomplete sessions are automatically 
-   excluded from automated data processing and require manual user intervention to assess the usability of the session.
-   This marker file is created **exclusively** as part of session data preprocessing, based on the value of the 
-   **session_descriptor.yaml** file 'incomplete' field (see above).
-12. **integrity_verification_tracker.yaml**: This tracker file is used internally to run and truck the outcome of the 
+   fully replicate the experiment runtime on the same acquisition system and to process and analyze the acquired data.
+10. **telomere.bin**: This marker is used to communicate whether the session data is **complete**. Incomplete sessions
+   appear due to session acquisition runtime being unexpectedly interrupted. This is rare and is typically the result of
+   major emergencies, such as sudden power loss or other unforeseen events. Incomplete sessions are automatically 
+   excluded from automated data processing and require manual user intervention to assess the usability of the session 
+   for analysis. This marker file is created **exclusively** as part of session data preprocessing, based on the value 
+   of the **session_descriptor.yaml** file 'incomplete' field.
+11. **integrity_verification_tracker.yaml**: This tracker file is used internally to run and track the outcome of the 
    remote data verification procedure. This procedure runs as part of moving the data to the long-term storage 
-   destination to ensure the data is transferred intact. Users can optionally check the status of the verification by 
+   destinations to ensure the data is transferred intact. Users can optionally check the status of the verification by 
    accessing the data stored inside the file. **Note!** This file is added **only!** to the raw_data folder stored on
    the BioHPC server.
 
@@ -464,21 +462,24 @@ following files and subdirectories:
 
 The Mesoscope-VR system generates the following files and directories, in addition to those discussed in the shared 
 raw data section:
-1. **mesoscope_data**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). This directory 
-   will be empty for training sessions, as they do not acquire Mesoscope data. As part of preprocessing, this folder 
-   is augmented to include the ops.json file, which is used by the sl-suite2p library to process the cell activity data
-   acquired by the Mesoscope. **Note!** This file is only created for window checking and experiment sessions.
-2. **zaber_positions.yaml**: Stores the snapshot of the positions used by the HeadBar, LickPort, and Wheel motor groups,
-   taken at the end of the session’s data acquisition. All positions are stored in native motor units. This file is 
-   created for all session types supported by the Mesoscope-VR system.
-3. **mesoscope_positions.yaml**: Stores the snapshot of the Mesoscope objective position, taken at the end of the 
-   session’s data acquisition. **Note!** This file relies on the experimenter updating the stored positions if they 
-   changed between runtimes. It is only created for window checking and experiment sessions.
+1. **mesoscope_data**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). Since Mesoscope data
+   is only acquired for **experiment** sessions, this directory is kept empty for all other session types. During 
+   preprocessing, the folder contents are organized in a way to automatically work with 
+   [sl-suite2p](https://github.com/Sun-Lab-NBB/suite2p) single-day processing pipeline. All Mesoscope data is intended 
+   to be processed with the sl-suite2p library.
+2. **zaber_positions.yaml**: Stores the snapshot of the positions used by the HeadBar, LickPort, and Wheel Zaber motor 
+   groups, taken at the end of the session’s data acquisition. All positions are stored in native motor units. This 
+   file is created for all session types supported by the Mesoscope-VR system. As a backup, a copy of this file is also
+   generated at the beginning of each session runtime. This allows recovering from critical runtime failures, where the
+   runtime may not be able to generate this snapshot.
+3. **mesoscope_positions.yaml**: Stores the snapshot of the physical Mesoscope objective position in X, Y, Z, and Roll 
+   axes, the virtual ScanImage axes (Fast Z, Tip, Tilt), and the laser power at the sample, taken at the end of the 
+   session’s data acquisition. **Note!** This file relies on the experimenter updating the stored positions if they are
+   changed during runtime. It is only created for window checking and experiment sessions.
 4. **window_screenshot.png**: Stores the screenshot of the ScanImagePC screen. The screenshot should contain the image
-   of the red-dot alignment, the view of the target cell layer, and the information about the position of the Mesoscope
-   and the data acquisition parameters. Primarily, the screenshot is used by experimenters to quickly reference the 
-   imaging quality from each experiment session. **Note!** This file is only created for window checking and experiment
-   sessions.
+   of the red-dot alignment, the view of the target cell layer, the Mesoscope position information, and the data 
+   acquisition parameters. Primarily, the screenshot is used by experimenters to quickly reference the imaging quality 
+   from each experiment session. This file is only created for window checking and experiment sessions.
 
 --- 
 
@@ -593,7 +594,7 @@ initialization.
 13. `image`. Moves the HeadBar and LickPort to the predefined brain imaging position stored inside non-volatile
     Zaber device memory. This is used when checking the cranial windows of newly implanted animals.
 14. `snapshot`. Generates a snapshot of the Zaber motor positions, Mesoscope positions, and the screenshot of the 
-    cranial window. This saves the system configuration for the checked animal, so that it can be reused during future 
+    cranial window. This saves the system configuration for the checked animal so that it can be reused during future 
     training and experiment runtimes
 
 ### sl-lick-train
@@ -616,7 +617,7 @@ experiment configuration files which are used by this command.
 be initialized **manually** before running the sl-experiment command. See the main 
 [Unity repository](https://github.com/Sun-Lab-NBB/GIMBL-tasks) for details on starting experiment task runtimes. To 
 prepare the ScanImage software for runtime, enable 'External Triggers' and configure the system to take **start** and 
-**stop** triggers from the ports wired to the Actor microcontroller as described in our 
+**stop** triggers from the ports wired to the Actor microcontroller as described in the 
 [microcontroller repository](https://github.com/Sun-Lab-NBB/sl-micro-controllers). Then, hit 'Loop' to 'arm' the system
 to start frame acquisition when it receives the 'start' TTL trigger from this library.
 
@@ -659,7 +660,7 @@ terminate the VRPC data acquisition.
 
 If VRPC is interrupted during data acquisition, follow this instruction:
 1. If the session involved Mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
-   files (frame stacks, motion estimator data, cranial window screenshot) have been generated adn saved to the 
+   files (frame stacks, motion estimator data, cranial window screenshot) have been generated and saved to the 
    **mesoscope_frames** folder.
 2. Remove the animal from the Mesoscope-VR system.
 3. Use Zaber Launcher to **manually move the HeadBarRoll axis to have a positive angle** (> 0 degrees). This is 
