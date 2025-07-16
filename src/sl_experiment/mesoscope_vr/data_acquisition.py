@@ -111,11 +111,24 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
     console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
+    # If the user makes a formatting error when editing the file, this will trigger an exception. To avoid breaking
+    # the runtime, this section now forces the uer to re-edit the file until it can be read.
+    io_error_message = (
+        f"Unable to read the data from the mesoscope_positions.yaml file. This likely indicates that the file "
+        f"was mis-formatted during editing. Make sure the file follows the expected format before retrying."
+    )
+
     # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file into
     # memory.
-    mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-        file_path=Path(session_data.raw_data.mesoscope_positions_path),
-    )
+    while True:
+        try:
+            mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+                file_path=Path(session_data.raw_data.mesoscope_positions_path),
+            )
+            break
+        except Exception:
+            console.echo(message=io_error_message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
 
     # Ensures that the user has updated the position data.
     while (
@@ -140,9 +153,15 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
         input("Enter anything to continue: ")
 
         # Reloads the positions' file each time to ensure positions have been modified.
-        mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=Path(session_data.raw_data.mesoscope_positions_path),
-        )
+        while True:
+            try:
+                mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+                    file_path=Path(session_data.raw_data.mesoscope_positions_path),
+                )
+                break
+            except Exception:
+                console.echo(message=io_error_message, level=LogLevel.ERROR)
+                input("Enter anything to continue: ")
 
     # Copies the updated mesoscope positions data into the animal's persistent directory.
     sh.copy2(
@@ -496,10 +515,25 @@ def _verify_descriptor_update(
     console.echo(message=message, level=LogLevel.INFO)
     input("Enter anything to continue: ")
 
-    # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
-    descriptor = descriptor.from_yaml(  # type: ignore
-        file_path=Path(session_data.raw_data.session_descriptor_path)
+    # If the user makes a formatting error when editing the file, this will trigger an exception. To avoid breaking
+    # the runtime, this section now forces the uer to re-edit the file until it can be read.
+    io_error_message = (
+        f"Unable to read the data from the session_descriptor.yaml file. This likely indicates that the file "
+        f"was mis-formatted during editing. Make sure the file follows the expected format before retrying."
     )
+
+    # Reads the current session description data from the session_descriptor.yaml file.
+    while True:
+        try:
+            descriptor = descriptor.from_yaml(  # type: ignore
+                file_path=Path(session_data.raw_data.session_descriptor_path)
+            )
+            break
+        except Exception:
+            console.echo(message=io_error_message, level=LogLevel.ERROR)
+            input("Enter anything to continue: ")
+
+    # Verifies and blocks in-place until the user updates the session descriptor file with experimenter notes.
     # noinspection PyUnresolvedReferences
     while "Replace this with your notes." in descriptor.experimenter_notes:
         message = (
@@ -512,9 +546,15 @@ def _verify_descriptor_update(
         input("Enter anything to continue: ")
 
         # Reloads the descriptor from the disk each time to ensure experimenter notes have been modified.
-        descriptor = descriptor.from_yaml(  # type: ignore
-            file_path=Path(session_data.raw_data.session_descriptor_path),
-        )
+        while True:
+            try:
+                descriptor = descriptor.from_yaml(  # type: ignore
+                    file_path=Path(session_data.raw_data.session_descriptor_path)
+                )
+                break
+            except Exception:
+                console.echo(message=io_error_message, level=LogLevel.ERROR)
+                input("Enter anything to continue: ")
 
     # If the descriptor has passed the verification, backs it up to the animal's persistent directory. This is a
     # feature primarily used during training to restore the training parameters between training sessions of the
@@ -1001,9 +1041,9 @@ class _MesoscopeVRSystem:
             self._stop_mesoscope()
             self._microcontrollers.disable_mesoscope_frame_monitoring()
 
-            # Renames the mesoscope data directory to include session name. This both clears the shared directory for
-            # the next acquisition and ensures that the mesoscope data collected during runtime will be preserved unless
-            # it is preprocessed or the user removes it manually.
+            # Renames the mesoscope data directory to include the session name. This both clears the shared directory
+            # for the next acquisition and ensures that the mesoscope data collected during runtime will be preserved
+            # unless it is preprocessed or the user removes it manually.
             rename_mesoscope_directory(session_data=self._session_data)
 
         # Updates the internally stored SessionDescriptor instance with runtime data, saves it to disk, and instructs
@@ -1639,7 +1679,7 @@ class _MesoscopeVRSystem:
                         console.echo(message=message, level=LogLevel.SUCCESS)
                         return
 
-                # Sends a second request if response is not received within 2 seconds
+                # Sends a second request if the response is not received within 2 seconds
                 if timeout_timer.elapsed > 2:
                     self._unity.send_data(topic=self._cue_sequence_request_topic)
 
@@ -2064,6 +2104,11 @@ class _MesoscopeVRSystem:
             duration_threshold: The running epoch duration threshold in seconds. Specifies how long the animal must
                 maintain the above-threshold speed to satisfy the current task conditions.
         """
+        # Each time visualizer thresholds are updated, also updates the descriptor
+        if isinstance(self.descriptor, RunTrainingDescriptor):
+            self.descriptor.final_run_speed_threshold_cm_s = speed_threshold
+            self.descriptor.final_run_duration_threshold_s = duration_threshold
+
         self._visualizer.update_run_training_thresholds(
             speed_threshold=speed_threshold, duration_threshold=duration_threshold
         )

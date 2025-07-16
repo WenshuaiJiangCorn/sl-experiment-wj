@@ -568,7 +568,7 @@ The Mesoscope-VR system also generates the following temporary files and directo
 
 ## Acquiring Data in the Sun Lab
 
-All user-facing library functionality is realized through a set of Command-Line Interface (CLI) commands automatically 
+All user-facing library functionality is realized through a set of Command Line Interface (CLI) commands automatically 
 exposed when the library is pip-installed into a python environment. Some of these commands take additional arguments 
 that allow further configuring their runtime. Use `--help` argument when calling any of the commands described below to
 see the list of supported arguments together with their descriptions and default values.
