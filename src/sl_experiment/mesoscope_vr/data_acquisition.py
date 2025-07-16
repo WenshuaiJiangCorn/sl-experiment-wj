@@ -121,6 +121,7 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
     # Reads the current mesoscope positions data cached inside the session's mesoscope_positions.yaml file into
     # memory.
     while True:
+        # noinspection PyBroadException
         try:
             mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                 file_path=Path(session_data.raw_data.mesoscope_positions_path),
@@ -154,6 +155,7 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
 
         # Reloads the positions' file each time to ensure positions have been modified.
         while True:
+            # noinspection PyBroadException
             try:
                 mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
                     file_path=Path(session_data.raw_data.mesoscope_positions_path),
@@ -524,6 +526,7 @@ def _verify_descriptor_update(
 
     # Reads the current session description data from the session_descriptor.yaml file.
     while True:
+        # noinspection PyBroadException
         try:
             descriptor = descriptor.from_yaml(  # type: ignore
                 file_path=Path(session_data.raw_data.session_descriptor_path)
@@ -547,6 +550,7 @@ def _verify_descriptor_update(
 
         # Reloads the descriptor from the disk each time to ensure experimenter notes have been modified.
         while True:
+            # noinspection PyBroadException
             try:
                 descriptor = descriptor.from_yaml(  # type: ignore
                     file_path=Path(session_data.raw_data.session_descriptor_path)
@@ -1555,9 +1559,9 @@ class _MesoscopeVRSystem:
                     console.echo(message=message, level=LogLevel.INFO)
 
                     # Requests the user to provide a valid answer.
-                    answer = ''
+                    answer = ""
                     escape = False
-                    while answer == '':
+                    while answer == "":
                         answer = input(
                             "Enter 'yes' to advance to the next step, enter anything else to stay in the "
                             "verification loop: "
