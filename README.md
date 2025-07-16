@@ -627,29 +627,22 @@ For information about the available experiment configuration parameters in the p
 
 ### Step 3: Maintaining the Acquisition System
 
-### Step 4: Acquiring Data
+All acquisition systems contain modules that require frequent maintenance. Most of these modules are unique to each 
+acquisition system and, therefore, this section is further broken into acquisition-system-specific subsections.
 
-### Step 5: Preprocessing and Managing Data
+#### Mesoscope-VR
 
-### sl-crc
-This command takes in a string-value and returns a CRC-32 XFER checksum of the input string. This is used to generate a 
-numeric checksum for each Zaber Device by check-summing its label (name). This checksum should be stored under user 
-Setting 0. During runtime, it is used to ensure that each controller has been properly configured to work with this 
-library by comparing the checksum loaded from User Setting 0 to the checksum generated using the device’s label.
+The Mesoscope-VR system contains two modules that require frequent maintenance: the **water delivery system** and the 
+**running wheel**. To facilitate the maintenance of these modules, the sl-experiment library exposes the `sl-maintain`
+command.
 
-### sl-devices
-This command is used during initial system configuration to discover the USB ports assigned to all Zaber devices. This 
-is used when updating the project_configuration.yaml files that, amongst other information, communicate the USB ports 
-used by various Mesoscope-VR system components during runtime.
+This command is typically used twice during each day the system is used to acquire data. First, it is used at the 
+beginning of the day to prepare the Mesoscope-VR system for runtime by filling the water delivery system. Second, it is 
+used at the end of each day to empty the water delivery system.
 
-### sl-maintain-vr
-This command is typically used twice during each experiment or training day. First, it is used at the beginning of the 
-day to prepare the Mesoscope-VR system for runtime by filling the water delivery system and, if necessary, replacing 
-the running-wheel surface wrap. Second, it is used at the end of each day to empty the water delivery system.
-
-This runtime is also co-opted to check the cranial windows of newly implanted animals to determine whether they should
-be included in a project. To do so, the command allows changing the position of the HeadBar and LickPort manipulators 
-and generating a snapshot of Mesoscope and Zaber positions, as well as the screenshot of the cranial window.
+Less frequently, this command is used to re-calibrate the water delivery system, typically, as a result of replacing 
+system components, such as tubing or the valve itself. Similarly, the command is occasionally used to replace the 
+surface material of the running wheel when it gets excessively worn out.
 
 ***Note!*** Since this runtime fulfills multiple functions, it uses an 'input'-based terminal interface to accept 
 further commands during runtime. To prevent visual bugs, the input does not print anything to the terminal and appears 
@@ -657,30 +650,24 @@ as a blank new line. If you see a blank new line with no terminal activity, this
 to accept one of the supported commands. All supported commands are printed to the terminal as part of the runtime 
 initialization.
 
-#### Supported vr-maintenance commands
+Supported vr-maintenance commands:
 1.  `open`. Opens the water delivery valve.
 2.  `close`. Closes the water delivery valve.
 3.  `close_10`. Closes the water delivery valve after a 10-second delay.
 4.  `reference`. Triggers 200 valve pulses with each pulse calibrated to deliver 5 uL of water. This command is used to
-    check whether the valve calibration data stored in the project_configuration.yaml of the project specified when 
-    calling the runtime command is accurate. This is done at the beginning of each training or experiment day. The 
-    reference runtime should overall dispense ~ 1 ml of water.
-5.  `calibrate_15`. Runs 200 valve pulses, keeping the valve open for 15-milliseconds for each pulse. This is used to 
+    check whether the valve calibration data stored in the system_configuration.yaml file is accurate. This should
+    be done at the beginning of each day the system is used to acquire data. The reference runtime should overall 
+    dispense ~ 1 ml of water. If the reference procedure does not dispense the expected volume of water, the system 
+    needs to be recalibrated.
+5.  `calibrate_15`. Runs 200 valve pulses, keeping the valve open for 15 milliseconds at each pulse. This is used to 
     generate valve calibration data.
 6.  `calibarte_30`. Same as above, but uses 30-millisecond pulses.
 7.  `calibrate_45`. Same as above, but uses 45-millisecond pulses.
 8.  `calibrate_60`. Same as above, but uses 60-millisecond pulses.
 9.  `lock`. Locks the running wheel (engages running-wheel break).
 10. `unlock`. Unlocks the running wheel (disengages running wheel break).
-11. `maintain`. Moves the HeadBar and LickPort to the predefined VR maintenance position stored inside non-volatile
-    Zaber device memory.
-12. `mount`. Moves the HeadBar and LickPort to the predefined animal mounting position stored inside non-volatile
-    Zaber device memory. This is used when checking the cranial windows of newly implanted animals.
-13. `image`. Moves the HeadBar and LickPort to the predefined brain imaging position stored inside non-volatile
-    Zaber device memory. This is used when checking the cranial windows of newly implanted animals.
-14. `snapshot`. Generates a snapshot of the Zaber motor positions, Mesoscope positions, and the screenshot of the 
-    cranial window. This saves the system configuration for the checked animal so that it can be reused during future 
-    training and experiment runtimes
+
+### Step 4: Acquiring Data
 
 ### sl-lick-train
 Runs a single lick-training session. All animals in the Sun lab undergo a two-stage training protocol before they start 
@@ -698,13 +685,7 @@ via this command. Every experiment configuration may be associated with a unique
 activated independently of running this command. See the [project directory notes](#project-directory) to learn about 
 experiment configuration files which are used by this command.
 
-**Critical!** Since this library does not have a way of starting Unity game engine or ScanImage software, both have to 
-be initialized **manually** before running the sl-experiment command. See the main 
-[Unity repository](https://github.com/Sun-Lab-NBB/GIMBL-tasks) for details on starting experiment task runtimes. To 
-prepare the ScanImage software for runtime, enable 'External Triggers' and configure the system to take **start** and 
-**stop** triggers from the ports wired to the Actor microcontroller as described in the 
-[microcontroller repository](https://github.com/Sun-Lab-NBB/sl-micro-controllers). Then, hit 'Loop' to 'arm' the system
-to start frame acquisition when it receives the 'start' TTL trigger from this library.
+### Step 5: Preprocessing and Managing Data
 
 ### sl-process
 This command can be called to preprocess the target training or experiment session data folder. Typically, this library
