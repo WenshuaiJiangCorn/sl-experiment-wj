@@ -1528,10 +1528,6 @@ class _MesoscopeVRSystem:
                             escape = True
                             break
 
-                        # Remains in the verification loop
-                        if answer == "no":
-                            break
-
                     # Breaks the verification loop
                     if escape:
                         break
