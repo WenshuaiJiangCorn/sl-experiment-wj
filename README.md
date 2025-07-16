@@ -278,6 +278,40 @@ have to be pre-filled in advance, as the processing code is not allowed to autom
 **Hint!** Currently, it is advised to pre-fill the data a month in advance. Since most experiments last for at most a 
 month, this usually covers the entire experiment period for any animal.
 
+### ScanImage PC Assets
+As mentioned above, the ScanImagePC is largely assembled and configured by external contractors. However, the PC 
+requires additional assets and configuration post-assembly to make it compatible with sl-experiment-managed runtimes.
+
+#### File System Access
+To support the sl-experiment runtime, the ScanImagePC's filesystem must be accessible to the **VRPC** via the Server 
+Message Block version 3 (SMB3) or equivalent protocol. Since ScanImagePC uses Windows, it is advised to use the SMB3 
+protocol, as all Windows machines support it natively with minimal configuration. As a minimum, the ScanImagePC must be 
+configured to share the root Mesoscope output folder with the VRPC over the local network. This is required to both 
+fetch the data acquired by the Mesoscope during preprocessing and to control the Mesoscope during runtime.
+
+#### Default Screenshot Directory
+During runtime, the sl-experiment library prompts the user to generate a screenshot of the ScanImagePC desktop and 
+place it in the network-shared mesoscope data folder (see above). The screenshot is used to store the information about
+the red-dot alignment, the acquisition parameters, and the state of the imaging plane at the beginning of each session. 
+The library is statically configured to fetch the screenshot from the shared folder and will not look in any other 
+directories. Therefore, it is advised to reconfigure the default output directory used by the 'Win + PrntSc' command on 
+the ScanImagePC to save the screenshots into the shared Mesoscope output directory.
+
+#### MATLAB Assets
+ScanImage software is written in MATLAB and controls all aspects of Mesoscope data acquisition. While each runtime 
+requires the experimenter to manually interface with the ScanImage GUI during Mesoscope preparation, all data 
+acquisition runtimes using the sl-experiment library require the user to call the **setupAcquisition** MATLAB function
+available from [mesoscope assets repository](https://github.com/Sun-Lab-NBB/sl-mesoscope-assets). This function carries
+out multiple runtime-critical tasks, including setting up the acquisition, generating and applying the online motion 
+correction algorithm, and allowing the VRPC to control the Mesoscope via creating or removing binary marker files.
+
+To configure MATLAB to access the mesoscope assets, git-clone the entire repository to the ScanImagePC. Then, follow the
+tutorials [here](https://www.mathworks.com/help/matlab/matlab_env/add-remove-or-reorder-folders-on-the-search-path.html)
+and add the path to the root mesoscope assets folder to MATLAB’s search path. MATLAB will then be able to use all 
+functions from that repository, including the setupAcquisition function. The repository also contains the online 
+motion estimation and correction assets developed in the [Pachitariu and Stringer lab](https://mouseland.github.io/), 
+which are required for the setupAcquisition function to work as expected.
+
 ### Mesoscope-VR Assembly
 ***This section is currently a placeholder. Since the final Mesoscope-VR system design is still a work in progress, it 
 will be populated once the final design implementation is constructed and tested in the lab.***
@@ -287,34 +321,6 @@ via 3D-printing or machining (for metalwork). Second, it consists of generic com
 ThorLabs, which are altered in workshops to fit the specific requirements of the Mesoscope-VR system. The blueprints and
 CAD files for all components of the Mesoscope-VR systems, including CAD renders of the assembled system, are available 
 [here](https://drive.google.com/drive/folders/1Oz2qWAg3HkMqw6VXKlY_c3clcz-rDBgi?usp=sharing).
-
-### ScanImage PC Assets
-As mentioned above, the ScanImagePC is largely assembled and configured by external contractors. However, the PC 
-requires additional assets and configurations to make it compatible with sl-experiment runtimes.
-
-#### File System Access
-All filesystems used in the data acquisition or storage must be mounted onto the main acquisition system PC. In the case
-of the Mesoscope-VR system, that is the **VRPC**. Since ScanImagePC uses Windows, it comes pre-equipped with 
-Server Message Block (SMB) protocol support, but the sharing is disabled by default. During runtime, the VRPC uses
-SMB3 to both access the data acquired by ScanImage software and directly control the Mesoscope acquisition via MATLAB 
-assets (see below). Therefore, it is important to ensure that ScanImagePC shares the root mesoscope data directory with
-the VRPC over the local network.
-
-#### MATLAB Assets
-ScanImage is written in MATLAB and controls all aspects of Mesoscope data acquisition. While some aspects of Mesoscope
-operation require manual intervention from the experimenter, most data acquisition runtimes can be configured and 
-executed using the **setupAcquisition** MATLAB function available from 
-[mesoscope assets repository](https://github.com/Sun-Lab-NBB/sl-mesoscope-assets). The function’s original purpose was 
-to set up online motion correction using a set of tools contributed by 
-[Pachitariu and Stringer lab](https://mouseland.github.io/). In the Sun lab, it was heavily refactored to also 
-acquire a high-definition zstack of the imaging plane and to allow the sl-experiment library to start and stop the 
-acquisition using binary marker files. All current Mesoscope-VR runtimes require the user to call the setupAcquisition 
-MATLAB function as part of the runtime preparation sequence.
-
-To configure MATLAB to access the mesoscope assets, git-clone the entire repository to the ScanImagePC. Then, follow the
-tutorials [here](https://www.mathworks.com/help/matlab/matlab_env/add-remove-or-reorder-folders-on-the-search-path.html)
-and add the path to the root mesoscope assets folder to MATLAB’s search path. MATLAB will then be able to use all 
-functions from that repository, including the acquisition setup function.
 
 ___
 
@@ -360,15 +366,20 @@ but should generally remain fixed (unchanging) over the entire lifetime of that 
 ### Project Directory
 When a new project is created, a **project** directory **named after the project** is created under the **root** 
 directory of the main data acquisition machine, the Synology NAS, and both the raw and processed data BioHPC volumes. 
-Depending on the host machine, this project directory may contain further subdirectories. For example, most data 
-acquisition systems also create a **configuration** subdirectory under the root project directory.
+Depending on the host machine, this project directory may contain further subdirectories.
+
+All data acquisition systems also create a **configuration** subdirectory under the root project directory. This 
+directory stores all supported experiment configurations for the project. Each 'sl-experiment' CLI command call 
+searches the configuration directory for the .yaml file with the name of the target experiment to load the experiment
+data.
 
 ### Animal Directory
 When the library is used to acquire data for a new animal, it generates a new **animal** directory under the **root** 
 and **project** directory combination. The directory uses the ID of the animal, as its name. Depending on the host
-machine, this animal directory may contain further subdirectories. For example, most data acquisition systems also 
-create a **persistent_data** subdirectory under the root animal directory, which is used to store data that is reused 
-between data acquisition sessions.
+machine, this animal directory may contain further subdirectories. 
+
+All data acquisition systems also create a **persistent_data** subdirectory under the root animal directory, which is 
+used to store data that is reused between data acquisition sessions.
 
 ***Critical!*** The current Sun lab convention stipulates that all animal IDs should be numeric. While some library 
 components do accept strings as inputs, it is expected that all animal IDs only consist of positive integers. Failure to
@@ -425,7 +436,9 @@ following files and subdirectories:
 4. **session_descriptor.yaml**: Stores session-type-specific information, such as the task parameters and experimenter 
    notes. The contents of the file are overall different for each session type, although some fields are reused by all 
    sessions. The contents for this file are partially written by the library (automatically) and, partially, by the
-   experimenter (manually, at the end of each session).
+   experimenter (manually, at the end of each session). At the end of each runtime, a copy of the descriptor file is 
+   cached inside the *persistent_data* directory of the animal, replacing any already existing copy. This is used to 
+   optionally restore certain runtime configuration parameters between session types that support this functionality.
 5. **surgery_metadata.yaml**: Stores the data on the surgical intervention(s) performed on the animal that participated 
    in the session. This data is extracted from the **surgery log** Google Sheet and, for most animals, should be the 
    same across all sessions.
@@ -458,10 +471,34 @@ following files and subdirectories:
    accessing the data stored inside the file. **Note!** This file is added **only!** to the raw_data folder stored on
    the BioHPC server.
 
+### Shared Temporary Data
+The sl-experiment library additionally uses the following temporary marker files and directories which are cleared 
+before the raw data is transmitted to the long-term storage destinations:
+1. **nk.bin** This marker is automatically cached to disk as part of creating a new session data hierarchy. Each runtime
+   removes this marker file when it successfully completes its runtime preparation (the main start() method call of the 
+   runtime management class). If this marker exists when the runtime enters the shutdown cycle, this indicates that the
+   runtime encountered a fatal error during startup and had to be terminated early. In this case, the session's data is 
+   silently deleted, as uninitialized runtime necessarily does not contain any valid data. This is used to automatically
+   declutter the data acquisition and long-term storage PCs to only keep valid sessions.
+2. **behavior_data_log**. All behavior log entries are initially saved as individual .npy files. Each .npy file stores 
+   a serialized log message in the form of an uint8 (byte) NumPy array. Since messages are cached to disk as soon as 
+   they are received by the DataLogger to minimize data loss in case of emergency shutdowns, the temporary 
+   behavior_data_log directory is used to store these messages during runtime. Frequently, the directory accumulates 
+   millions of .npy files at runtime, making it challenging for human operators to work with the data. During 
+   preprocessing, individual .npy files are grouped by their source (what made the log entry, e.g.: VideoSystem, 
+   MicroController, Data Acquisition System, etc.) and are compressed into .npz archives, one for each source. The 
+   .npz archives are then moved to the *behavior_Data* folder, and the *behavior_data_log* with the individual 
+   .npy files is deleted to conserve disk space.
+
 ### Mesoscope-VR System Data
 
+The Mesoscope-VR system instantiates a directory hierarchy both on the VRPC and the ScanImagePC. Below is the list of 
+files and directories found on each of these machines.
+
+#### Raw Data
+
 The Mesoscope-VR system generates the following files and directories, in addition to those discussed in the shared 
-raw data section:
+raw data section on the VRPC:
 1. **mesoscope_data**: Stores all Mesoscope-acquired data (frames, motion estimation files, etc.). Since Mesoscope data
    is only acquired for **experiment** sessions, this directory is kept empty for all other session types. During 
    preprocessing, the folder contents are organized in a way to automatically work with 
@@ -471,15 +508,61 @@ raw data section:
    groups, taken at the end of the session’s data acquisition. All positions are stored in native motor units. This 
    file is created for all session types supported by the Mesoscope-VR system. As a backup, a copy of this file is also
    generated at the beginning of each session runtime. This allows recovering from critical runtime failures, where the
-   runtime may not be able to generate this snapshot.
+   runtime may not be able to generate this snapshot. During both snapshot generation timepoints, a copy of the 
+   generated snapshot file is also cached inside the *persistent_data* directory of the animal to support restoring the
+   motors to the same position during the next session.
 3. **mesoscope_positions.yaml**: Stores the snapshot of the physical Mesoscope objective position in X, Y, Z, and Roll 
    axes, the virtual ScanImage axes (Fast Z, Tip, Tilt), and the laser power at the sample, taken at the end of the 
    session’s data acquisition. **Note!** This file relies on the experimenter updating the stored positions if they are
-   changed during runtime. It is only created for window checking and experiment sessions.
+   changed during runtime. It is only created for window checking and experiment sessions. A copy of this snapshot file
+   is also saved to the *persistent_data* directory of the animal to support restoring the Mesoscope to the same imaging
+   field during the next session.
 4. **window_screenshot.png**: Stores the screenshot of the ScanImagePC screen. The screenshot should contain the image
    of the red-dot alignment, the view of the target cell layer, the Mesoscope position information, and the data 
    acquisition parameters. Primarily, the screenshot is used by experimenters to quickly reference the imaging quality 
-   from each experiment session. This file is only created for window checking and experiment sessions.
+   from each experiment session. This file is only created for window checking and experiment sessions. A copy of this 
+   file is saved to the *persistent_data* directory of the animal to help the user to realign the red-dot to a similar 
+   position during the next session.
+
+### ScanImagePC
+
+All Mesoscope-VR system data on the ScanImagePC is stored under the user-defined ScanImagePC root directory, which is 
+expected to be mounted to the VRPC via the SMB or similar protocol. Under that root directory, the system creates the 
+following directories and files:
+1. **mesoscope_data**: This directory stores all Mesoscope-acquired data for the currently running session. The 
+   *setupAcquisition* MATLAB function configures ScanImage software to output all data to the mesoscope_data directory, 
+   which is shared by all sessions, animals and projects. This allows using the same static output path for all 
+   ScanImage acquisitions.
+2. **session-specific mesoscope_data**: At the end of each runtime, the Mesoscope-VR system ***renames*** the 
+   mesoscope_data directory to include the session name (id). Then, it generates an empty mesoscope_data directory for
+   the next runtime. This way, all data of each completed session is stored under a unique directory named after that 
+   session. This step is crucial for data preprocessing, which identifies the session data directory and pulls it over
+   to the VRPC based on the session name (id).
+3. **persistent_data**. This directory is created for each unique **project** and **animal** combination, 
+   similar to the data structure created by sl-experiment on the main acquisition system PC. This directory contains 
+   the **first day** MotionEstimator.me and fov.roi files. These files are typically reused by all following data 
+   acquisition sessions to restore the imaging field to the same location as used on the first day. The full path to 
+   the persistent_data directory would typically look like **root/project/animal/persistent_data**.
+
+#### Mesoscope-VR Temporary Data
+
+The Mesoscope-VR system also generates the following temporary files and directories during runtime:
+1. **raw_mesoscope_data**: Stores uncompressed .TIFF stacks fetched by the VRPC from the ScanImagePC. This is done 
+   as part of data preprocessing to collect all data on the VRPC before executing individual preprocessing subroutines.
+   The .TIFF stacks are then re-compressed using the Limited Error Raster Compression (LERC) scheme and are saved to the
+   *mesoscope_data* folder. Once this process completes successfully, the *raw_mesoscope_data* with all raw files is 
+   deleted to conserve disk space.
+2. **kinase.bin**: This marker is created in the *mesoscope_data* ScanImagePC directory. During runtime, the 
+   *setupAcquisition* MATLAB function monitors the *mesoscope_data* directory for the presence of this marker file. If 
+   the file is present, the function triggers the Mesoscope data acquisition. If the file is absent, the function stops
+   the Mesoscope data acquisition until the file is re-created. As such, the VRPC uses this marker file to start 
+   and stop the Mesoscope data acquisition during normal operation.
+3. **phosphatase.bin**: This marker works similar to the *kinase.bin* marker, but is used by the VRPC to abort the 
+   ScanImagePC runtime at any point. When ScanImagePC is waiting for the *kinase.bin* marker to be created for the first
+   time, stopping the Mesoscope acquisition necessarily requires the kinase marker to be first created and then removed,
+   triggering a brief Mesoscope frame acquisition. Creating the *phosphatase.bin* marker instead triggers the 
+   ScanImagePC to end the runtime without waiting for the *kinase.bin* marker, effectively aborting the runtime without
+   acquiring any frames.
 
 --- 
 

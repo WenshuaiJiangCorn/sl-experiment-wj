@@ -1513,13 +1513,27 @@ class _MesoscopeVRSystem:
                 if topic == self._unity_termination_topic:
                     message = f"Unity termination: Detected. Do you want to end the Unity verification runtime?"
                     console.echo(message=message, level=LogLevel.INFO)
-                    answer = input(
-                        "Enter 'yes' to advance to the next step, enter anything else to stay in the "
-                        "verification loop: "
-                    ).lower()
 
-                    # Breaks the verification loop.
-                    if answer == "yes":
+                    # Requests the user to provide a valid answer.
+                    answer = ''
+                    escape = False
+                    while answer == '':
+                        answer = input(
+                            "Enter 'yes' to advance to the next step, enter anything else to stay in the "
+                            "verification loop: "
+                        ).lower()
+
+                        # Sets escape to break the outer loop and breaks the answer loop
+                        if answer == "yes":
+                            escape = True
+                            break
+
+                        # Remains in the verification loop
+                        if answer == "no":
+                            break
+
+                    # Breaks the verification loop
+                    if escape:
                         break
 
         # Instructs the user to restart the task (re-arm Unity).
