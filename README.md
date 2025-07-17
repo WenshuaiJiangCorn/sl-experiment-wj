@@ -474,13 +474,13 @@ following files and subdirectories:
 ### Shared Temporary Data
 The sl-experiment library additionally uses the following temporary marker files and directories which are cleared 
 before the raw data is transmitted to the long-term storage destinations:
-1. **nk.bin** This marker is automatically cached to disk as part of creating a new session data hierarchy. Each runtime
-   removes this marker file when it successfully completes its runtime preparation (the main start() method call of the 
-   runtime management class). If this marker exists when the runtime enters the shutdown cycle, this indicates that the
-   runtime encountered a fatal error during startup and had to be terminated early. In this case, the session's data is 
-   silently deleted, as uninitialized runtime necessarily does not contain any valid data. This is used to automatically
-   declutter the data acquisition and long-term storage PCs to only keep valid sessions.
-2. **behavior_data_log**. All behavior log entries are initially saved as individual .npy files. Each .npy file stores 
+1. **nk.bin**: This marker is automatically cached to disk as part of creating a new session data hierarchy. Each 
+   runtime removes this marker file when it successfully completes its runtime preparation (the main start() method call
+   of the runtime management class). If this marker exists when the runtime enters the shutdown cycle, this indicates 
+   that the runtime encountered a fatal error during startup and had to be terminated early. In this case, the session's
+   data is silently deleted, as uninitialized runtime necessarily does not contain any valid data. This is used to 
+   automatically declutter the data acquisition and long-term storage PCs to only keep valid sessions.
+2. **behavior_data_log**: All behavior log entries are initially saved as individual .npy files. Each .npy file stores 
    a serialized log message in the form of an uint8 (byte) NumPy array. Since messages are cached to disk as soon as 
    they are received by the DataLogger to minimize data loss in case of emergency shutdowns, the temporary 
    behavior_data_log directory is used to store these messages during runtime. Frequently, the directory accumulates 
@@ -489,6 +489,11 @@ before the raw data is transmitted to the long-term storage destinations:
    MicroController, Data Acquisition System, etc.) and are compressed into .npz archives, one for each source. The 
    .npz archives are then moved to the *behavior_Data* folder, and the *behavior_data_log* with the individual 
    .npy files is deleted to conserve disk space.
+3. **ubiquitin.bin**: This marker file is created during *preprocessing* runtime to mark directories that
+   are no longer needed for deletion. Specifically, when preprocessing safely moves the acquired data to long-term 
+   storage destinations, it marks all now-redundant raw data from all acquisition system machines (PCs) for removal to 
+   optimize disk usage. At the end of preprocessing, a specialized *purge* runtime is executed to discover and remove 
+   all directories marked for deletion with the ubiquitin.bin marker files.
 
 ### Mesoscope-VR System Data
 
@@ -628,7 +633,7 @@ For information about the available experiment configuration parameters in the p
 ### Step 3: Maintaining the Acquisition System
 
 All acquisition systems contain modules that require frequent maintenance. Most of these modules are unique to each 
-acquisition system and, therefore, this section is further broken into acquisition-system-specific subsections.
+acquisition system. Therefore, this section is further broken into acquisition-system-specific subsections.
 
 #### Mesoscope-VR
 
@@ -636,13 +641,16 @@ The Mesoscope-VR system contains two modules that require frequent maintenance: 
 **running wheel**. To facilitate the maintenance of these modules, the sl-experiment library exposes the `sl-maintain`
 command.
 
-This command is typically used twice during each day the system is used to acquire data. First, it is used at the 
-beginning of the day to prepare the Mesoscope-VR system for runtime by filling the water delivery system. Second, it is 
-used at the end of each day to empty the water delivery system.
+This command is typically called at least twice during each day the system is used to acquire data. First, it is used 
+at the beginning of the day to prepare the Mesoscope-VR system for runtime by filling the water delivery system. Second,
+it is used at the end of each day to empty the water delivery system.
 
 Less frequently, this command is used to re-calibrate the water delivery system, typically, as a result of replacing 
-system components, such as tubing or the valve itself. Similarly, the command is occasionally used to replace the 
-surface material of the running wheel when it gets excessively worn out.
+system components, such as tubing or the valve itself. The command is also occasionally used to replace the 
+surface material of the running wheel, which slowly deteriorates as the wheel is used.
+
+This command can also facilitate cleaning the wheel, which is typically done before and after each runtime to remove 
+any biological contaminants left by each animal participating in experiment or training runtimes.
 
 ***Note!*** Since this runtime fulfills multiple functions, it uses an 'input'-based terminal interface to accept 
 further commands during runtime. To prevent visual bugs, the input does not print anything to the terminal and appears 
@@ -669,89 +677,130 @@ Supported vr-maintenance commands:
 
 ### Step 4: Acquiring Data
 
-### sl-lick-train
-Runs a single lick-training session. All animals in the Sun lab undergo a two-stage training protocol before they start 
-participating in project-specific experiments. The first phase of the training protocol is lick training, where the 
-animals are trained to operate the lick-tube while being head-fixed. This training is carried out for 2 days.
+Each acquisition system supports one or more distinct types of data-acquisition sessions (runtimes). As a minimum, this
+includes an 'experiment' session type, which is the primary use case for all acquisition systems in the lab. Some 
+systems may also support one or more training session types, which often do not acquire any brain activity data, but 
+otherwise behave similar to experiment sessions.
 
-### sl-run-train
-Runs a single run-training session. The second phase of the Sun lab training protocol is run training, where the 
-animals run on the wheel treadmill while being head-fixed to get water rewards. This training is carried out for the 
-5 days following the lick-training.
+#### Mesoscope-VR
 
-### sl-experiment
-Runs a single experiment session. Each project has to define one or more experiment configurations that can be executed 
-via this command. Every experiment configuration may be associated with a unique Unity VR task, which has to be
-activated independently of running this command. See the [project directory notes](#project-directory) to learn about 
-experiment configuration files which are used by this command.
+The Mesoscope-VR system supports four types of runtime sessions, each associated with a unique runtime command exposed
+by the sl-experiment library:
+1. **Window Checking**: This session is executed by calling the `sl-check-window` command. It guides the user through 
+finding the imaging plane and generating the reference MotionEstimator.me and zstack.tiff files for the checked 
+animal. This session is typically used ~2–3 weeks after the surgical intervention and before any training or experiment 
+sessions to assess the quality of the intervention and the suitability of including the animal in experiment cohorts.
+2. **Lick Training**: This session is executed by calling the `sl-lick-train` command. All animals that participate in 
+Mesoscope-VR experiments undergo a two-stage training protocol, with lick training being the first stage. During this
+runtime, the animals are head fixed in the Mesoscope enclosure for ~ 20 minutes. The primary goal of the runtime is 
+to teach the animals to lick at the water tube to consume water rewards and associate the sound tone emitted at reward 
+delivery with water coming out of the tube. During runtime, the running wheel is locked, so the animals cannot run.
+3. **Run Training**: This session is executed by calling the `sl-run-train` command. This is the second stage of the 
+mandatory two-stage Mesoscope-VR training protocol. During this runtime, the animals are head fixed in the Mesoscope 
+enclosure for ~ 40 minutes. The primary goal of the runtime is to teach the animals to run on the wheel while head-fixed
+and to associate running with receiving water rewards. During runtime, the running wheel is unlocked, but the Virtual 
+Reality screens are kept off, ensuring that the animal is not exposed to any visual cues until the first experiment day.
+4. **Mesoscope Experiment**: This session is executed by calling the `sl-experiment` command. This type of session is 
+designed to execute the experiment specified in the target *experiment_configuration.yaml* file (see above). The system
+supports varying experiment configurations and Virtual Reality environments, offering experimenters the flexibility to 
+run different projects using the same set of APIs and system hardware.
 
 ### Step 5: Preprocessing and Managing Data
 
-### sl-process
-This command can be called to preprocess the target training or experiment session data folder. Typically, this library
-calls the preprocessing pipeline as part of the runtime command, so there is no need to use this command separately. 
-However, if the runtime or preprocessing is unexpectedly interrupted, call this command to ensure the target session is 
-preprocessed and transferred to the long-term storage destinations.
+All acquisition systems support two major ways of handling the session data acquired at runtime. For most runtimes, the 
+choice of how to handle the data is made as part of the acquisition system shutdown sequence. However, in the case of 
+unexpected runtime terminations, all data preprocessing steps can also be executed manually by calling the appropriate
+CLI command.
 
-### sl-purge
-To maximize data integrity, this library does not automatically delete redundant data from the ScanImagePC or the VRPC, 
-even if the data has been safely backed up to long-term storage destinations. This command discovers all redundant data
-marked for deletion by various Sun lab pipelines and deletes it from the ScanImagePC or the VRPC. 
+The first and most commonly used way is to **preprocess** the acquired data. This can be done manually by calling the 
+`sl-preprocess` command. Preprocessing consists of two major steps. The first step pulls all available data to the 
+main data acquisition system machine (PC) and re-packages (re-compresses) the data to reduce its size without loss. The 
+second step distributes (pushes) the data to **multiple** long-term storage destinations, such as the NAS and the 
+BioHPC server.
 
-***Critical!*** This command has to be called at least weekly to prevent running out of disk space on the ScanImagePC 
-and VRPC.
+**Critical!** It is imperative that **all** valid data acquired in the lab undergoes preprocessing 
+**as soon as possible**. Only preprocessed data is stored in a way that maximizes its safety by using both 
+redundancy and parity. Data that is not preprocessed may be **lost** in the case of emergency, which is considerably 
+less likely for the preprocessed data.
 
+When preprocessed data is successfully and safely pushed to long-term storage destinations, the preprocessing runtime 
+marks all raw data directories for that session stored on any acquisition system machine for deletion by creating the 
+*ubiquitin.bin* marker files. It then calls a function that finds and removes marked directories for **all available
+projects and animals**. This final step can be triggered manually by calling the `sl-purge` CLI command. To optimize
+disk space usage on acquisition system machines, it is recommended to call this command at least daily.
+
+The second way of managing the data is primarily used during testing and when handling interrupted sessions that did 
+not generate any valid data. This involves removing all session data from **both** the data acquisition system and all 
+long-term storage destinations. This runtime is extremely dangerous and, if not used carefully, can 
+***permanently delete valid data***. This processing mode can be triggered using the `sl-delete-session-data` CLI 
+command, although it is not recommended for most users.
 ---
 
 ## API Documentation
 
 See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the
-detailed description of the methods and classes exposed by components of this library.
+detailed description of the methods and classes exposed by components of this library, as well as all available 
+CLI commands with their arguments
 ___
 
 ## Recovering from Interruptions
-While it is not typical for the data acquisition or preprocessing pipelines to fail during runtime, it is not 
-impossible. The library can recover or gracefully terminate the runtime for most code-generated errors, so this is 
-usually not a concern. However, if a major interruption (i.e., power outage) occurs or the ScanImagePC encounters an 
-interruption, manual intervention is typically required before the VRPC can run new data acquisition or preprocessing 
-runtimes.
+While it is not typical for the data acquisition or preprocessing pipelines to fail during runtime, it is possible. The 
+library can recover or gracefully terminate the runtime for most code-generated errors, so this is usually not a
+concern. However, if a major interruption (i.e., power outage) occurs or one of the hardware assets malfunctions during
+runtime, manual intervention is typically required to recover the session data and reset the acquisition system.
 
 ### Data acquisition interruption
 
-***Critical!*** If you encounter an interruption during data acquisition (training or experiment runtime), it is 
-impossible to resume the interrupted session. Moreover, since this library acts independently of the ScanImage software
-managing the Mesoscope, you will need to manually shut down the other acquisition process. If VRPC is interrupted, 
-terminate Mesoscope data acquisition via the ScanImage software. If the Mesoscope is interrupted, use 'ESC+Q' to 
-terminate the VRPC data acquisition.
+Data acquisition can be interrupted in two main ways, the first being due to an external asset failure, for example, if 
+the ScanImagePC unexpectedly shuts down during Mesoscope-VR system runtime. In this case, the runtime pauses and 
+instructs the user to troubleshoot the issue and then resume the runtime. This type of *soft* interruption is handled 
+gracefully during runtime, data processing, and analysis to exclude the data collected during the interruption from the 
+output dataset. Generally, soft interruptions are supported for most external assets, which includes anything not 
+managed directly by the sl-experiment library and the main data acquisition system PC. While inconvenient, these 
+interruptions do not typically require specialized handling other than recovering and restoring the failed asset.
 
-If VRPC is interrupted during data acquisition, follow this instruction:
+**Note!** While most soft interruptions typically entail resuming the interrupted runtime, it is also possible to
+instead terminate the runtime. To do so, execute the `termiante` command via the GUI instead of trying to resume 
+the runtime. In this case, the system attempts to execute a graceful shutdown procedure, saving all valid data in the 
+process.
+
+The second way involves interruption due to sl-experiment runtime failures or unexpected shut-downs of the main 
+acquisition system PC. In these cases, manual user intervention is typically required to recover the useful data and 
+reset the system before the acquisition can be restarted. The handling of such cases often consists of specific steps
+or each supported acquisition system. Typically, these *hard* interruptions are related to major issues, such as 
+global facility power loss or severe malfunction of sensitive acquisition system components, such as microcontrollers 
+and communication cables.
+
+#### Mesoscope-VR
+If the VRPC runtime unexpectedly interrupts at any point without executing the graceful shutdown, follow these 
+instructions:
 1. If the session involved Mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
    files (frame stacks, motion estimator data, cranial window screenshot) have been generated and saved to the 
-   **mesoscope_frames** folder.
-2. Remove the animal from the Mesoscope-VR system.
-3. Use Zaber Launcher to **manually move the HeadBarRoll axis to have a positive angle** (> 0 degrees). This is 
+   **mesoscope_data** folder.
+2. If necessary, **manually** edit the session_descriptor.yaml, the mesoscope_positions.yaml and the 
+   zaber_positions.yaml files to include actual runtime information. Estimate the volume of water delivered at runtime 
+   by manually reading the water tank level gauge. 
+3. Remove the animal from the Mesoscope enclosure. If necessary, use the *Zaber Launcher* app to directly interface with
+   Zaber motors and move them in a way that allows the animal to be recovered from the enclosure.
+4. Use Zaber Launcher to **manually move the HeadBarRoll axis to have a positive angle** (> 0 degrees). This is 
    critical! If this is not done, the motor will not be able to home during the next session and will instead collide 
-   with the movement guard, at best damaging the motor and, at worst, the Mesoscope or the animal.
-4. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device tab (NOT motor!) and navigate to its 
+   with the movement guard, at best damaging the motor and, at worst, the Mesoscope.
+5. Go into the 'Device Settings' tab of the Zaber Launcher, click on each Device tab (NOT motor!) and navigate to its 
    User Data section. Then **flip Setting 1 from 0 to 1**. Without this, the library will refuse to operate the Zaber 
-   Motors.
-5. If the session involved Mesoscope imaging, **rename the mesoscope_frames folder to prepend the session name, using an
-   underscore to separate the folder name from the session name**. For example, from mesoscope_frames → 
-   2025-11-11-05-03-234123_mesoscope_frames. Critical! if this is not done, the library may **delete** any leftover 
+   Motors during all future runtimes.
+6. If the session involved Mesoscope imaging, **rename the mesoscope_data folder to prepend the session name, using an
+   underscore to separate the folder name from the session name**. For example, from mesoscope_data → 
+   2025-11-11-05-03-234123_mesoscope_data. **Critical!** if this is not done, the library may **delete** any leftover 
    Mesoscope files during the next runtime and will not be able to properly preprocess the frames for the interrupted
    session during the next step.
-6. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
+7. Call the `sl-process` command and provide it with the path to the session directory of the interrupted session. This
    will preprocess and transfer all collected data to the long-term storage destinations. This way, you can preserve 
    any data acquired before the interruption and prepare the system for running the next session.
-
-***Note!*** If the interruption occurs on the ScanImagePC (Mesoscope) and you use the 'ESC+Q' combination, there is 
-no need to do any of the steps above. Using ESC+Q executes a 'graceful' VRPC interruption process which automatically
-executes the correct shutdown sequence and data preprocessing.
 
 ### Data preprocessing interruption
 To recover from an error encountered during preprocessing, call the `sl-process` command and provide it with the path 
 to the session directory of the interrupted session. The preprocessing pipeline should automatically resume an 
-interrupted runtime.
+interrupted runtime from the nearest checkpoint.
 
 ---
 
@@ -775,6 +824,7 @@ ___
 ## License
 
 This project is licensed under the GPL3 License: see the [LICENSE](LICENSE) file for details.
+
 ___
 
 ## Acknowledgments
