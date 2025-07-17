@@ -352,9 +352,7 @@ class BehaviorVisualizer:
         self._figure.canvas.draw()  # type: ignore
         self._figure.canvas.flush_events()  # type: ignore
 
-    def update_run_training_thresholds(
-        self, speed_threshold: float | np.float64, duration_threshold: float | np.float64
-    ) -> None:
+    def update_run_training_thresholds(self, speed_threshold: np.float64, duration_threshold: np.float64) -> None:
         """Updates the running speed and duration threshold lines to use the input anchor values.
 
         This positions the threshold lines in the running speed plot to indicate the cut-offs for the running speed and

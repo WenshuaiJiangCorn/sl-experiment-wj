@@ -55,53 +55,29 @@ def _generate_mesoscope_position_snapshot(session_data: SessionData, mesoscope_d
         mesoscope_data: The MesoscopeData instance for the runtime for which the snapshot is generated.
     """
 
-    # Generates a precursor MesoscopePositions file and dumps it to the session raw_data folder.
-    # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
-    # coordinates with the positions loaded from the snapshot stored inside the persistent_data folder of the
-    # animal.
-    force_mesoscope_positions_update: bool = False
-    if Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
-        # Loads the previous position data into memory
-        previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
-            file_path=mesoscope_data.vrpc_persistent_data.mesoscope_positions_path
-        )
+    # Asks the user if they want to update the mesoscope position data.
+    message = (
+        f"Do you want to update the mesoscope objective position data stored inside the "
+        f"mesoscope_positions.yaml file loaded from the previous session?"
+    )
+    console.echo(message=message, level=LogLevel.INFO)
+    while True:
+        answer = input("Enter 'yes' or 'no': ")
 
-        # Dumps the data to the raw-data folder. If the MesoscopePositions class includes any additional (new) fields
-        # relative to the cached data, adds new fields to the output file. THis allows 'live' updating the data if
-        # the sl-experiment version changes between runtimes.
-        previous_mesoscope_positions.to_yaml(file_path=session_data.raw_data.mesoscope_positions_path)
+        # If the answer is 'yes', breaks the loop and executes the data update sequence.
+        if answer.lower() == "yes":
+            break
 
-        # Asks the user whether they want to update position data. If not, then there is no need to update the data
-        # inside the precursor .YAML file.
-        if not force_mesoscope_positions_update:
-            message = (
-                f"Do you want to update the mesoscope objective position data stored inside the "
-                f"mesoscope_positions.yaml file loaded from the previous session?"
-            )
-            console.echo(message=message, level=LogLevel.INFO)
-            while True:
-                answer = input("Enter 'yes' or 'no': ")
+        # If the answer is 'no', ends method runtime, as there is no need to update the data inside the
+        # file.
+        elif answer.lower() == "no":
+            return
 
-                # If the answer is 'yes', breaks the loop and executes the data update sequence.
-                if answer.lower() == "yes":
-                    break
-
-                # If the answer is 'no', ends method runtime, as there is no need to update the data inside the
-                # file.
-                elif answer.lower() == "no":
-                    return
-
-    # If previous position data is not available, creates a new MesoscopePositions instance with default (0)
-    # position values.
-    else:
-        previous_mesoscope_positions = MesoscopePositions()
-
-        # Caches the precursor file to the raw_data session directory.
-        previous_mesoscope_positions.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
-
-    # Notifies the user that the precursor file is ready for modification.
-    message = "Mesoscope objective position precursor: Created."
-    console.echo(message=message, level=LogLevel.SUCCESS)
+    # Loads the previous position data into memory. At this point, assumes that either the precursor file or the file
+    # from a previous session has been saved to the animal's persistent data directory.
+    previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+        file_path=mesoscope_data.vrpc_persistent_data.mesoscope_positions_path
+    )
 
     # Forces the user to update the mesoscope positions file with current mesoscope data
     message = (
@@ -716,6 +692,8 @@ class _MesoscopeVRSystem:
     _enable_guidance_topic: str = "MustLick/False/"
     _show_reward_zone_boundary_topic: str = "VisibleMarker/True/"
     _hide_reward_zone_boundary_topic: str = "VisibleMarker/False/"
+    _unity_scene_request_topic: str = "SceneNameTrigger/"
+    _unity_scene_topic: str = "SceneName/"
 
     # Also stores log message codes for the class as separate values
     _system_state_code: int = 1
@@ -772,6 +750,29 @@ class _MesoscopeVRSystem:
         # session's data acquisition. These paths only exist in the VRPC filesystem.
         self._session_data: SessionData = session_data
         self._mesoscope_data: MesoscopeData = MesoscopeData(session_data)
+
+        # Generates a precursor MesoscopePositions file and dumps it to the session raw_data folder.
+        # If a previous set of mesoscope position coordinates is available, overwrites the 'default' mesoscope
+        # coordinates with the positions loaded from the snapshot stored inside the persistent_data folder of the
+        # animal.
+        if Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path).exists():
+            # Loads the previous position data into memory
+            previous_mesoscope_positions: MesoscopePositions = MesoscopePositions.from_yaml(  # type: ignore
+                file_path=self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path
+            )
+
+            # Dumps the data to the raw-data folder. If the MesoscopePositions class includes any additional (new)
+            # fields relative to the cached data, adds new fields to the output file. THis allows 'live' updating the
+            # data if the sl-experiment version changes between runtimes.
+            previous_mesoscope_positions.to_yaml(file_path=session_data.raw_data.mesoscope_positions_path)
+
+        # If previous position data is not available, creates a new MesoscopePositions instance with default (0)
+        # position values.
+        else:
+            # Caches the precursor file to the raw_data session directory and to the persistent data directory.
+            precursor = MesoscopePositions()
+            precursor.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+            precursor.to_yaml(file_path=Path(self._mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
 
         # Defines other flags used during runtime:
         # VR and runtime states are initialized to 0 (idle state) by default. Note, initial VR and runtime states are
@@ -1496,6 +1497,8 @@ class _MesoscopeVRSystem:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
+        # TODO Add scene name verification here.
+
         # Blocks until Unity sends the task termination message or until the user manually aborts the runtime.
         outcome = ""
         while outcome != "abort":
@@ -1535,9 +1538,9 @@ class _MesoscopeVRSystem:
         # Guides the user through the verification process and ensures that Unity is cycled off at the end of the
         # verification process
         message = (
-            f"Verify that the virtual reality task displays on the screens as intended. This runtime will send "
-            f"slow motion triggers to gradually advance the VR scene forward. Verify that the scene displays "
-            f"correctly during motion. Disable (end) Unity runtime to advance to the next preparation step."
+            f"Verify that the virtual reality task displays on the screens as intended during motion. This runtime "
+            f"is now sending slow motion triggers to gradually advance the VR scene forward. Disable (end) Unity "
+            f"runtime to advance to the next preparation step."
         )
         console.echo(message=message, level=LogLevel.INFO)
 
@@ -1560,21 +1563,19 @@ class _MesoscopeVRSystem:
 
                     # Requests the user to provide a valid answer.
                     answer = ""
-                    escape = False
-                    while answer == "":
+                    while answer not in {"yes", "no"}:
                         answer = input(
-                            "Enter 'yes' to advance to the next step, enter anything else to stay in the "
-                            "verification loop: "
+                            "Enter 'yes' to advance to the next step, enter 'no' to stay in the verification loop: "
                         ).lower()
 
-                        # Sets escape to break the outer loop and breaks the answer loop
-                        if answer == "yes":
-                            escape = True
-                            break
-
-                    # Breaks the verification loop
-                    if escape:
+                    # Breaks the verification loop if the user confirms they want to break the loop.
+                    if answer == "yes":
                         break
+
+                    # Otherwise, if the answer is 'no', notifies the user tha they are still in the verification loop.
+                    else:
+                        message = f"Continuing sending the motion triggers until the next Unity termination event..."
+                        console.echo(message=message, level=LogLevel.INFO)
 
         # Instructs the user to restart the task (re-arm Unity).
         message = (
@@ -2096,7 +2097,7 @@ class _MesoscopeVRSystem:
         # Sets system state to 4
         self._change_system_state(self._state_map["run training"])
 
-    def update_visualizer_thresholds(self, speed_threshold: float, duration_threshold: float) -> None:
+    def update_visualizer_thresholds(self, speed_threshold: np.float64, duration_threshold: np.float64) -> None:
         """Instructs the data visualizer to update the displayed running speed and running epoch duration thresholds
         using the input data.
 
@@ -2108,10 +2109,11 @@ class _MesoscopeVRSystem:
             duration_threshold: The running epoch duration threshold in seconds. Specifies how long the animal must
                 maintain the above-threshold speed to satisfy the current task conditions.
         """
-        # Each time visualizer thresholds are updated, also updates the descriptor
+        # Each time visualizer thresholds are updated, also updates the descriptor. For this, converts NumPy scalars to
+        # Python float objects (a requirement to make them YAML-compatible).
         if isinstance(self.descriptor, RunTrainingDescriptor):
-            self.descriptor.final_run_speed_threshold_cm_s = speed_threshold
-            self.descriptor.final_run_duration_threshold_s = duration_threshold
+            self.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
+            self.descriptor.final_run_duration_threshold_s = float(duration_threshold)
 
         self._visualizer.update_run_training_thresholds(
             speed_threshold=speed_threshold, duration_threshold=duration_threshold
@@ -2278,7 +2280,8 @@ class _MesoscopeVRSystem:
 
                 # If this trial was not rewarded and failing this trial caused the overall sequence of failed trials
                 # to exceed the threshold, re-enabled guidance for the pre-specified number of recovery trials.
-                if self._failed_trials >= self._failed_trial_threshold:
+                if self._failed_trials >= self._failed_trial_threshold and self._recovery_trials > 0:
+                    self._failed_trials = 0  # Resets the failed trial counter
                     self._guided_trials = self._recovery_trials
                     self._ui.set_guidance_state(enabled=True)
 
@@ -2388,6 +2391,13 @@ class _MesoscopeVRSystem:
                     ),
                 )
                 self._logger.input_queue.put(log_package)
+                message = (
+                    "Address the issue that prevents Unity game engine from running and resume the runtime. Re-arm the "
+                    "Unity scene (hit play) before resuming the runtime. Alternatively, terminate the runtime to "
+                    "attempt graceful shutdown."
+                )
+                console.echo(message=message, level=LogLevel.INFO)
+                return
 
     def _ui_cycle(self) -> None:
         """Queries the state of various GUI components and adjusts the runtime behavior accordingly.
@@ -2469,9 +2479,16 @@ class _MesoscopeVRSystem:
         # pause state.
         self._mesoscope_terminated = True  # Sets the termination flag
         self._pause_runtime()  # Pauses the runtime.
-        message = "Emergency pause: Engaged. Reason: Mesoscope stopped sending frame acquisition triggers."
+        message = "Emergency pause: Engaged. Reason: Mesoscope stopped sending frame acquisition triggers. "
         console.echo(message=message, level=LogLevel.ERROR)
         self._stop_mesoscope()  # Ensures that the mesoscope runtime markers are removed to facilitate restarting.
+        message = (
+            "Address the issue that prevents the Mesoscope from acquiring frames and resume the runtime. Follow "
+            "additional instructions displayed after resuming the runtime to re-arm the mesoscope to continue "
+            "acquiring frames for the current runtime. Alternatively, terminate the runtime to attempt graceful "
+            "shutdown."
+        )
+        console.echo(message=message, level=LogLevel.INFO)
         return
 
     def _pause_runtime(self) -> None:
@@ -2633,7 +2650,7 @@ class _MesoscopeVRSystem:
 
         # Enables lick guidance via direct GUI manipulation to run the requested number of initial trials in the
         # guided mode. If the initial guided trial number is 0, does not activate lick guidance.
-        if initial_guided_trials < 1:
+        if self._guided_trials > 0:
             self._ui.set_guidance_state(enabled=True)
 
     @property
@@ -3569,9 +3586,15 @@ def window_checking_logic(
         python_version=python_version,
         sl_experiment_version=library_version,
     )
+    mesoscope_data = MesoscopeData(session_data=session_data)
     # Caches descriptor file precursor to disk before starting the main runtime. This is consistent with the behavior of
     # all other runtime functions.
     descriptor.to_yaml(file_path=session_data.raw_data.session_descriptor_path)
+
+    # Generates and caches the MesoscopePositions precursor file to the persistent and raw_data folders.
+    precursor = MesoscopePositions()
+    precursor.to_yaml(file_path=Path(session_data.raw_data.mesoscope_positions_path))
+    precursor.to_yaml(file_path=Path(mesoscope_data.vrpc_persistent_data.mesoscope_positions_path))
 
     zaber_motors: ZaberMotors | None = None
     try:
@@ -3583,7 +3606,6 @@ def window_checking_logic(
             credentials_path=system_configuration.paths.google_credentials_path,
             sheet_id=system_configuration.sheets.surgery_sheet_id,
         )
-        mesoscope_data = MesoscopeData(session_data=session_data)
 
         # Establishes communication with Zaber motors
         zaber_motors = ZaberMotors(zaber_positions_path=mesoscope_data.vrpc_persistent_data.zaber_positions_path)

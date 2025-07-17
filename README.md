@@ -283,7 +283,7 @@ As mentioned above, the ScanImagePC is largely assembled and configured by exter
 requires additional assets and configuration post-assembly to make it compatible with sl-experiment-managed runtimes.
 
 #### File System Access
-To support the sl-experiment runtime, the ScanImagePC's filesystem must be accessible to the **VRPC** via the Server 
+To support the sl-experiment runtime, the ScanImagePC’s filesystem must be accessible to the **VRPC** via the Server 
 Message Block version 3 (SMB3) or equivalent protocol. Since ScanImagePC uses Windows, it is advised to use the SMB3 
 protocol, as all Windows machines support it natively with minimal configuration. As a minimum, the ScanImagePC must be 
 configured to share the root Mesoscope output folder with the VRPC over the local network. This is required to both 
@@ -477,7 +477,7 @@ before the raw data is transmitted to the long-term storage destinations:
 1. **nk.bin**: This marker is automatically cached to disk as part of creating a new session data hierarchy. Each 
    runtime removes this marker file when it successfully completes its runtime preparation (the main start() method call
    of the runtime management class). If this marker exists when the runtime enters the shutdown cycle, this indicates 
-   that the runtime encountered a fatal error during startup and had to be terminated early. In this case, the session's
+   that the runtime encountered a fatal error during startup and had to be terminated early. In this case, the session’s
    data is silently deleted, as uninitialized runtime necessarily does not contain any valid data. This is used to 
    automatically declutter the data acquisition and long-term storage PCs to only keep valid sessions.
 2. **behavior_data_log**: All behavior log entries are initially saved as individual .npy files. Each .npy file stores 
@@ -536,7 +536,7 @@ expected to be mounted to the VRPC via the SMB or similar protocol. Under that r
 following directories and files:
 1. **mesoscope_data**: This directory stores all Mesoscope-acquired data for the currently running session. The 
    *setupAcquisition* MATLAB function configures ScanImage software to output all data to the mesoscope_data directory, 
-   which is shared by all sessions, animals and projects. This allows using the same static output path for all 
+   which is shared by all sessions, animals, and projects. This allows using the same static output path for all 
    ScanImage acquisitions.
 2. **session-specific mesoscope_data**: At the end of each runtime, the Mesoscope-VR system ***renames*** the 
    mesoscope_data directory to include the session name (id). Then, it generates an empty mesoscope_data directory for
@@ -777,7 +777,7 @@ instructions:
 1. If the session involved Mesoscope imaging, shut down the Mesoscope acquisition process and make sure all required 
    files (frame stacks, motion estimator data, cranial window screenshot) have been generated and saved to the 
    **mesoscope_data** folder.
-2. If necessary, **manually** edit the session_descriptor.yaml, the mesoscope_positions.yaml and the 
+2. If necessary, **manually** edit the session_descriptor.yaml, the mesoscope_positions.yaml, and the 
    zaber_positions.yaml files to include actual runtime information. Estimate the volume of water delivered at runtime 
    by manually reading the water tank level gauge. 
 3. Remove the animal from the Mesoscope enclosure. If necessary, use the *Zaber Launcher* app to directly interface with
