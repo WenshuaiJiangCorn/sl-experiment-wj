@@ -942,6 +942,7 @@ class _MesoscopeVRSystem:
                 self._unity_termination_topic,  # Used to detect Unity shutdown events
                 self._unity_startup_topic,  # Used to detect Unity startup events
                 self._microcontrollers.valve.mqtt_topic,  # Allows Unity to operate the valve
+                self._unity_scene_topic,  # Used to verify that the Unity is configured to run the correct VR task
             )
             self._unity = MQTTCommunication(monitored_topics=monitored_topics)
             self._unity.connect()  # Establishes communication with the MQTT broker.
@@ -1497,8 +1498,6 @@ class _MesoscopeVRSystem:
         )
         console.echo(message=message, level=LogLevel.INFO)
 
-        # TODO Add scene name verification here.
-
         # Blocks until Unity sends the task termination message or until the user manually aborts the runtime.
         outcome = ""
         while outcome != "abort":
@@ -1506,13 +1505,14 @@ class _MesoscopeVRSystem:
             delay_timer.reset()
             while delay_timer.elapsed < 600000:
                 # Parses all data received from the Unity game engine.
-                if self._unity.has_data:
-                    topic: str
-                    topic, _ = self._unity.get_data()
+                if not self._unity.has_data:
+                    continue
+                topic: str
+                topic, _ = self._unity.get_data()
 
-                    # If received data is a startup message, breaks the loop
-                    if topic == self._unity_startup_topic:
-                        break
+                # If received data is a startup message, breaks the loop
+                if topic == self._unity_startup_topic:
+                    break
             else:
                 # If the loop above is not broken, this is due to not receiving any message from Unity for 10 minutes.
                 message = (
@@ -1535,6 +1535,10 @@ class _MesoscopeVRSystem:
             console.error(message=message, error=RuntimeError)
             raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
 
+        # Verifies that the Unity scene (VR task) started by the user matches the task declared in the experiment
+        # configuration file:
+        self._verify_unity_task()
+
         # Guides the user through the verification process and ensures that Unity is cycled off at the end of the
         # verification process
         message = (
@@ -1553,29 +1557,32 @@ class _MesoscopeVRSystem:
             self._unity.send_data(topic=self._microcontrollers.wheel_encoder.mqtt_topic, payload=byte_array)
 
             # Parses incoming data
-            if self._unity.has_data:
-                topic, _ = self._unity.get_data()
+            if not self._unity.has_data:
+                continue
+            topic, _ = self._unity.get_data()
 
-                # If received data is a termination message, asks the user if the loop needs to be broken
-                if topic == self._unity_termination_topic:
-                    message = f"Unity termination: Detected. Do you want to end the Unity verification runtime?"
-                    console.echo(message=message, level=LogLevel.INFO)
+            # If received data is a termination message, asks the user if the loop needs to be broken
+            if topic != self._unity_termination_topic:
+                continue
 
-                    # Requests the user to provide a valid answer.
-                    answer = ""
-                    while answer not in {"yes", "no"}:
-                        answer = input(
-                            "Enter 'yes' to advance to the next step, enter 'no' to stay in the verification loop: "
-                        ).lower()
+            message = f"Unity termination: Detected. Do you want to end the Unity verification runtime?"
+            console.echo(message=message, level=LogLevel.INFO)
 
-                    # Breaks the verification loop if the user confirms they want to break the loop.
-                    if answer == "yes":
-                        break
+            # Requests the user to provide a valid answer.
+            answer = ""
+            while answer not in {"yes", "no"}:
+                answer = input(
+                    "Enter 'yes' to advance to the next step, enter 'no' to stay in the verification loop: "
+                ).lower()
 
-                    # Otherwise, if the answer is 'no', notifies the user tha they are still in the verification loop.
-                    else:
-                        message = f"Continuing sending the motion triggers until the next Unity termination event..."
-                        console.echo(message=message, level=LogLevel.INFO)
+            # Breaks the verification loop if the user confirms they want to break the loop.
+            if answer == "yes":
+                break
+
+            # Otherwise, if the answer is 'no', notifies the user tha they are still in the verification loop.
+            else:
+                message = f"Continuing sending the motion triggers until the next Unity termination event..."
+                console.echo(message=message, level=LogLevel.INFO)
 
         # Instructs the user to restart the task (re-arm Unity).
         message = (
@@ -1588,10 +1595,11 @@ class _MesoscopeVRSystem:
         # Blocks until Unity sends another start message. Since at this point the Unity-VRPC connection is known to
         # be working, it does not use timeout or abort logic.
         while True:
-            if self._unity.has_data:
-                topic, _ = self._unity.get_data()
-                if topic == self._unity_startup_topic:
-                    break
+            if not self._unity.has_data:
+                continue
+            topic, _ = self._unity.get_data()
+            if topic == self._unity_startup_topic:
+                break
 
         # Disables the VR screens before returning.
         self._microcontrollers.disable_vr_screens()
@@ -1638,55 +1646,59 @@ class _MesoscopeVRSystem:
             # Waits at most 5 seconds to receive the response
             timeout_timer.reset()
             while timeout_timer.elapsed < 5:
-                # Repeatedly queries and checks incoming messages from Unity.
-                if self._unity.has_data:
-                    topic: str
-                    payload: bytes
-                    topic, payload = self._unity.get_data()  # type: ignore
-
-                    # If the message contains cue sequence data, parses it and finishes method runtime. Discards all
-                    # other messages.
-                    if topic == self._cue_sequence_topic:
-                        # Extracts the sequence of cues that will be used during task runtime.
-                        sequence: NDArray[np.uint8] = np.array(
-                            json.loads(payload.decode("utf-8"))["cue_sequence"], dtype=np.uint8
-                        )
-
-                        # Logs the received sequence and also caches it into a class attribute for later use
-                        package = LogPackage(
-                            source_id=self._source_id,
-                            time_stamp=np.uint64(self._timestamp_timer.elapsed),
-                            serialized_data=sequence,
-                        )
-                        self._logger.input_queue.put(package)
-                        self._cue_sequence = sequence
-
-                        # Attempts to decompose the received cue sequence into an array of cumulative trial lengths.
-                        # Primarily, this is used to track the animal's performance and automatically engage guidance if
-                        # the animal performs poorly.
-                        self._decompose_cue_sequence_into_trials()
-
-                        # Resets the traveled distance tracker array. Primarily, this is only necessary if this method
-                        # is called when recovering from unexpected Unity terminations to re-align distance trackers
-                        # with the fact that the task corridor (environment) origin position and time have been reset.
-                        self._microcontrollers.reset_distance_tracker()
-
-                        # Also resets internal class attributes used for position, running speed, and trial completion
-                        # tracking.
-                        self._position = np.float64(0.0)
-                        self._distance = np.float64(0.0)
-                        self._completed_trials = 0
-
-                        # Note, keeps the number of unrewarded (failed), guided This is intentional.
-
-                        # Ends the runtime
-                        message = "VR cue sequence: Received."
-                        console.echo(message=message, level=LogLevel.SUCCESS)
-                        return
-
                 # Sends a second request if the response is not received within 2 seconds
                 if timeout_timer.elapsed > 2:
                     self._unity.send_data(topic=self._cue_sequence_request_topic)
+
+                # Repeatedly queries and checks incoming messages from Unity.
+                if not self._unity.has_data:
+                    continue
+
+                topic: str
+                payload: bytes
+                topic, payload = self._unity.get_data()  # type: ignore
+
+                # If the message contains cue sequence data, parses it and finishes method runtime. Discards all
+                # other messages.
+                if topic != self._cue_sequence_topic:
+                    continue
+
+                # Extracts the sequence of cues that will be used during task runtime.
+                sequence: NDArray[np.uint8] = np.array(
+                    json.loads(payload.decode("utf-8"))["cue_sequence"], dtype=np.uint8
+                )
+
+                # Logs the received sequence and also caches it into a class attribute for later use
+                package = LogPackage(
+                    source_id=self._source_id,
+                    time_stamp=np.uint64(self._timestamp_timer.elapsed),
+                    serialized_data=sequence,
+                )
+                self._logger.input_queue.put(package)
+                self._cue_sequence = sequence
+
+                # Attempts to decompose the received cue sequence into an array of cumulative trial lengths.
+                # Primarily, this is used to track the animal's performance and automatically engage guidance if
+                # the animal performs poorly.
+                self._decompose_cue_sequence_into_trials()
+
+                # Resets the traveled distance tracker array. Primarily, this is only necessary if this method
+                # is called when recovering from unexpected Unity terminations to re-align distance trackers
+                # with the fact that the task corridor (environment) origin position and time have been reset.
+                self._microcontrollers.reset_distance_tracker()
+
+                # Also resets internal class attributes used for position, running speed, and trial completion
+                # tracking.
+                self._position = np.float64(0.0)
+                self._distance = np.float64(0.0)
+                self._completed_trials = 0
+
+                # Note, keeps the number of unrewarded (failed), guided This is intentional.
+
+                # Ends the runtime
+                message = "VR cue sequence: Received."
+                console.echo(message=message, level=LogLevel.SUCCESS)
+                return
 
             # If the loop above is escaped, this is due to not receiving any message from Unity. Raises an error.
             message = (
@@ -1697,6 +1709,98 @@ class _MesoscopeVRSystem:
             )
             console.echo(message=message, level=LogLevel.ERROR)
             outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+
+        message = f"Runtime aborted due to user request."
+        console.error(message=message, error=RuntimeError)
+        raise RuntimeError(message)  # Fallback to appease mypy, should not be reachable
+
+    def _verify_unity_task(self) -> None:
+        """Queries the name of the playing scene for the current VR task from Unity.
+
+        This method is used as part of the initial Unity setup sequence to ensure that Unity is set to display the
+        correct VR task for the executed experiment runtime.
+
+        Notes:
+            This method contains an infinite loop that allows retrying failed connection attempts. This prevents the
+            runtime from aborting unless the user purposefully chooses the hard abort option.
+
+        Raises:
+            RuntimeError: If the user chooses to abort the runtime when the method does not receive a response from
+                Unity in 5 seconds.
+            ValueError: If the Unity transmits a scene name that does not match the expected VR task name loaded from
+                the experiment configuration file.
+        """
+
+        # Does not do anything if a Unity communication class is not initialized or ExperimentConfiguration instance
+        # is not provided.
+        if self._unity is None or self._experiment_configuration is None:
+            return
+
+        # Initializes a second-precise timer to ensure the request is fulfilled within a 20-second timeout
+        timeout_timer = PrecisionTimer("s")
+
+        # The procedure repeats until it succeeds or until the user chooses to abort the runtime.
+        outcome = ""
+        while outcome != "abort":
+            # Sends a request for the scene (task) name to Unity GIMBL package.
+            self._unity.send_data(topic=self._unity_scene_request_topic)
+
+            # Waits at most 5 seconds to receive the response
+            timeout_timer.reset()
+            while timeout_timer.elapsed < 5 and outcome != "abort":
+                # Sends a second request if the response is not received within 2 seconds
+                if timeout_timer.elapsed > 2:
+                    self._unity.send_data(topic=self._unity_scene_request_topic)
+
+                # Repeatedly queries and checks incoming messages from Unity.
+                if not self._unity.has_data:
+                    continue
+
+                topic: str
+                payload: bytes
+                topic, payload = self._unity.get_data()  # type: ignore
+
+                # Specifically looks for a message sent to the scene name topic. Discards all other messages.
+                if topic != self._unity_scene_topic:
+                    continue
+
+                # Extracts the name of the scene running in Unity.
+                scene_name: str = json.loads(payload.decode("utf-8"))["name"]
+                expected_scene_name: str = self._experiment_configuration.unity_scene_name
+
+                # Verifies if the scene name matches the expected VR task name from the experiment
+                # configuration file.
+                if scene_name != expected_scene_name:
+                    message = (
+                        f"The name of the scene (VR task) running in Unity ({scene_name}) does not match the expected "
+                        f"name defined in the experiment configuration file ({expected_scene_name}). Reconfigure Unity "
+                        f"to run the correct VR task and try again."
+                    )
+                    console.echo(message=message, level=LogLevel.ERROR)
+                    outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
+
+                    # Restarts the request-response loop if the user chose to retry
+                    if outcome != "abort":
+                        timeout_timer.reset()
+                        continue
+
+                # Otherwise, if the scene name matches the expected name, ends the runtime.
+                message = "Unity scene configuration: Confirmed."
+                console.echo(message=message, level=LogLevel.SUCCESS)
+                return
+
+            # If the time loop satisfies exit conditions, this is due to not receiving any message from Unity in time.
+            # Requests user feedback.
+            else:
+                message = (
+                    f"The Mesoscope-VR system has requested the active Unity scene name by sending the trigger to "
+                    f"the {self._unity_scene_request_topic}' topic and received no response in 5 seconds after two "
+                    f"requests. It is likely that the Unity game engine is not running or is not configured to work "
+                    f"with Mesoscope-VR system. Make sure Unity game engine is started and configured before "
+                    f"continuing."
+                )
+                console.echo(message=message, level=LogLevel.ERROR)
+                outcome = input("Enter 'abort' to abort with an error. Enter anything else to retry: ").lower()
 
         message = f"Runtime aborted due to user request."
         console.error(message=message, error=RuntimeError)
@@ -2112,8 +2216,9 @@ class _MesoscopeVRSystem:
         # Each time visualizer thresholds are updated, also updates the descriptor. For this, converts NumPy scalars to
         # Python float objects (a requirement to make them YAML-compatible).
         if isinstance(self.descriptor, RunTrainingDescriptor):
-            self.descriptor.final_run_speed_threshold_cm_s = float(speed_threshold)
-            self.descriptor.final_run_duration_threshold_s = float(duration_threshold)
+            self.descriptor.final_run_speed_threshold_cm_s = round(float(speed_threshold), 2)
+            # Converts time from milliseconds to seconds
+            self.descriptor.final_run_duration_threshold_s = round(float(duration_threshold) / 1000, 2)
 
         self._visualizer.update_run_training_thresholds(
             speed_threshold=speed_threshold, duration_threshold=duration_threshold
@@ -3652,6 +3757,7 @@ def window_checking_logic(
 
         # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
         _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
+        # noinspection PyTypeChecker
         _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
 
         # Retrieves current motor positions and packages them into a ZaberPositions object.

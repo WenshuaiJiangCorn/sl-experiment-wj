@@ -208,6 +208,7 @@ class BehaviorVisualizer:
             1,
             figsize=(10, 8),
             sharex=True,
+            num="Runtime Behavior Visualizer",
             # Ensures that the third subplot is thrice as tall
             gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1, 3]},
         )
