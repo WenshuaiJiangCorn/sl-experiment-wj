@@ -11,6 +11,6 @@ Authors: Ivan Kondratyev (Inkaros), Kushaan Gupta, Natalie Yeung, Katlynn Ryu, J
 
 from ataraxis_base_utilities import console
 
-# Ensures console is enabled whenever this library is imported.
+# Ensures the console is enabled whenever this library is imported.
 if not console.enabled:
     console.enable()

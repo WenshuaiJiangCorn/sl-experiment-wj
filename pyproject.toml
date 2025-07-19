@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "3.0.0rc1"
+version = "3.0.0"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -46,10 +46,12 @@ dependencies = [
     "tabulate==0.9.0",
     "click==8.2.1",
     "numpy==2.2.6",
+    "numba==0.61.2",
+    "intel-cmplr-lib-rt==2025.1.1",
     "scipy==1.16.0",
     "matplotlib==3.10.3",
     "ataraxis-time==3.0.0",
-    "ataraxis-base-utilities==3.0.1",
+    "ataraxis-base-utilities==3.1.0",
     "ataraxis-data-structures==3.1.1",
     "ataraxis-transport-layer-pc==1.1.0",
     "ataraxis-communication-interface==3.2.1",
@@ -61,7 +63,7 @@ dependencies = [
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
     "natsort==8.4.0",
-    "sl-shared-assets==3.0.0rc1",
+    "sl-shared-assets==3.0.0",
 ]
 
 [project.urls]
@@ -77,6 +79,7 @@ Documentation = "https://sl-experiment-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy==2.2.6",
+    "numba==0.61.2",
     "tifffile==2025.6.11",
     "tqdm==4.67.1",
     "matplotlib==3.10.3",
@@ -149,7 +152,7 @@ dev = [
 sl-crc = "sl_experiment.cli:calculate_crc"
 sl-devices = "sl_experiment.cli:list_devices"
 sl-create-system-config = "sl_experiment.cli:generate_system_configuration_file"
-sl-create-project = "sl_experiment.cli:generate_project_configuration_file"
+sl-create-project = "sl_experiment.cli:generate_project_data_structure"
 sl-create-experiment = "sl_experiment.cli:generate_experiment_configuration_file"
 sl-maintain = "sl_experiment.cli:maintain_acquisition_system"
 sl-lick-train = "sl_experiment.cli:lick_training"

@@ -5,7 +5,6 @@ efficiently and losslessly compressing the raw data and moving it to the BioHPC 
 
 import os
 import json
-import time
 import shutil as sh
 from typing import Any
 from pathlib import Path
@@ -25,10 +24,11 @@ from sl_shared_assets import (
     Server,
     SessionData,
     SurgeryData,
+    SessionTypes,
     ProcessingTracker,
-    ProjectConfiguration,
     RunTrainingDescriptor,
     LickTrainingDescriptor,
+    WindowCheckingDescriptor,
     MesoscopeExperimentDescriptor,
     transfer_directory,
     calculate_directory_checksum,
@@ -61,23 +61,24 @@ def _delete_directory(directory_path: Path) -> None:
 
     # Deletes files in parallel
     with ThreadPoolExecutor() as executor:
-        list(executor.map(os.unlink, files))  # Forces completion of all tasks\
+        list(executor.map(os.unlink, files))  # Forces completion of all tasks
 
     # Recursively deletes subdirectories
     for subdir in subdirectories:
         _delete_directory(subdir)
 
-    # Removes the now-empty directory. Since Windows (ScanImagePC) is slow to release handles at some points, adds an
-    # optional delay step to give Windows time to release file handles.
+    # Removes the now-empty root directory. Since Windows (ScanImagePC) is sometimes slow to release file handles, adds
+    # an optional delay step to give Windows time to release file handles.
     max_attempts = 5
+    delay_timer = PrecisionTimer("ms")
     for attempt in range(max_attempts):
+        # noinspection PyBroadException
         try:
             os.rmdir(directory_path)
             break  # Breaks early if the call succeeds
         except Exception:
-            if attempt == max_attempts - 1:
-                break  # Breaks after 5 attempts
-            time.sleep(0.5)  # For each failed attempt, sleeps for 500 ms
+            delay_timer.delay_noblock(delay=500, allow_sleep=True)  # For each failed attempt, sleeps for 500 ms
+            continue
 
 
 def _check_stack_size(file: Path) -> int:
@@ -97,14 +98,14 @@ def _check_stack_size(file: Path) -> int:
         If the file is a stack, returns the number of frames (pages) in the stack. Otherwise, returns 0 to indicate that
         the file is not a stack.
     """
-    with tifffile.TiffFile(file) as tif:
+    with tifffile.TiffFile(file) as tiff:
         # Gets number of pages (frames) from tiff header
-        n_frames = len(tif.pages)
+        n_frames = len(tiff.pages)
 
         # Considers all files with more than one page and a 2-dimensional (monochrome) image as a stack. For these
         # stacks, returns the discovered stack size (number of frames). Also ensures that the files have the ScanImage
-        # metadata. This latter step will exclude already processed BigTiff files.
-        if n_frames > 1 and len(tif.pages[0].shape) == 2 and tif.scanimage_metadata is not None:
+        # metadata. This latter step will exclude already converted .tiff files from reprocessing.
+        if n_frames > 1 and len(tiff.pages[0].shape) == 2 and tiff.scanimage_metadata is not None:
             return n_frames
         # Otherwise, returns 0 to indicate that the file is not a stack.
         return 0
@@ -248,7 +249,7 @@ def _process_stack(
 
         # Computes the starting and ending frame number
         start_frame = first_frame_number  # This is precomputed to be correct, no adjustment needed
-        end_frame = first_frame_number + stack_size - 1  # Ending frame number is length - 1 + start
+        end_frame = first_frame_number + stack_size - 1  # The ending frame number is length - 1 + start
 
         # Creates the output path for the compressed stack. Uses 6-digit padding for frame numbering
         output_path = output_directory.joinpath(f"mesoscope_{str(start_frame).zfill(6)}_{str(end_frame).zfill(6)}.tiff")
@@ -284,7 +285,7 @@ def _process_stack(
                             [compressed_stack.pages[i].asarray() for i in range(start_idx, end_idx)]
                         )
 
-                        # Compares with original batch
+                        # Compares with the original batch
                         if not np.array_equal(compressed_batch, original_batch):
                             message = (
                                 f"Compressed batch {batch_idx + 1}/{num_batches} in {output_path} does not match the "
@@ -346,8 +347,7 @@ def _generate_ops(
     if isinstance(si_rois, dict):
         si_rois = [si_rois]
 
-    # Extracts the ROI dimensions for each ROI. Original code says 'for each z-plane; but nplanes is not used anywhere
-    # in these computations:
+    # Extracts the ROI dimensions for each ROI.
 
     # Preallocates output arrays
     nrois = len(si_rois)
@@ -387,7 +387,7 @@ def _generate_ops(
 
     # Generates the data to be stored as the JSON config based on the result of the computations above.
     # Note, most of these values were filled based on the 'prototype' ops.json from Tyche F3. For our pipeline they are
-    # mostly not relevant, except for the "'fs", ""nplanes", and ""nrois".
+    # mostly not relevant, except for the "fs", ""nplanes", and "nrois".
     data: dict[str, int | float | list[Any]] = {
         "fs": framerate,
         "nplanes": nplanes,
@@ -405,7 +405,7 @@ def _generate_ops(
         data["dy"] = [round(min_positions[i, 0]) for i in range(nrois)]
         data["lines"] = [list(range(int(roi_rows[0, i]), int(roi_rows[1, i]))) for i in range(nrois)]
 
-    # Saves the generated config as JSON file (ops.json)
+    # Saves the generated config as a JSON file (ops.json)
     with open(ops_path, "w") as f:
         # noinspection PyTypeChecker
         json.dump(data, f, separators=(",", ":"), indent=None)  # Maximizes data compression
@@ -498,8 +498,8 @@ def _pull_mesoscope_data(
 
     This function should be called after the data acquisition runtime to aggregate all recorded data on the VRPC
     before running the preprocessing pipeline. The function expects that the mesoscope frames source directory
-    contains only the frames acquired during the current session runtime and the MotionEstimator.me file used for
-    motion registration.
+    contains only the frames acquired during the current session runtime alongside additional data, such as
+    MotionEstimation .csv files.
 
     Notes:
         It is safe to call this function for sessions that did not acquire mesoscope frames. It is designed to
@@ -512,10 +512,6 @@ def _pull_mesoscope_data(
         This function is configured to parallelize data transfer and verification to optimize runtime speeds where
         possible.
 
-        When the function is called for the first time for a particular project and animal combination, it also
-        'persists' the MotionEstimator.me file before moving all mesoscope data to the VRPC. This creates the
-        reference for all further motion estimation procedures carried out during future sessions.
-
     Args:
         session_data: The SessionData instance for the processed session.
         remove_sources: Determines whether to remove the transferred mesoscope frame data from the ScanImagePC.
@@ -523,13 +519,13 @@ def _pull_mesoscope_data(
             this to True will only mark the data for removal. The removal is carried out by the dedicated data purging
             function that runs at the end of the session data preprocessing sequence.
         verify_transfer_integrity: Determines whether to verify the integrity of the transferred data. This is
-            performed before source folder is marked for removal from the ScanImagePC if remove_sources is True.
+            performed before the source folder is marked for removal from the ScanImagePC if remove_sources is True.
     """
     # Uses the input SessionData instance to determine the path to the folder that stores raw mesoscope data on the
     # ScanImage PC.
     session_name = session_data.session_name
     mesoscope_data = MesoscopeData(session_data)
-    source = Path(mesoscope_data.scanimagepc_data.session_specific_path)
+    source = mesoscope_data.scanimagepc_data.session_specific_path
 
     # If the source folder does not exist or is already marked for deletion by the ubiquitin marker, the mesoscope data
     # has already been pulled to the VRPC and there is no need to pull the frames again. In this case, returns early
@@ -539,14 +535,14 @@ def _pull_mesoscope_data(
     # Otherwise, if the source exists and is not marked for deletion, pulls the frame to the target directory:
 
     # Precreates the temporary storage directory for the pulled data.
-    destination = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
+    destination = session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames")
     ensure_directory_exists(destination)
 
     # Defines the set of extensions to look for when verifying source folder contents
-    extensions = {"*.me", "*.mat", "*.tiff", "*.tif"}
+    extensions = {"*.me", "*.tiff", "*.tif", "*.roi"}
 
     # Verifies that all required files are present on the ScanImage PC. This loop will run until the user ensures
-    # all files are present or fails five times in a row.
+    # all files are present or fail five times in a row.
     error = False
     for attempt in range(5):  # A maximum of 5 reattempts is allowed
         # Extracts the names of files stored in the source folder
@@ -554,7 +550,7 @@ def _pull_mesoscope_data(
         file_names: tuple[str, ...] = tuple([file.name for file in files])
         error = False  # Resets the error tracker at the beginning of each cycle
 
-        # Ensures the folder contains motion estimator data files
+        # Ensures the folder contains the MotionEstimator.me file
         if "MotionEstimator.me" not in file_names:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
@@ -564,16 +560,29 @@ def _pull_mesoscope_data(
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
 
-        # Prevents pulling an empty folder. At a minimum, we expect 1 motion estimation file and 1 TIFF stack file
-        if len(files) < 2:
+        # Ensures the folder contains the fov.roi file
+        if "fov.roi" not in file_names:
             message = (
                 f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
-                f"'mesoscope_frames' ScanImage PC for the session {session_name} does not contain the minimum expected "
-                f"number of files (2). This indicates that no frames were acquired during runtime or that the frames "
-                f"were saved at a different location."
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"required fov.roi file."
             )
             console.echo(message=message, level=LogLevel.ERROR)
             error = True
+
+        # Ensures the folder contains the zstack_00000_00001.tif file
+        if "zstack_00000_00001.tif" not in file_names:
+            message = (
+                f"Unable to pull the mesoscope-acquired data from the ScanImage PC to the VRPC. The "
+                f"'mesoscope_frames' ScanImage PC directory for the session {session_name} does not contain the "
+                f"required zstack_00000_00001.tif file."
+            )
+            console.echo(message=message, level=LogLevel.ERROR)
+            error = True
+
+        # Since version 3.0.0, this runtime is designed to pull the mesoscope_data to VRPC even if it contains no TIFF
+        # stacks. THis is to support processing window checking runtime data, which only generates the
+        # MotionEstimator.me, the fov.roi, and the zstack_00000_00001.tif files.
 
         # Breaks the loop if all files are present
         if not error:
@@ -597,18 +606,16 @@ def _pull_mesoscope_data(
         )
         console.error(message=message, error=RuntimeError)
 
-    # If the processed project and animal combination does not have a reference MotionEstimator.me saved in the
-    # persistent ScanImagePC directory, copies the MotionEstimator.me to the persistent directory. This ensures that
-    # the first ever created MotionEstimator.me is saved as the reference MotionEstimator.me for further sessions.
-    persistent_motion_estimator_path = Path(mesoscope_data.scanimagepc_data.motion_estimator_path)
-    if not persistent_motion_estimator_path.exists():
-        sh.copy2(src=source.joinpath("MotionEstimator.me"), dst=persistent_motion_estimator_path)
+    # Removes all binary files from the source directory before transferring. This ensures that the directory
+    # does not contain any marker files used during runtime.
+    for bin_file in source.glob("*.bin"):
+        bin_file.unlink(missing_ok=True)
 
     # Generates the checksum for the source folder if transfer integrity verification is enabled.
     if verify_transfer_integrity:
         calculate_directory_checksum(directory=source, num_processes=None, save_checksum=True)
 
-    # Transfers the mesoscope frames data from the ScanImage PC to the local machine.
+    # Transfers the mesoscope frames data from the ScanImagePC to the local machine.
     transfer_directory(
         source=source, destination=destination, num_threads=num_threads, verify_integrity=verify_transfer_integrity
     )
@@ -646,7 +653,7 @@ def _preprocess_mesoscope_directory(
     Notes:
         This function is specifically calibrated to work with TIFF stacks produced by the ScanImage matlab software.
         Critically, these stacks are named using '_' to separate acquisition and stack number from the rest of the
-        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1__00001_00067.tif'. If the
+        file name, and the stack number is always found last, e.g.: 'Tyche-A7_2022_01_25_1_00001_00067.tif'. If the
         input TIFF files do not follow this naming convention, the function will not process them. Similarly, if the
         stacks do not contain ScanImage metadata, they will be excluded from processing.
 
@@ -658,6 +665,11 @@ def _preprocess_mesoscope_directory(
         In addition to frame compression and data extraction, this function also generates the ops.json configuration
         file. This file is used during suite2p cell registration, performed as part of our standard data processing
         pipeline.
+
+        This function is purposefully designed to collapse data from multiple acquisitions stored inside the same
+        directory into the same frame volume. This implementation was chosen based on the specific patterns of data
+        acquisition in the Sun lab, where all data acquired for a single session is necessarily expected to belong to
+        the same acquisition.
 
     Args:
         session_data: The SessionData instance for the processed session.
@@ -674,14 +686,36 @@ def _preprocess_mesoscope_directory(
             number of frames will be loaded from each stack processed in parallel.
     """
     # Resolves the path to the temporary directory used to store all mesoscope data before it is preprocessed
-    image_directory = Path(session_data.raw_data.raw_data_path).joinpath("raw_mesoscope_frames")
+    image_directory = session_data.raw_data.raw_data_path.joinpath("raw_mesoscope_frames")
 
-    # If raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were not
-    # acquired at all. Aborts processing early.
+    # If the raw_mesoscope_frames directory does not exist, either the mesoscope frames are already processed or were
+    # not acquired at all. Aborts processing early.
     if not image_directory.exists():
         return
 
-    # Otherwise, resolves the paths to the output directories and files
+    # Handles special acquisition files that need to be processed differently to the TIFF stacks. These files are
+    # generated directly by the setupAcquisition() MATLAB function as part of preparing for the main experiment runtime.
+    mesoscope_data = MesoscopeData(session_data=session_data)
+    target_files = (
+        image_directory.joinpath("MotionEstimator.me"),
+        image_directory.joinpath("fov.roi"),
+        image_directory.joinpath("zstack_00000_00001.tif"),
+    )
+
+    # If necessary, persists the MotionEstimator and the fov.roi files to the 'persistent data' folder of the processed
+    # animal on the ScanImagePC.
+    if not mesoscope_data.scanimagepc_data.roi_path.exists():
+        sh.copy2(target_files[1], mesoscope_data.scanimagepc_data.roi_path)
+    if not mesoscope_data.scanimagepc_data.motion_estimator_path.exists():
+        sh.copy2(target_files[0], mesoscope_data.scanimagepc_data.motion_estimator_path)
+
+    # Moves all files to the mesoscope_data directory without any further processing.
+    sh.move(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
+    sh.move(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
+    # Renames to 'zstack.tiff'
+    sh.move(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
+
+    # Resolves the paths to the output directories and files
     output_directory = Path(session_data.raw_data.mesoscope_data_path)
     ensure_directory_exists(output_directory)  # Generates the directory
     frame_invariant_metadata_path = output_directory.joinpath("frame_invariant_metadata.json")
@@ -706,14 +740,16 @@ def _preprocess_mesoscope_directory(
     frame_numbers = []
     starting_frame = 1
     for file in tiff_files:
-        stack_size = _check_stack_size(file)
-        if stack_size > 0:
-            # Appends the starting frame number to the list and increments the stack list
-            frame_numbers.append(starting_frame)
-            starting_frame += stack_size
+        if "session" in file.name:  # All valid mesoscope data files acquired in the lab are named 'session'.
+            stack_size = _check_stack_size(file)
+            if stack_size > 0:
+                # Appends the starting frame number to the list and increments the stack list
+                frame_numbers.append(starting_frame)
+                starting_frame += stack_size
+
         else:
             # Stack size of 0 suggests that the checked file is not a ScanImage TIFF stack, so it is removed from
-            # processing
+            # processing. Also, all files other than 'session' are not considered for further processing since 3.0.0.
             tiff_files.remove(file)
 
     # Converts to tuple for efficiency
@@ -722,6 +758,10 @@ def _preprocess_mesoscope_directory(
 
     # Ends the runtime early if there are no valid TIFF files to process after filtering
     if len(tiff_files) == 0:
+        # If configured, the processing function ensures that the temporary image directory with all TIFF source files
+        # is removed after processing.
+        if remove_sources:
+            _delete_directory(image_directory)
         return
 
     # Extracts frame invariant metadata using the first frame of the first TIFF stack. Since this metadata is the
@@ -766,13 +806,8 @@ def _preprocess_mesoscope_directory(
     metadata_dict = {key: np.concatenate(value) for key, value in all_metadata.items()}
     np.savez_compressed(frame_variant_metadata_path, **metadata_dict)
 
-    # Moves motion estimator files to the mesoscope_frames directory. This way, ALL mesoscope-related data is stored
-    # under mesoscope_frames.
-    sh.move(
-        src=image_directory.joinpath("MotionEstimator.me"),
-        dst=output_directory.joinpath("MotionEstimator.me"),
-    )
-    # If configured, the processing function ensures that
+    # If configured, the processing function ensures that the temporary image directory with all TIFF source files is
+    # removed after processing.
     if remove_sources:
         _delete_directory(image_directory)
 
@@ -822,7 +857,7 @@ def _preprocess_log_directory(
             remove_sources=remove_sources,
             memory_mapping=False,
             verbose=True,
-            compress=True,
+            compress=False,  # Does not compress the data, as compression greatly reduces the speed of post-processing.
             verify_integrity=verify_integrity,
             max_workers=num_processes,
         )
@@ -859,14 +894,16 @@ def _resolve_telomere_marker(session_data: SessionData) -> None:
     # Loads the session descriptor file to read the state of the 'incomplete' flag.
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
-    if session_data.session_type.lower() == "lick training":
+    if session_data.session_type == SessionTypes.LICK_TRAINING:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "run training":
+    elif session_data.session_type == SessionTypes.RUN_TRAINING:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "mesoscope experiment":
+    elif session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
     else:
-        # Aborts early (without creating the telomere.bin marker file) for any other session type
+        # Aborts early (without creating the telomere.bin marker file) for any other session type. This statically
+        # ignores the descriptor of the Window Checking sessions, as all window checking sessions are considered
+        # incomplete.
         return
 
     # If the session is complete, generates the telomere.bin marker file. Note, window checking sessions are
@@ -894,12 +931,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Queries the data acquisition system configuration parameters.
     system_configuration = get_system_configuration()
 
-    # Loads ProjectConfiguration class using the path stored inside the SessionData instance. This is necessary to
-    # retrieve the Google sheet ID data.
-    project_configuration: ProjectConfiguration = ProjectConfiguration.from_yaml(
-        Path(session_data.raw_data.project_configuration_path),  # type: ignore
-    )
-
     # Resolves the animal ID (name)
     animal_id = int(session_data.animal_id)
 
@@ -908,19 +939,19 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
     quality: str | int = ""
-    if session_data.session_type.lower() == "lick training":
+    if session_data.session_type == SessionTypes.LICK_TRAINING:
         descriptor = LickTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "run training":
+    elif session_data.session_type == SessionTypes.RUN_TRAINING:
         descriptor = RunTrainingDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "mesoscope experiment":
+    elif session_data.session_type == SessionTypes.MESOSCOPE_EXPERIMENT:
         descriptor = MesoscopeExperimentDescriptor.from_yaml(descriptor_path)  # type: ignore
-    elif session_data.session_type.lower() == "window checking":
-        # Animals that undergo Window checking typically do not yet have a tab in the water restriction log. Therefore,
-        # the WR updating is skipped for these animals. Instead, surgery_log is updated to reflect the quality of
-        # surgery, based on the window checking outcome
-        while not quality.isnumeric() or int(quality) < 0 or int(quality) > 3:  # type: ignore
-            # Forces the user to provide a quality rating between 0 and 3 inclusive.
-            quality = input("Enter the surgery quality level between 0 and 3 inclusive: ")
+    elif session_data.session_type == SessionTypes.WINDOW_CHECKING:
+        window_descriptor: WindowCheckingDescriptor = WindowCheckingDescriptor.from_yaml(  # type: ignore
+            descriptor_path
+        )
+
+        # Ensures that the quality is always between 0 and 3 inclusive
+        quality = int(np.clip(np.uint8(window_descriptor.surgery_quality), a_min=np.uint8(0), a_max=np.uint8(3)))
     else:
         message = (
             f"Unable to extract the water restriction data from the session descriptor file for session "
@@ -947,7 +978,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
             session_date=session_data.session_name,
             animal_id=animal_id,
             credentials_path=Path(system_configuration.paths.google_credentials_path),
-            sheet_id=project_configuration.water_log_sheet_id,
+            sheet_id=system_configuration.sheets.water_log_sheet_id,
         )
 
         wr_sheet.update_water_log(
@@ -965,10 +996,10 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
         project_name=session_data.project_name,
         animal_id=animal_id,
         credentials_path=Path(system_configuration.paths.google_credentials_path),
-        sheet_id=project_configuration.surgery_sheet_id,
+        sheet_id=system_configuration.sheets.surgery_sheet_id,
     )
 
-    # If surgery quality value was obtained above, updates the surgery quality column value with the provided value
+    # If the surgery quality value was obtained above, updates the surgery quality column value with the provided value
     if quality != "":
         sl_sheet.update_surgery_quality(quality=int(quality))
 
@@ -1055,7 +1086,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
 
     This service function runs at the end of the data preprocessing pipeline, after the data has been transferred to
     the BioHPC server. Primarily, it is used to verify that the data was moved intact, and it is safe to delete the
-    local copy of the data stored on the VRPC. Additionally, it is the only function allowed to crate processed
+    local copy of the data stored on the VRPC. Additionally, it is the only function allowed to create processed
     data directories on the BioHPC server, which is a prerequisite for all further data processing steps.
 
     Notes:
@@ -1064,7 +1095,7 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         enough spare resources to run the job.
 
         If integrity verification fails, this job will delete the telomere.bin marker file stored in the session's
-        raw_data folder on the server. If it succeeds, the job will generate an ubiquitin.bin marker file in the
+        raw_data folder on the server. If it succeeds, the job will generate the 'ubiquitin.bin' marker file in the
         local (VRPC) session's raw_data folder, marking it for deletion. Generating the deletion marker file will not
         itself delete the data, that step is performed at a later time point by a dedicated 'purging' function.
 
@@ -1149,11 +1180,37 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
         server.remove(remote_path=stderr_file, is_dir=False)
         server.remove(remote_path=stdout_file, is_dir=False)
 
-        # Dumps an 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
+        # Dumps the 'ubiquitin.bin' marker file into the raw_data folder on the VRPC, marking the folder for deletion.
         session_data.raw_data.ubiquitin_path.touch(exist_ok=True)
 
     # Disconnects from the server
     server.close()
+
+
+def rename_mesoscope_directory(session_data: SessionData) -> None:
+    """This function renames the 'shared' mesoscope_data directory to use the name specific to the target session.
+
+    Since this is an essential step for the preprocessing pipeline to discover and pull the mesoscope data to VRPC
+    during preprocessing, it has to be done before running the mesoscope data preprocessing. Ideally, this function
+    should be called by the MesoscopeVRSystem stop() method, but it is also called by the preprocessing pipeline's
+    main function.
+    """
+    mesoscope_data = MesoscopeData(session_data)
+    # If necessary, renames the 'shared' mesoscope_data directory to use the name specific to the preprocessed session.
+    # It is essential that this is done before preprocessing, as the preprocessing pipeline uses this semantic for
+    # finding and pulling the mesoscope data for the processed session.
+    general_path = mesoscope_data.scanimagepc_data.mesoscope_data_path
+    session_specific_path = mesoscope_data.scanimagepc_data.session_specific_path
+
+    # Note, the renaming only happens if the session-specific cache does not exist, the general mesoscope_frames cache
+    # exists, and it is not empty (has files inside).
+    if (
+        not session_specific_path.exists()
+        and general_path.exists()
+        and len([path for path in general_path.glob("*")]) > 0
+    ):
+        general_path.rename(session_specific_path)
+        ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
 
 
 def preprocess_session_data(session_data: SessionData) -> None:
@@ -1170,25 +1227,9 @@ def preprocess_session_data(session_data: SessionData) -> None:
     message = f"Initializing session {session_data.session_name} data preprocessing..."
     console.echo(message=message, level=LogLevel.INFO)
 
-    # Instantiates additional required dataclasses
-    mesoscope_data = MesoscopeData(session_data)
-
-    # If the instance manages a session that acquired mesoscope frames, renames the generic mesoscope_frames
-    # directory to include the session name. It is essential that this is done before preprocessing, as
-    # the preprocessing pipeline uses this semantic for finding and pulling the mesoscope data for the processed
-    # session.
-    general_path = Path(mesoscope_data.scanimagepc_data.mesoscope_data_path)
-    session_specific_path = Path(mesoscope_data.scanimagepc_data.session_specific_path)
-
-    # Note, the renaming only happens if the session-specific cache does not exist, the general
-    # mesoscope_frames cache exists, and it is not empty (has files inside).
-    if (
-        not session_specific_path.exists()
-        and general_path.exists()
-        and len([path for path in general_path.glob("*")]) > 0
-    ):
-        general_path.rename(session_specific_path)
-        ensure_directory_exists(general_path)  # Generates a new empty mesoscope_frames directory
+    # If necessary, ensures that the mesoscope_data ScanImagePC directory is renamed to include the processed session
+    # name.
+    rename_mesoscope_directory(session_data=session_data)
 
     # Compresses all log entries (.npy) into archive files (.npz)
     _preprocess_log_directory(session_data=session_data, num_processes=31, remove_sources=True, verify_integrity=False)
@@ -1268,6 +1309,8 @@ def purge_redundant_data() -> None:
 
     # If there are no deletion candidates, returns without further processing
     if len(deletion_candidates) == 0:
+        message = "No redundant data to purge. Runtime: Complete."
+        console.echo(message=message, level=LogLevel.SUCCESS)
         return
 
     # Removes all discovered redundant data directories
@@ -1287,26 +1330,31 @@ def purge_failed_session(session_data: SessionData) -> None:
     Args:
         session_data: The SessionData instance for the session whose data needs to be removed.
     """
-    message = (
-        f"Preparing to remove all data for session {session_data.session_name} from animal "
-        f"{session_data.animal_id}. Warning, this process is NOT reversible and removes ALL session data. Are you sure "
-        f"you want to proceed?"
-    )
-    console.echo(message=message, level=LogLevel.WARNING)
 
-    # Locks and waits for user response
-    while True:
-        answer = input("Enter 'yes' (to proceed) or 'no' (to abort): ")
+    # If a session does not contain the nk.bin marker, this suggests that it was able to successfully initialize the
+    # runtime and likely contains valid data. IN this case, asks the user to confirm they intend to proceed with the
+    # deletion. Sessions with nk.bin markers are considered safe for removal at all times.
+    if not session_data.raw_data.nk_path.exists():
+        message = (
+            f"Preparing to remove all data for session {session_data.session_name} from animal "
+            f"{session_data.animal_id}. Warning, this process is NOT reversible and removes ALL session data. Are you "
+            f"sure you want to proceed?"
+        )
+        console.echo(message=message, level=LogLevel.WARNING)
 
-        # Continues with the deletion
-        if answer.lower() == "yes":
-            break
+        # Locks and waits for user response
+        while True:
+            answer = input("Enter 'yes' (to proceed) or 'no' (to abort): ")
 
-        # Aborts without deleting
-        elif answer.lower() == "no":
-            message = f"Session {session_data.session_name} data purging: Aborted"
-            console.echo(message=message, level=LogLevel.SUCCESS)
-            return
+            # Continues with the deletion
+            if answer.lower() == "yes":
+                break
+
+            # Aborts without deleting
+            elif answer.lower() == "no":
+                message = f"Session {session_data.session_name} data purging: Aborted"
+                console.echo(message=message, level=LogLevel.SUCCESS)
+                return
 
     # Uses MesoscopeData to query the paths to all known session data directories. This includes the directories on the
     # NAS and the BioHPC server.
@@ -1322,6 +1370,10 @@ def purge_failed_session(session_data: SessionData) -> None:
     # Removes all session-specific data directories from all destinations
     for candidate in tqdm(deletion_candidates, desc="Deleting session directories", unit="directory"):
         _delete_directory(directory_path=candidate)
+
+    # Ensures that the mesoscope_data directory is reset, in case it has any lingering from the purged runtime.
+    for file in mesoscope_data.scanimagepc_data.mesoscope_data_path.glob("*"):
+        file.unlink(missing_ok=True)
 
     message = "Session data purging: Complete"
     console.echo(message=message, level=LogLevel.SUCCESS)

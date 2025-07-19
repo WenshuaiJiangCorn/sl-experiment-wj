@@ -7,7 +7,7 @@ import click
 from sl_shared_assets import (
     SessionData,
     ExperimentState,
-    ProjectConfiguration,
+    ExperimentTrial,
     MesoscopeSystemConfiguration,
     MesoscopeExperimentConfiguration,
     get_system_configuration_data,
@@ -132,47 +132,26 @@ def generate_system_configuration_file(output_directory: str, acquisition_system
     required=True,
     help="The name of the project to be created.",
 )
-@click.option(
-    "-sli",
-    "--surgery_log_id",
-    type=str,
-    required=True,
-    help="The 44-symbol alpha-numeric ID code used by the project's surgery log Google sheet.",
-)
-@click.option(
-    "-wli",
-    "--water_restriction_log_id",
-    type=str,
-    required=True,
-    help="The 44-symbol alpha-numeric ID code used by the project's water restriction log Google sheet.",
-)
-def generate_project_configuration_file(project: str, surgery_log_id: str, water_restriction_log_id: str) -> None:
-    """Generates a new project directory hierarchy and writes its configuration as a project_configuration.yaml file.
+def generate_project_data_structure(project: str) -> None:
+    """Generates a new project directory hierarchy on the local machine.
 
     This command creates new Sun lab projects. Until a project is created in this fashion, all data-acquisition and
-    data-processing commands from sl-experiment and sl-forgery libraries targeting the project will not work. This
-    command is intended to be called on the main computer of the data-acquisition system(s) used by the project. Note,
-    this command assumes that the local machine (PC) is the main PC of the data acquisition system and has a valid
-    acquisition system configuration .yaml file.
+    data-processing commands from sl-experiment library targeting the project will not work. This command is intended to
+    be called on the main computer of the data-acquisition system(s) used by the project. Note, this command assumes
+    that the local machine (PC) is the main PC of the data acquisition system and has a valid acquisition system
+    configuration .yaml file.
     """
 
     # Queries the data acquisition configuration data. Specifically, this is used to get the path to the root
     # directory where all projects are stored on the local machine.
     system_configuration = get_system_configuration_data()
-    file_path = system_configuration.paths.root_directory.joinpath(
-        project, "configuration", "project_configuration.yaml"
-    )
+    project_path = system_configuration.paths.root_directory.joinpath(project, "configuration")
 
     # Generates the initial project directory hierarchy
-    ensure_directory_exists(file_path)
+    ensure_directory_exists(project_path)
 
-    # Saves project configuration data as a .yaml file to the 'configuration' directory of the created project
-    configuration = ProjectConfiguration(
-        project_name=project, surgery_sheet_id=surgery_log_id, water_log_sheet_id=water_restriction_log_id
-    )
-    configuration.save(path=file_path.joinpath())
     # noinspection PyTypeChecker
-    console.echo(message=f"Project {project} data structure and configuration file: generated.", level=LogLevel.SUCCESS)
+    console.echo(message=f"Project {project} data structure: generated.", level=LogLevel.SUCCESS)
 
 
 @click.command()
@@ -197,11 +176,18 @@ def generate_project_configuration_file(project: str, surgery_log_id: str, water
     required=True,
     help="The total number of experiment and acquisition system state combinations in the experiment.",
 )
-def generate_experiment_configuration_file(project: str, experiment: str, state_count: int) -> None:
+@click.option(
+    "-tc",
+    "--trial_count",
+    type=int,
+    required=True,
+    help="The total number of unique trial types used in the experiment.",
+)
+def generate_experiment_configuration_file(project: str, experiment: str, state_count: int, trial_count: int) -> None:
     """Generates a precursor experiment configuration .yaml file for the target experiment inside the project's
     configuration folder.
 
-    This command assists users in creating new experiment configurations, by statically resolving the structure (layout)
+    This command assists users in creating new experiment configurations by statically resolving the structure (layout)
     of the appropriate experiment configuration file for the acquisition system of the local machine (PC). Specifically,
     the generated precursor will contain the correct number of experiment state entries initialized to nonsensical
     default value. The user needs to manually edit the configuration file to properly specify their experiment runtime
@@ -231,12 +217,27 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
             experiment_state_code=state + 1,  # Assumes experiment state sequences are 1-based
             system_state_code=0,
             state_duration_s=60,
+            initial_guided_trials=3,
+            recovery_failed_trial_threshold=9,
+            recovery_guided_trials=3,
+        )
+
+    # Loops over the number of requested trial motifs and, for each, generates an ExperimentTrial instance.
+    trials = {}
+    for trial in range(trial_count):
+        trials[f"trial_type_{trial + 1}"] = ExperimentTrial(
+            cue_sequence=[1, 0, 2, 0, 3, 0, 4, 0],
+            trial_length_cm=240,
+            trial_reward_size_ul=5.0,
+            reward_zone_start_cm=208.0,
+            reward_zone_end_cm=222.0,
+            guidance_trigger_location_cm=208.0,
         )
 
     # Depending on the acquisition system, packs state data into the appropriate experiment configuration class and
     # saves it to the project's configuration folder as a .yaml file.
     if acquisition_system.name == "mesoscope-vr":
-        experiment_configuration = MesoscopeExperimentConfiguration(experiment_states=states)
+        experiment_configuration = MesoscopeExperimentConfiguration(experiment_states=states, trial_structures=trials)
 
     else:
         message = (
@@ -254,7 +255,7 @@ def generate_experiment_configuration_file(project: str, experiment: str, state_
 
 @click.command()
 def maintain_acquisition_system() -> None:
-    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running wheel break.
+    """Exposes a terminal interface to interact with the water delivery solenoid valve and the running-wheel break.
 
     This CLI command is primarily designed to fill, empty, check, and, if necessary, recalibrate the solenoid valve
     used to deliver water to animals during training and experiment runtimes. Also, it is capable of locking or
@@ -471,6 +472,7 @@ def lick_training(
     help="The maximum volume of water, in milliliters, that can be delivered during training.",
 )
 @click.option(
+    "-t",
     "--maximum_time",
     type=int,
     show_default=True,
@@ -625,6 +627,13 @@ def run_experiment(
 
 @click.command()
 @click.option(
+    "-u",
+    "--user",
+    type=str,
+    required=True,
+    help="The ID of the user supervising the experiment session.",
+)
+@click.option(
     "-p",
     "--project",
     type=str,
@@ -639,6 +648,7 @@ def run_experiment(
     help="The name of the animal undergoing the experiment session.",
 )
 def check_window(
+    user: str,
     project: str,
     animal: str,
 ) -> None:
@@ -650,7 +660,7 @@ def check_window(
     suit the animal. This command aggregates all steps necessary to verify and record the quality of the animal's window
     and to generate customized Mesoscope-VR parameters for the animal.
     """
-    window_checking_logic(project_name=project, animal_id=animal)
+    window_checking_logic(experimenter=user, project_name=project, animal_id=animal)
 
 
 @click.command()
@@ -706,7 +716,7 @@ def delete_session(session_path: Path) -> None:
     the host-machine.
 
     This is an EXTREMELY dangerous command that can potentially delete valuable data if not used well. This command is
-    intended exclusively for removing failed and test sessions from all computers used in Sun lab data acquisition
+    intended exclusively for removing failed and test sessions from all computers used in the Sun lab data acquisition
     process. Never call this command unless you know what you are doing.
     """
     session_path = Path(session_path)  # Ensures the path is wrapped into a Path object instance.

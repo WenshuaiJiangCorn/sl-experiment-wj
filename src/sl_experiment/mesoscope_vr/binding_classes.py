@@ -4,6 +4,7 @@ These bindings streamline the API used to interface with these components during
 from pathlib import Path
 
 import numpy as np
+from ataraxis_time import PrecisionTimer
 from sl_shared_assets import ZaberPositions
 from ataraxis_video_system import (
     VideoCodecs,
@@ -15,7 +16,7 @@ from ataraxis_video_system import (
     OutputPixelFormats,
 )
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import DataLogger, SharedMemoryArray
+from ataraxis_data_structures import DataLogger
 from ataraxis_time.time_helpers import convert_time
 from ataraxis_communication_interface import MicroControllerInterface
 
@@ -80,29 +81,32 @@ class ZaberMotors:
         # Retrieves the Mesoscope-VR system configuration parameters.
         system_configuration = get_system_configuration()
 
+        # Initializes the connection classes first to ensure all classes exist in case the runtime encounters
+        # an error during connection.
+        self._headbar: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.headbar_port)
+        self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
+        self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
+
         # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # headbar attached to the mouse's head in Z, Roll, and Pitch axes. Note, this assumes that the chaining
         # order of individual zaber devices is fixed and is always Z-Pitch-Roll.
-        self._headbar: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.headbar_port)
         self._headbar.connect()
         self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
         self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
         self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
 
-        # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
-        # the running wheel in the X axis.
-        self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
-        self._wheel.connect()
-        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
-
         # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
         # lick tube in Z, X, and Y axes. Note, this assumes that the chaining order of individual zaber devices is
         # fixed and is always Z-X-Y.
-        self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
         self._lickport.connect()
         self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
         self._lickport_y: ZaberAxis = self._lickport.get_device(1).axis
         self._lickport_x: ZaberAxis = self._lickport.get_device(2).axis
+
+        # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
+        # the running wheel in the X axis.
+        self._wheel.connect()
+        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
 
         # If the previous positions path points to an existing .yaml file, loads the data from the file into
         # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
@@ -130,37 +134,66 @@ class ZaberMotors:
             'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
             to work for most animals and provide an initial position for the animal to be mounted into the VR rig.
 
-            This method moves all Zaber axes in-parallel to optimize runtime speed. This relies on the Mesoscope-VR
+            This method moves all Zaber axes in parallel to optimize runtime speed. This relies on the Mesoscope-VR
             system to be assembled in a way where it is safe to move all motors at the same time.
         """
 
         # Disables the safety motor lock before moving the motors.
         self.unpark_motors()
 
-        # If the positions are not available, warns the user and sets the motors to the 'generic' mount position.
-        if self._previous_positions is None:
-            # Mounting position for the headbar and the wheel essentially mimics the parking position for the
-            # lickport motors.
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-            self._wheel_x.move(amount=self._wheel_x.mount_position, absolute=True, native=True)
-
-            # Since the goal of 'restore_positions' command is to set the system into a state compatible with imaging,
-            # the lickport is moved to the parking position. Parking position aligns it with the animal's face, whereas
-            # mounting position moves it to the far left corner.
-            self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
-            self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
-            self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
-        else:
-            # Otherwise, restores Zaber positions for all motors.
-            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
-            self._wheel_x.move(amount=self._previous_positions.wheel_x, absolute=True, native=True)
-            self._lickport_z.move(amount=self._previous_positions.lickport_z, absolute=True, native=True)
-            self._lickport_x.move(amount=self._previous_positions.lickport_x, absolute=True, native=True)
-            self._lickport_y.move(amount=self._previous_positions.lickport_y, absolute=True, native=True)
+        # If previous position data is available, restores all motors to the positions used during previous sessions.
+        # Otherwise, sets HeadBar and Wheel to mounting position and the LickPort to parking position. For LickPort,
+        # the only difference between parking and mounting positions is that the mounting position is retracted further
+        # away from the animal than the parking position.
+        self._headbar_z.move(
+            amount=self._headbar_z.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_z,
+            absolute=True,
+            native=True,
+        )
+        self._headbar_pitch.move(
+            amount=self._headbar_pitch.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_pitch,
+            absolute=True,
+            native=True,
+        )
+        self._headbar_roll.move(
+            amount=self._headbar_roll.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.headbar_roll,
+            absolute=True,
+            native=True,
+        )
+        self._wheel_x.move(
+            amount=self._wheel_x.mount_position
+            if self._previous_positions is None
+            else self._previous_positions.wheel_x,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_z.move(
+            amount=self._lickport_z.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_z,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_x.move(
+            amount=self._lickport_x.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_x,
+            absolute=True,
+            native=True,
+        )
+        self._lickport_y.move(
+            amount=self._lickport_y.park_position
+            if self._previous_positions is None
+            else self._previous_positions.lickport_y,
+            absolute=True,
+            native=True,
+        )
 
         # Waits for all motors to finish moving before returning to caller.
         self.wait_until_idle()
@@ -177,7 +210,7 @@ class ZaberMotors:
         method is called after this method to set the motors into the desired position.
 
         Notes:
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -206,7 +239,7 @@ class ZaberMotors:
 
         Notes:
             The motors are moved to the parking positions stored in the non-volatile memory of each motor controller.
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -235,7 +268,7 @@ class ZaberMotors:
         etc.).
 
         Notes:
-            This method moves all motor axes in-parallel to optimize runtime speed.
+            This method moves all motor axes in parallel to optimize runtime speed.
 
             Formerly, the only maintenance step was the calibration of the water-valve, so some low-level functions
             still reference it as 'valve-position' and 'calibrate-position'.
@@ -266,7 +299,7 @@ class ZaberMotors:
         animal is mounted into the VR rig to provide the experimenter with easy access to the head bar holder.
 
         Notes:
-            This method moves all MOTOR axes in-parallel to optimize runtime speed.
+            This method moves all MOTOR axes in parallel to optimize runtime speed.
         """
 
         # Disables the safety motor lock before moving the motors.
@@ -328,9 +361,9 @@ class ZaberMotors:
 
     def generate_position_snapshot(self) -> ZaberPositions:
         """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
-        instance, and returns it to caller.
+        instance, and returns it to the caller.
 
-        This method is used by runtime classes to update ZaberPositions instance c ached on disk for each animal.
+        This method is used by runtime classes to update the ZaberPositions instance cached on disk for each animal.
         The method also updates the local ZaberPositions copy stored inside the class instance with the data from the
         generated snapshot. Primarily, this has to be done to support the Zaber motor shutdown sequence.
         """
@@ -396,6 +429,16 @@ class ZaberMotors:
         self._lickport_y.unpark()
         self._lickport_z.unpark()
 
+    @property
+    def is_connected(self) -> bool:
+        """Returns True if all managed motor connections are active and False if at least one connection is inactive."""
+        connections = [
+            self._headbar.is_connected,
+            self._lickport.is_connected,
+            self._wheel.is_connected,
+        ]
+        return all(connections)
+
 
 class MicroControllerInterfaces:
     """Interfaces with all Ataraxis Micro Controller (AMC) devices that control Mesoscope-VR system hardware and acquire
@@ -430,8 +473,12 @@ class MicroControllerInterfaces:
         _previous_tone_duration: Tracks the auditory tone duration during previous deliver_reward() or simulate_reward()
             calls.
         _screen_state: Tracks the current VR screen state.
-        mesoscope_start: The interface that starts mesoscope frame acquisition via TTL pulse.
-        mesoscope_stop: The interface that stops mesoscope frame acquisition via TTL pulse.
+        _frame_monitoring: Tracks the current mesoscope frame monitoring state.
+        _torque_monitoring: Tracks the current torque monitoring state.
+        _lick_monitoring: Tracks the current lick monitoring state.
+        _encoder_monitoring: Tracks the current encoder monitoring state.
+        _break_state: Tracks the current break state.
+        _delay_timer: Stores a millisecond-precise timer used by certain sequential command methods.
         wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
         valve: The interface that controls the solenoid water valve that delivers water to the animal.
         screens: The interface that controls the power state of the VR display screens.
@@ -454,7 +501,7 @@ class MicroControllerInterfaces:
         self._system_configuration = get_system_configuration()
 
         # Converts the general sensor polling delay and stores it in class attribute. Unless other duration / delay
-        # parameters, this one is frequently queries by class methods, so it is beneficial to statically compute
+        # parameters, this one is frequently queried by class methods, so it is beneficial to statically compute
         # it once.
         self._sensor_polling_delay: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.sensor_polling_delay_ms, from_units="ms", to_units="us"
@@ -464,20 +511,19 @@ class MicroControllerInterfaces:
         self._previous_volume: float = 0.0
         self._previous_tone_duration: int = 0
         self._screen_state: bool = False
+        self._frame_monitoring: bool = False
+        self._torque_monitoring: bool = False
+        self._lick_monitoring: bool = False
+        self._encoder_monitoring: bool = False
+        self._break_state: bool = True  # The break is normally engaged, so it starts engaged by default
+
+        self._delay_timer = PrecisionTimer("ms")
 
         # ACTOR. Actor AMC controls the hardware that needs to be triggered by PC at irregular intervals. Most of such
         # hardware is designed to produce some form of an output: deliver water reward, engage wheel breaks, issue a
         # TTL trigger, etc.
 
         # Module interfaces:
-        self.mesoscope_start: TTLInterface = TTLInterface(
-            module_id=np.uint8(1),  # Hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.mesoscope_stop: TTLInterface = TTLInterface(
-            module_id=np.uint8(2),  # Hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
         self.wheel_break = BreakInterface(
             minimum_break_strength=self._system_configuration.microcontrollers.minimum_break_strength_g_cm,
             maximum_break_strength=self._system_configuration.microcontrollers.maximum_break_strength_g_cm,
@@ -499,7 +545,7 @@ class MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,  # Hardcoded
             microcontroller_usb_port=self._system_configuration.microcontrollers.actor_port,
             data_logger=data_logger,
-            module_interfaces=(self.mesoscope_start, self.mesoscope_stop, self.wheel_break, self.valve, self.screens),
+            module_interfaces=(self.wheel_break, self.valve, self.screens),
         )
 
         # SENSOR. Sensor AMC controls the hardware that collects data at regular intervals. This includes lick sensors,
@@ -595,15 +641,6 @@ class MicroControllerInterfaces:
             delta_threshold=self._system_configuration.microcontrollers.wheel_encoder_delta_threshold_pulse,
         )
 
-        # Configures mesoscope start and stop trigger pulse durations
-        ttl_pulse_duration: float = convert_time(  # type: ignore
-            time=self._system_configuration.microcontrollers.mesoscope_ttl_pulse_duration_ms,
-            from_units="ms",
-            to_units="us",
-        )
-        self.mesoscope_start.set_parameters(pulse_duration=np.uint32(ttl_pulse_duration))
-        self.mesoscope_stop.set_parameters(pulse_duration=np.uint32(ttl_pulse_duration))
-
         # Configures screen trigger pulse duration
         screen_pulse_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.screen_trigger_pulse_duration_ms,
@@ -674,35 +711,35 @@ class MicroControllerInterfaces:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def enable_encoder_monitoring(self) -> None:
-        """Enables wheel encoder monitoring at 2 kHz rate.
+        """Enables wheel encoder monitoring at a 2 kHz rate.
 
         This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
         at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
         """
-        self.wheel_encoder.reset_pulse_count()
-        self.wheel_encoder.check_state(
-            repetition_delay=np.uint32(self._system_configuration.microcontrollers.wheel_encoder_polling_delay_us)
-        )
+        if not self._encoder_monitoring:
+            self.wheel_encoder.reset_pulse_count()
+            self.wheel_encoder.check_state(
+                repetition_delay=np.uint32(self._system_configuration.microcontrollers.wheel_encoder_polling_delay_us)
+            )
+            self._encoder_monitoring = True
 
     def disable_encoder_monitoring(self) -> None:
         """Stops monitoring the wheel encoder."""
-        self.wheel_encoder.reset_command_queue()
-
-    def start_mesoscope(self) -> None:
-        """Sends the acquisition start TTL pulse to the mesoscope."""
-        self.mesoscope_start.send_pulse()
-
-    def stop_mesoscope(self) -> None:
-        """Sends the acquisition stop TTL pulse to the mesoscope."""
-        self.mesoscope_stop.send_pulse()
+        if self._encoder_monitoring:
+            self.wheel_encoder.reset_command_queue()
+            self._encoder_monitoring = False
 
     def enable_break(self) -> None:
         """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
-        self.wheel_break.toggle(state=True)
+        if not self._break_state:
+            self.wheel_break.toggle(state=True)
+            self._break_state = True
 
     def disable_break(self) -> None:
         """Disengages the wheel break, enabling the animal to run on the wheel."""
-        self.wheel_break.toggle(state=False)
+        if self._break_state:
+            self.wheel_break.toggle(state=False)
+            self._break_state = False
 
     def enable_vr_screens(self) -> None:
         """Sets the VR screens to be ON."""
@@ -724,11 +761,15 @@ class MicroControllerInterfaces:
         ~100ms. This is followed by ~5ms LOW phase during which the Galvos are executing the flyback procedure. This
         command checks the state of the TTL pin at the 1 kHZ rate, which is enough to accurately report both phases.
         """
-        self.mesoscope_frame.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._frame_monitoring:
+            self.mesoscope_frame.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._frame_monitoring = True
 
     def disable_mesoscope_frame_monitoring(self) -> None:
         """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
-        self.mesoscope_frame.reset_command_queue()
+        if self._frame_monitoring:
+            self.mesoscope_frame.reset_command_queue()
+            self._frame_monitoring = False
 
     def enable_lick_monitoring(self) -> None:
         """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
@@ -737,11 +778,15 @@ class MicroControllerInterfaces:
         reliable proxy for tongue-to-sensor contact. Most lick events span at least 100 ms of time and, therefore, the
         rate of 1 kHZ is adequate for resolving all expected single-lick events.
         """
-        self.lick.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._lick_monitoring:
+            self.lick.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._lick_monitoring = True
 
     def disable_lick_monitoring(self) -> None:
         """Stops monitoring the conductive lick sensor."""
-        self.lick.reset_command_queue()
+        if self._lick_monitoring:
+            self.lick.reset_command_queue()
+            self._lick_monitoring = False
 
     def enable_torque_monitoring(self) -> None:
         """Enables monitoring the torque sensor at ~ 1 kHZ rate.
@@ -751,11 +796,15 @@ class MicroControllerInterfaces:
         reliably distinguishes large torques from small torques and accurately tracks animal motion activity when the
         wheel break is engaged.
         """
-        self.torque.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+        if not self._torque_monitoring:
+            self.torque.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self._torque_monitoring = True
 
     def disable_torque_monitoring(self) -> None:
         """Stops monitoring the torque sensor."""
-        self.torque.reset_command_queue()
+        if self._torque_monitoring:
+            self.torque.reset_command_queue()
+            self._torque_monitoring = False
 
     def open_valve(self) -> None:
         """Opens the water reward solenoid valve.
@@ -789,7 +838,7 @@ class MicroControllerInterfaces:
         # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
         # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
         # reducing communication overhead.
-        if (volume != self._previous_volume or tone_duration != self._previous_tone_duration) and not ignore_parameters:
+        if not ignore_parameters and (volume != self._previous_volume or tone_duration != self._previous_tone_duration):
             # Parameters are cached here to use the tone_duration before it is converted to microseconds.
             self._previous_volume = volume
             self._previous_tone_duration = tone_duration
@@ -804,12 +853,12 @@ class MicroControllerInterfaces:
                 tone_duration=np.uint32(tone_duration),
             )
 
-        self.valve.send_pulse()
+        self.valve.send_pulse(noblock=False)
 
     def simulate_reward(self, tone_duration: int = 300) -> None:
         """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.
 
-        This method is used during training when animal refuses to consume water rewards. In this case, the water
+        This method is used during training when the animal refuses to consume water rewards. In this case, the water
         rewards are not delivered, but the tones are still played to notify the animal it is performing the task as
         required.
 
@@ -919,43 +968,44 @@ class MicroControllerInterfaces:
         )
         self.valve.calibrate()
 
+    def reset_mesoscope_frame_count(self) -> None:
+        """Resets the mesoscope frame counter to 0."""
+        self.mesoscope_frame.reset_pulse_count()
+
+    def reset_distance_tracker(self) -> None:
+        """Resets the total distance traveled by the animal since runtime onset and the current position of the animal
+        relative to runtime onset to 0.
+        """
+        self.wheel_encoder.reset_distance_tracker()
+
     @property
-    def mesoscope_frame_count(self) -> int:
+    def mesoscope_frame_count(self) -> np.uint64:
         """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
         return self.mesoscope_frame.pulse_count
 
     @property
-    def total_delivered_volume(self) -> float:
+    def delivered_water_volume(self) -> np.float64:
         """Returns the total volume of water, in microliters, dispensed by the valve since runtime onset."""
         return self.valve.delivered_volume
 
     @property
-    def distance_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the total distance traveled by the animal since runtime
-        onset.
-
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        running speed plots. It is also used by the run training logic to evaluate animal's performance during training.
-        """
-        return self.wheel_encoder.distance_tracker
+    def lick_count(self) -> np.uint64:
+        """Returns the total number of licks recorded since runtime onset."""
+        return self.lick.lick_count
 
     @property
-    def lick_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the lick sensor status.
+    def traveled_distance(self) -> np.float64:
+        """Returns the total distance, in centimeters, traveled by the animal since runtime onset.
 
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        lick detection plots.
+        This value does not account for the direction of travel and is a monotonically increasing count of traveled
+        centimeters.
         """
-        return self.lick.lick_tracker
+        return self.wheel_encoder.traveled_distance
 
     @property
-    def valve_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray used to communicate the water reward valve state.
-
-        This array should be passed to a Visualizer class so that it can sample the shared data to generate real-time
-        reward delivery plots.
-        """
-        return self.valve.valve_tracker
+    def position(self) -> np.float64:
+        """Returns the current absolute position of the animal, in Unity units, relative to runtime onset."""
+        return self.wheel_encoder.absolute_position
 
 
 class VideoSystems:
@@ -1106,7 +1156,7 @@ class VideoSystems:
         """Starts face camera frame acquisition.
 
         This method sets up both the frame acquisition (producer) process and the frame saver (consumer) process.
-        However, the consumer process will not save any frames until save_face_camera_frames() method is called.
+        However, the consumer process will not save any frames until the save_face_camera_frames () method is called.
         """
 
         # Prevents executing this method if the face camera is already running
@@ -1127,8 +1177,8 @@ class VideoSystems:
         """Starts left and right (body) camera frame acquisition.
 
         This method sets up both the frame acquisition (producer) process and the frame saver (consumer) process for
-        both cameras. However, the consumer processes will not save any frames until save_body_camera_frames() method is
-        called.
+        both cameras. However, the consumer processes will not save any frames until the save_body_camera_frames ()
+        method is called.
         """
 
         # Prevents executing this method if the body cameras are already running
@@ -1218,5 +1268,3 @@ class VideoSystems:
         """Returns the path to the compressed .npz archive that stores the data logged by the right body camera during
         runtime."""
         return self._right_camera.log_path
-
-class Mesoscope

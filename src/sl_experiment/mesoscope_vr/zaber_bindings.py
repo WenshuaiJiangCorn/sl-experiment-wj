@@ -1,6 +1,6 @@
 """This module provides interfaces for Zaber controllers and motors used in the Mesoscope-VR data acquisition system.
-Primarily, the module extends the bindings exposed by ZaberMotion library to work with the specific requirements of the
-Sun lab data collection pipelines."""
+Primarily, the module extends the bindings exposed by the ZaberMotion library to work with the specific requirements
+of the Sun lab data collection pipelines."""
 
 from typing import Any
 from dataclasses import field, dataclass
@@ -49,7 +49,7 @@ def _attempt_connection(port: str) -> dict[int, Any] | str:
 
     # If the port is not connectable via Zaber bindings, returns the formatted error message to the caller.
     except Exception as e:
-        # Formats and returns the error message to be handled by caller.
+        # Formats and returns the error message to be handled by the caller.
         return f"Error connecting to port {port}: {e}"
 
 
@@ -343,8 +343,8 @@ class ZaberAxis:
             park position is used.
         _mount_position: The absolute position relative to the home sensor position, in native motor units, the motor
             should be moved to before mounting a naive animal onto the VR rig. This position is used to provide
-            experimenters with more working room around the rig and ensure animal's comfort as it is mounted onto the
-            rig. This position is a fallback used when the animal does nto have a better, custom-calibrated position
+            experimenters with more working room around the rig and ensure the animal's comfort as it is mounted onto
+            the rig. This position is a fallback used when the animal does not have a better, custom-calibrated position
             available. Usually, this would only be the case when the animal is mounted onto the rig for the very first
             time.
         _max_limit: The maximum absolute position relative to the home sensor position, in native motor units,
@@ -445,26 +445,6 @@ class ZaberAxis:
             f"position={self.get_position(native=False)}) {self._units.unit_type}"
         )
         return representation_string
-
-    def __del__(self) -> None:
-        """Ensures the managed motor is stopped and parked before the class instance is garbage-collected.
-
-        This is a safety feature designed to de-power and lock the motor if the class encounters a runtime error. The
-        feature is aimed at preserving the life and health of the animals and preventing mesoscope objective damage.
-        """
-
-        # Unless the motor is already shut, ensures the motor gracefully stops and parks before the class is destroyed.
-        # Does not carry out the shutdown procedure, as it may harm the animal and / or damage the mesoscope.
-        if not self._shutdown_flag:
-            # Issues the stop command
-            self.stop()
-
-            # Waits for the motor to seize movement
-            while self._motor.is_busy():
-                continue
-
-            # Parks the motor
-            self.park()
 
     def _ensure_call_padding(self) -> None:
         """This method should be used before each call to motor hardware to ensure it is sufficiently separated
@@ -588,7 +568,7 @@ class ZaberAxis:
         the animal onto the VR rig.
 
         Applying this position to the motor orients the headbar and lickport system in a way that makes it easier to
-        mount the animal, while also providing animal with comfortable position inside the VR rig.
+        mount the animal, while also providing the animal with a comfortable position inside the VR rig.
         """
         return self._mount_position
 
@@ -603,7 +583,7 @@ class ZaberAxis:
             been idle for a prolonged period of time.
 
             The method initializes the homing procedure but does not block until it is over. As such, it is likely
-            that the motor would still be moving when this method returns. This feature is designed to support homing
+            that the motor will still be moving when this method returns. This feature is designed to support homing
             multiple axes in parallel.
         """
 
@@ -764,6 +744,25 @@ class ZaberAxis:
         self.park()  # Parks the motor before shutdown
         self._shutdown_flag = True  # Sets the shutdown flag to True to indicate that the motor has been shut down
 
+    def emergency_shutdown(self) -> None:
+        """Stops and parks the motor.
+
+        This method purposefully avoids moving the motor to the park position before shutdown. It is designed to be
+        called in the case of emergency, when the managing runtime crashes. Users should use the default 'shutdown'
+        method.
+        """
+        if self._shutdown_flag is not None and not self._shutdown_flag and not self.is_parked:
+            # Issues the stop command
+            if self.is_busy:
+                self.stop()
+
+            # Waits for the motor to seize movement
+            while self._motor.is_busy():
+                continue
+
+            # Parks the motor
+            self.park()
+
 
 class ZaberDevice:
     """Manages a single Zaber device (controller) and all of its axes (motors).
@@ -868,7 +867,7 @@ class ZaberDevice:
         # Sets the device shutdown tracker to 0. This tracker is used to detect when a device is not properly shut
         # down, which may have implications for the use of the device, such as the ability to home the device.
         # During the proper shutdown procedure, the tracker is always set to 1, so setting it to 0 now allows
-        # detecting cases where shutdown is not carried out.
+        # detecting cases where the shutdown is not carried out.
         self._device.settings.set(setting=_ZaberSettings.device_shutdown_flag, value=0)
         self._shutdown_flag = False  # Also sets the local shutdown flag
 
@@ -893,6 +892,14 @@ class ZaberDevice:
         # Sets the shutdown flag to 1 to indicate that the shutdown procedure has been performed.
         self._device.settings.set(setting=_ZaberSettings.device_shutdown_flag, value=1)
         self._shutdown_flag = True  # Also sets the local shutdown flag
+
+    def emergency_shutdown(self) -> None:
+        """Stops and parks the managed motor axes, but does not reset the shutdown flag.
+
+        This method is designed to be used exclusively by the __del__ method of the managing ZaberConnection class to
+        end the runtime.
+        """
+        self._axis.emergency_shutdown()
 
     @property
     def label(self) -> str:
@@ -976,10 +983,13 @@ class ZaberConnection:
 
     def __del__(self) -> None:
         """Ensures that the connection is shut down gracefully whenever the class instance is deleted."""
-        if self.is_connected and self._connection is not None:
+        if self._connection is not None and self.is_connected:
             # Note, this does NOT execute the full shutdown() procedure. This is intentional, as shutdown necessarily
-            # involves motor parking and this may not be safe in all circumstances. Therefore, the user can only
-            # call shutdown manually.
+            # involves moving the motors to the parking position, and this may not be safe in all circumstances.
+            # Therefore, the user can only call shutdown manually.
+            for device in self._devices:
+                device.emergency_shutdown()
+
             self._connection.close()
 
     def connect(self) -> None:
@@ -993,20 +1003,20 @@ class ZaberConnection:
         """
 
         # If the connection is already established, prevents from attempting to re-establish the connection again.
-        if self._is_connected:
+        if self.is_connected:
             return
 
         # Establishes connection
         self._connection = Connection.open_serial_port(port_name=self._port, direct=False)
+
+        # Sets the connection status to connected
+        self._is_connected = True
 
         # Gets the list of connected Zaber devices.
         devices: list[Device] = self._connection.detect_devices()
 
         # Packages each discovered Device into a ZaberDevice class instance and builds the internal device list.
         self._devices = tuple([ZaberDevice(device=device) for device in devices])
-
-        # Sets the connection status and returns True to indicate that the connection was successful
-        self._is_connected = True
 
     def disconnect(self) -> None:
         """Shuts down all controlled Zaber devices and closes the connection.
@@ -1019,7 +1029,7 @@ class ZaberConnection:
         pre-disconnection procedures. Then, disconnects from the serial port and clears the device list.
         """
         # Prevents the method from running if the connection is not established.
-        if not self._is_connected:
+        if not self.is_connected:
             return
 
         # Loops over each connected device and triggers the shutdown procedure
@@ -1035,7 +1045,19 @@ class ZaberConnection:
     @property
     def is_connected(self) -> bool:
         """Returns True if the class has established connection with the managed serial port."""
-        return self._is_connected
+
+        # Actualizes the connection status and returns it to the caller
+        if self._connection is not None and self._is_connected:
+            try:
+                # Tries to detect available devices using the connection. If the connection is broken, this will
+                # necessarily fail with an error.
+                self._connection.detect_devices()
+                self._is_connected = True  # If device check succeeded connection is active
+                return True
+            except Exception:
+                # Otherwise, the connection is broken
+                self._is_connected = False
+        return False
 
     @property
     def port(self) -> str:

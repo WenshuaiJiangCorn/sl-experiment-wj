@@ -21,7 +21,7 @@ Command Line Interfaces
    :prog: sl-create-system-config
    :nested: full
 
-.. click:: sl_experiment.cli:generate_project_configuration_file
+.. click:: sl_experiment.cli:generate_project_data_structure
    :prog: sl-create-project
    :nested: full
 
