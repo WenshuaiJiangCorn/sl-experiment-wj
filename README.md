@@ -734,6 +734,7 @@ not generate any valid data. This involves removing all session data from **both
 long-term storage destinations. This runtime is extremely dangerous and, if not used carefully, can 
 ***permanently delete valid data***. This processing mode can be triggered using the `sl-delete-session-data` CLI 
 command, although it is not recommended for most users.
+
 ---
 
 ## API Documentation
@@ -741,6 +742,7 @@ command, although it is not recommended for most users.
 See the [API documentation](https://sl-experiment-api-docs.netlify.app/) for the
 detailed description of the methods and classes exposed by components of this library, as well as all available 
 CLI commands with their arguments
+
 ___
 
 ## Recovering from Interruptions
