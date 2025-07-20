@@ -398,8 +398,10 @@ class ZaberAxis:
         # Initializes a ZaberUnits instance using the appropriate unit type (depends on motor type).
         self._units: _ZaberUnits
         if self._linear:
+            # noinspection PyArgumentList
             self._units = _ZaberUnits(unit_type="millimeters")
         else:
+            # noinspection PyArgumentList
             self._units = _ZaberUnits(unit_type="degrees")
 
         # Verifies that the parking position of the axis is within the hardware-defined motion limits.

@@ -1579,7 +1579,7 @@ class _MesoscopeVRSystem:
             if answer == "yes":
                 break
 
-            # Otherwise, if the answer is 'no', notifies the user tha they are still in the verification loop.
+            # Otherwise, if the answer is 'no', notifies the user that they are still in the verification loop.
             else:
                 message = f"Continuing sending the motion triggers until the next Unity termination event..."
                 console.echo(message=message, level=LogLevel.INFO)
@@ -1738,7 +1738,7 @@ class _MesoscopeVRSystem:
                 the experiment configuration file.
         """
 
-        # Does not do anything if a Unity communication class is not initialized or ExperimentConfiguration instance
+        # Does not do anything if a Unity communication class is not initialized or an ExperimentConfiguration instance
         # is not provided.
         if self._unity is None or self._experiment_configuration is None:
             return
