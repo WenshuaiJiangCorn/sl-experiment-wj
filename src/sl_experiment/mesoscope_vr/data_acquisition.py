@@ -1634,6 +1634,10 @@ class _MesoscopeVRSystem:
         if self._unity is None:
             return
 
+        # Discards all data received from Unity up to this point.
+        while self._unity.has_data:
+            _ = self._unity.get_data()
+
         # Initializes a second-precise timer to ensure the request is fulfilled within a 20-second timeout
         timeout_timer = PrecisionTimer("s")
 
@@ -1642,6 +1646,9 @@ class _MesoscopeVRSystem:
         while outcome != "abort":
             # Sends a request for the task cue (corridor) sequence to Unity GIMBL package.
             self._unity.send_data(topic=self._cue_sequence_request_topic)
+
+            # Gives Unity time to respond
+            timeout_timer.delay_noblock(delay=2)
 
             # Waits at most 5 seconds to receive the response
             timeout_timer.reset()
@@ -1656,7 +1663,7 @@ class _MesoscopeVRSystem:
 
                 topic: str
                 payload: bytes
-                topic, payload = self._unity.get_data()  # type: ignore
+                topic, payload = self._unity.get_data()
 
                 # If the message contains cue sequence data, parses it and finishes method runtime. Discards all
                 # other messages.
@@ -1739,17 +1746,24 @@ class _MesoscopeVRSystem:
         # Initializes a second-precise timer to ensure the request is fulfilled within a 20-second timeout
         timeout_timer = PrecisionTimer("s")
 
+        # Discards all data received from Unity up to this point.
+        while self._unity.has_data:
+            _ = self._unity.get_data()
+
         # The procedure repeats until it succeeds or until the user chooses to abort the runtime.
         outcome = ""
         while outcome != "abort":
             # Sends a request for the scene (task) name to Unity GIMBL package.
             self._unity.send_data(topic=self._unity_scene_request_topic)
 
+            # Gives Unity time to respond
+            timeout_timer.delay_noblock(delay=2)
+
             # Waits at most 5 seconds to receive the response
             timeout_timer.reset()
-            while timeout_timer.elapsed < 5 and outcome != "abort":
+            while timeout_timer.elapsed < 20 and outcome != "abort":
                 # Sends a second request if the response is not received within 2 seconds
-                if timeout_timer.elapsed > 2:
+                if timeout_timer.elapsed > 10:
                     self._unity.send_data(topic=self._unity_scene_request_topic)
 
                 # Repeatedly queries and checks incoming messages from Unity.
@@ -1758,7 +1772,7 @@ class _MesoscopeVRSystem:
 
                 topic: str
                 payload: bytes
-                topic, payload = self._unity.get_data()  # type: ignore
+                topic, payload = self._unity.get_data()
 
                 # Specifically looks for a message sent to the scene name topic. Discards all other messages.
                 if topic != self._unity_scene_topic:
@@ -1794,7 +1808,7 @@ class _MesoscopeVRSystem:
             else:
                 message = (
                     f"The Mesoscope-VR system has requested the active Unity scene name by sending the trigger to "
-                    f"the {self._unity_scene_request_topic}' topic and received no response in 5 seconds after two "
+                    f"the {self._unity_scene_request_topic}' topic and received no response in 20 seconds after two "
                     f"requests. It is likely that the Unity game engine is not running or is not configured to work "
                     f"with Mesoscope-VR system. Make sure Unity game engine is started and configured before "
                     f"continuing."
@@ -3875,19 +3889,26 @@ def maintenance_logic() -> None:
         message = f"Actor MicroController interface: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-        message = (
-            "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out the "
-            "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-            "the mesoscope and / or HARM the animal."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        # If the maintenance runtime is called to clean the running wheel, positioning Zaber motors is not necessary
+        message = f"Do you want to position Zaber motors for valve calibration or referencing procedure?"
+        console.echo(message=message, level=LogLevel.INFO)
+        move_zaber_motors = ""
+        while move_zaber_motors not in ["yes", "no"]:
+            move_zaber_motors = input("Enter 'yes' to move Zaber motors or 'no' to skip Zaber positioning: ")
 
-        zaber_motors.prepare_motors()  # homes all motors
-        zaber_motors.maintenance_position()  # Moves all motors to the maintenance position
+        if move_zaber_motors == "yes":
+            message = (
+                "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out the "
+                "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
+                "the mesoscope and / or HARM the animal."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+            zaber_motors.prepare_motors()  # homes all motors
+            zaber_motors.maintenance_position()  # Moves all motors to the maintenance position
 
-        message = f"Zaber motors: Positioned for Mesoscope-VR system maintenance."
-        console.echo(message=message, level=LogLevel.SUCCESS)
+            message = f"Zaber motors: Positioned for Mesoscope-VR system maintenance."
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
         # Notifies the user about supported calibration commands
         message = (
@@ -4014,16 +4035,16 @@ def maintenance_logic() -> None:
                 console.echo(message=message, level=LogLevel.INFO)
                 break
 
-        # Instructs the user to remove all objects that may interfere with moving the motors.
-        message = (
-            "Preparing to reset all Zaber motors. Remove all objects used during Mesoscope-VR maintenance, such as "
-            "water collection flasks, from the Mesoscope-VR cage."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
-
         # Shuts down zaber bindings
-        zaber_motors.park_position()
+        if move_zaber_motors == "yes":
+            # Instructs the user to remove all objects that may interfere with moving the motors.
+            message = (
+                "Preparing to reset all Zaber motors. Remove all objects used during Mesoscope-VR maintenance, such as "
+                "water collection flasks, from the Mesoscope-VR cage."
+            )
+            console.echo(message=message, level=LogLevel.WARNING)
+            input("Enter anything to continue: ")
+            zaber_motors.park_position()
         zaber_motors.disconnect()
 
         # Shuts down microcontroller interfaces
