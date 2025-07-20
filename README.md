@@ -10,6 +10,7 @@ A Python library that provides tools to acquire, manage, and preprocess scientif
 ![PyPI - License](https://img.shields.io/pypi/l/sl-experiment)
 ![PyPI - Status](https://img.shields.io/pypi/status/sl-experiment)
 ![PyPI - Wheel](https://img.shields.io/pypi/wheel/sl-experiment)
+
 ___
 
 ## Detailed Description
@@ -26,6 +27,7 @@ systems and are mostly inherited from the [sl-shared-assets](https://github.com/
 The acquisition-system-specific code is tightly integrated with the hardware used in the lab and is generally not 
 designed to be reused in any other context. See the [data acquisition systems](#data-acquisition-systems) section for 
 more details on currently supported acquisition systems.
+
 ___
 
 ## Table of Contents
