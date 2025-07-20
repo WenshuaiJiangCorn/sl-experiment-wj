@@ -28,6 +28,10 @@ The acquisition-system-specific code is tightly integrated with the hardware use
 designed to be reused in any other context. See the [data acquisition systems](#data-acquisition-systems) section for 
 more details on currently supported acquisition systems.
 
+Note, the rest of this ReadMe assumes familiarity with the procedures, experiments, and tools used in the Sun lab
+to acquire scientific data. See our [publications](https://neuroai.github.io/sunlab/publications) before reading 
+further, if you are not familiar with the work done in the lab.
+
 ___
 
 ## Table of Contents
@@ -132,8 +136,7 @@ and controlled by MBF and ThorLabs. This library benefits from the **ScanImagePC
 card, but this is not a strict requirement. 
 
 - [Nvidia GPU](https://www.nvidia.com/en-us/). This library uses GPU hardware acceleration to encode acquired video 
-  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with 
-  [RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
+  data. Any Nvidia GPU with hardware encoding chip(s) should work as expected. The library was tested with **RTX 4090**.
 - A CPU with at least 12, preferably 16, physical cores. This library has been tested with 
   [AMD Ryzen 7950X CPU](https://www.amd.com/en/products/processors/desktops/ryzen/7000-series/amd-ryzen-9-7950x.html). 
   It is recommended to use CPUs with 'full' cores, instead of the modern Intel’s design of 'e' and 'p' cores 
