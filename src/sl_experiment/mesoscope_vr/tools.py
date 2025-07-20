@@ -1318,4 +1318,5 @@ class CachedMotifDecomposer:
         self._cached_flat_data = (motifs_flat, motif_starts, motif_lengths, motif_indices)
         self._cached_distances = distances_array
 
+        # noinspection PyTypeChecker
         return self._cached_flat_data + (distances_array,)

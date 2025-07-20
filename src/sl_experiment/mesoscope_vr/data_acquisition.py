@@ -3898,9 +3898,9 @@ def maintenance_logic() -> None:
 
         if move_zaber_motors == "yes":
             message = (
-                "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out the "
-                "VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps may DAMAGE "
-                "the mesoscope and / or HARM the animal."
+                "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out "
+                "the VR screens, and make sure the animal is NOT mounted on the rig. Failure to fulfill these steps "
+                "may DAMAGE the mesoscope and / or HARM the animal."
             )
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
