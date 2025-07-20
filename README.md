@@ -121,7 +121,7 @@ by this library.
   which is freely distributed. Higher GenTL producer versions will likely work too, but they require purchasing a 
   license.
 - [Zaber Launcher](https://software.zaber.com/zaber-launcher/download) version **2025.6.2-1**.
-- [Unity Game Engine](https://unity.com/products/unity-engine) version **2022.3.46f1**.
+- [Unity Game Engine](https://unity.com/products/unity-engine) version **6000.1.12f1**.
 
 ### Hardware Dependencies
 
