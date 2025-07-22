@@ -450,7 +450,7 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
         message = (
             f"Unable to confirm that the ScanImagePC has generated the required acquisition data files. Specifically, "
             f"expected the following files to be present in the mesoscope_data folder of the ScanImagePC: "
-            f"{', '.join(f.name for f in target_files)}, bu tat least one file is missing. Rerun the "
+            f"{', '.join(f.name for f in target_files)}, but at least one file is missing. Rerun the "
             f"setupAcquisition(hSI, hSICtl) function to generate the requested files."
         )
         console.echo(message=message, level=LogLevel.ERROR)
