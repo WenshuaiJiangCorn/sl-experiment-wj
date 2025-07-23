@@ -426,6 +426,27 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
         mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
         mesoscope_data.scanimagepc_data.phosphatase_path.touch()
 
+    # Since window checking may reveal that the evaluate animal is not fit for participating in experiments, optionally
+    # allows aborting mesoscope setup runtime early for window checking sessions.
+    if window_checking:
+        message = (
+            f"Do you want to generate the ROI and MotionEstimator snapshots for this animal?"
+        )
+        console.echo(message=message, level=LogLevel.INFO)
+
+        # Blocks until a valid answer is received from the user
+        while True:
+            answer = input("Enter 'yes' or 'no': ")
+
+            if answer.lower() == "no":
+                # Aborts method runtime if the user does not intend to generate the ROI and MotionEstimator data
+                console.echo(message="Mesoscope Preparation: Complete.", level=LogLevel.SUCCESS)
+                return
+
+            if answer.lower() == "yes":
+                # Proceeds with the metadata file acquisition sequence
+                break
+
     # Step 3: Generate the new MotionEstimator file and arm the mesoscope for acquisition
     message = (
         "Call the 'setupAcquisition(hSI, hSICtl)' function via MATLAB command line on the ScanImagePC. The function "
@@ -1090,6 +1111,13 @@ class _MesoscopeVRSystem:
 
         message = "Data Logger: Stopped."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+        # Cleans up all SharedMemoryArray objects and leftover references before entering data processing mode to
+        # support parallel runtime preparations.
+        del self._microcontrollers
+        del self._zaber_motors
+        del self._cameras
+        del self._logger
 
         # Notifies the user that the acquisition is complete.
         console.echo(message=f"Data acquisition: Complete.", level=LogLevel.SUCCESS)
