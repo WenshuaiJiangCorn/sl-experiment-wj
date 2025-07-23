@@ -414,18 +414,6 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     # runtime.
     sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
 
-    # Resets the kinase and phosphatase markers before instructing the user to start the acquisition preparation
-    # function.
-    if not window_checking:
-        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
-        mesoscope_data.scanimagepc_data.phosphatase_path.unlink(missing_ok=True)
-
-    # For window checking, ensures that kinase is removed, while the phosphatase is present. This aborts the runtime
-    # after generating the zstack.tiff and the MotionEstimator.me files.
-    else:
-        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
-        mesoscope_data.scanimagepc_data.phosphatase_path.touch()
-
     # Since window checking may reveal that the evaluate animal is not fit for participating in experiments, optionally
     # allows aborting mesoscope setup runtime early for window checking sessions.
     if window_checking:
@@ -446,6 +434,18 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
             if answer.lower() == "yes":
                 # Proceeds with the metadata file acquisition sequence
                 break
+
+    # Resets the kinase and phosphatase markers before instructing the user to start the acquisition preparation
+    # function.
+    if not window_checking:
+        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+        mesoscope_data.scanimagepc_data.phosphatase_path.unlink(missing_ok=True)
+
+    # For window checking, ensures that kinase is removed, while the phosphatase is present. This aborts the runtime
+    # after generating the zstack.tiff and the MotionEstimator.me files.
+    else:
+        mesoscope_data.scanimagepc_data.kinase_path.unlink(missing_ok=True)
+        mesoscope_data.scanimagepc_data.phosphatase_path.touch()
 
     # Step 3: Generate the new MotionEstimator file and arm the mesoscope for acquisition
     message = (
