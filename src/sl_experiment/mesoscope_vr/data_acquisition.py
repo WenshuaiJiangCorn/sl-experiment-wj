@@ -414,7 +414,7 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     # runtime.
     sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
 
-    # Since window checking may reveal that the evaluate animal is not fit for participating in experiments, optionally
+    # Since window checking may reveal that the evaluated animal is not fit for participating in experiments, optionally
     # allows aborting mesoscope setup runtime early for window checking sessions.
     if window_checking:
         message = f"Do you want to generate the ROI and MotionEstimator snapshots for this animal?"
