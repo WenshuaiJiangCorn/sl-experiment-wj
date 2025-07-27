@@ -3795,10 +3795,12 @@ def window_checking_logic(
         # window.
         _setup_mesoscope(session_data=session_data, mesoscope_data=mesoscope_data)
 
+        # noinspection PyTypeChecker
+        # Instructs the user to update the session descriptor file
+        _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
+
         # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
         _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
-        # noinspection PyTypeChecker
-        _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
 
         # Retrieves current motor positions and packages them into a ZaberPositions object.
         _generate_zaber_snapshot(session_data=session_data, mesoscope_data=mesoscope_data, zaber_motors=zaber_motors)
