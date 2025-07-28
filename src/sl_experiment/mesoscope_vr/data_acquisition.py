@@ -414,12 +414,10 @@ def _setup_mesoscope(session_data: SessionData, mesoscope_data: MesoscopeData) -
     # runtime.
     sh.copy2(screenshot_path, mesoscope_data.vrpc_persistent_data.window_screenshot_path)
 
-    # Since window checking may reveal that the evaluate animal is not fit for participating in experiments, optionally
+    # Since window checking may reveal that the evaluated animal is not fit for participating in experiments, optionally
     # allows aborting mesoscope setup runtime early for window checking sessions.
     if window_checking:
-        message = (
-            f"Do you want to generate the ROI and MotionEstimator snapshots for this animal?"
-        )
+        message = f"Do you want to generate the ROI and MotionEstimator snapshots for this animal?"
         console.echo(message=message, level=LogLevel.INFO)
 
         # Blocks until a valid answer is received from the user
@@ -3797,10 +3795,12 @@ def window_checking_logic(
         # window.
         _setup_mesoscope(session_data=session_data, mesoscope_data=mesoscope_data)
 
+        # noinspection PyTypeChecker
+        # Instructs the user to update the session descriptor file
+        _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
+
         # Generates the snapshot of the Mesoscope objective position used to generate the data during window checking.
         _generate_mesoscope_position_snapshot(session_data=session_data, mesoscope_data=mesoscope_data)
-        # noinspection PyTypeChecker
-        _verify_descriptor_update(descriptor=descriptor, session_data=session_data, mesoscope_data=mesoscope_data)
 
         # Retrieves current motor positions and packages them into a ZaberPositions object.
         _generate_zaber_snapshot(session_data=session_data, mesoscope_data=mesoscope_data, zaber_motors=zaber_motors)
@@ -3875,19 +3875,18 @@ def maintenance_logic() -> None:
         )
         logger.start()
 
-        # While we can connect to ports managed by ZaberLauncher, ZaberLauncher cannot connect to ports managed via
-        # software. Therefore, we have to make sure ZaberLauncher is running before connecting to motors.
-        message = (
-            "Preparing to connect to all Zaber motor controllers. Make sure that ZaberLauncher app is running before "
-            "proceeding further. If ZaberLauncher is not running, you WILL NOT be able to manually control Zaber motor "
-            "positions until you reset the runtime."
-        )
-        console.echo(message=message, level=LogLevel.WARNING)
-        input("Enter anything to continue: ")
+        # If the maintenance runtime is called to clean the running wheel, positioning Zaber motors is not necessary
+        message = f"Do you want to position Zaber motors for valve calibration or referencing procedure?"
+        console.echo(message=message, level=LogLevel.INFO)
+        move_zaber_motors = ""
+        while move_zaber_motors not in ["yes", "no"]:
+            move_zaber_motors = input("Enter 'yes' to move Zaber motors or 'no' to skip Zaber positioning: ")
 
-        # Providing the class with an invalid path makes sure it falls back to using default positions cached in
-        # the non-volatile memory of each device.
-        zaber_motors: ZaberMotors = ZaberMotors(zaber_positions_path=output_path.joinpath("invalid_path.yaml"))
+        # Only initializes ZaberMotors if the user intends to position them for calibration or referencing.
+        if move_zaber_motors == "yes":
+            # Providing the class with an invalid path makes sure it falls back to using default positions cached in
+            # the non-volatile memory of each device.
+            zaber_motors: ZaberMotors = ZaberMotors(zaber_positions_path=output_path.joinpath("invalid_path.yaml"))
 
         # Initializes the interface for the Actor MicroController that manages the valve and break modules.
         valve: ValveInterface = ValveInterface(
@@ -3918,12 +3917,6 @@ def maintenance_logic() -> None:
         console.echo(message=message, level=LogLevel.SUCCESS)
 
         # If the maintenance runtime is called to clean the running wheel, positioning Zaber motors is not necessary
-        message = f"Do you want to position Zaber motors for valve calibration or referencing procedure?"
-        console.echo(message=message, level=LogLevel.INFO)
-        move_zaber_motors = ""
-        while move_zaber_motors not in ["yes", "no"]:
-            move_zaber_motors = input("Enter 'yes' to move Zaber motors or 'no' to skip Zaber positioning: ")
-
         if move_zaber_motors == "yes":
             message = (
                 "Preparing to move Zaber motors into maintenance position. Remove the mesoscope objective, swivel out "
@@ -4073,7 +4066,7 @@ def maintenance_logic() -> None:
             console.echo(message=message, level=LogLevel.WARNING)
             input("Enter anything to continue: ")
             zaber_motors.park_position()
-        zaber_motors.disconnect()
+            zaber_motors.disconnect()
 
         # Shuts down microcontroller interfaces
         controller.stop()

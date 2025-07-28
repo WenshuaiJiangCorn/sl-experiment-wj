@@ -1133,11 +1133,12 @@ def _verify_remote_data_integrity(session_data: SessionData) -> None:
     )
 
     # Instructs the job to verify the integrity of the session data on the server and to create the processed data
-    # hierarchy for the session.
+    # hierarchy for the session. Since version 3.0.2, (version 3.1.0 of sl-shared-assets), also updates the project
+    # manifest file to reflect the addition of a new session.
     remote_session_directory = Path(server.raw_data_root).joinpath(
         session_data.project_name, session_data.animal_id, session_data.session_name
     )
-    job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory}")
+    job.add_command(f"sl-verify-session -sp {remote_session_directory} -c -pdr {remote_processed_directory} -um")
 
     # Submits the job to be executed on the server.
     job = server.submit_job(job)
