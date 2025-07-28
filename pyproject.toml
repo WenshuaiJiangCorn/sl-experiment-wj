@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "3.0.1"
+version = "3.0.2"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -63,7 +63,7 @@ dependencies = [
     "pytz==2025.2",
     "importlib_metadata==8.7.0",
     "natsort==8.4.0",
-    "sl-shared-assets==3.1.0",
+    "sl-shared-assets==3.1.2",
 ]
 
 [project.urls]
