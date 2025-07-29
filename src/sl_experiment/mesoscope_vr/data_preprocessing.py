@@ -709,11 +709,11 @@ def _preprocess_mesoscope_directory(
     if not mesoscope_data.scanimagepc_data.motion_estimator_path.exists():
         sh.copy2(target_files[0], mesoscope_data.scanimagepc_data.motion_estimator_path)
 
-    # Moves all files to the mesoscope_data directory without any further processing.
-    sh.move(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
-    sh.move(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
+    # Copies all files to the mesoscope_data directory without any further processing.
+    sh.copy2(target_files[0], session_data.raw_data.mesoscope_data_path.joinpath("MotionEstimator.me"))
+    sh.copy2(target_files[1], session_data.raw_data.mesoscope_data_path.joinpath("fov.roi"))
     # Renames to 'zstack.tiff'
-    sh.move(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
+    sh.copy2(target_files[2], session_data.raw_data.mesoscope_data_path.joinpath("zstack.tiff"))
 
     # Resolves the paths to the output directories and files
     output_directory = Path(session_data.raw_data.mesoscope_data_path)
