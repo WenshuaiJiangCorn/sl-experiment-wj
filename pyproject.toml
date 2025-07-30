@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "sl-experiment"
-version = "3.0.2"
+version = "3.0.3"
 description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -41,14 +41,14 @@ classifiers = [
 
 # Runtime project dependencies. This overlaps with the 'condarun' optional list.
 dependencies = [
-    "zaber-motion==7.8.4",
+    "zaber-motion==7.10.0",
     "crc==7.1.0",
     "tabulate==0.9.0",
     "click==8.2.1",
     "numpy==2.2.6",
     "numba==0.61.2",
-    "intel-cmplr-lib-rt==2025.1.1",
-    "scipy==1.16.0",
+    "intel-cmplr-lib-rt==2025.2.0",
+    "scipy==1.16.1",
     "matplotlib==3.10.3",
     "ataraxis-time==3.0.0",
     "ataraxis-base-utilities==3.1.0",
