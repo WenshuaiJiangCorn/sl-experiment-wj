@@ -65,7 +65,7 @@ class MicroControllerInterfaces:
 
     """
 
-    def __init__(self, data_logger: DataLogger, valve_ids: tuple[int], lick_ids: tuple[int]) -> None:
+    def __init__(self, data_logger: DataLogger) -> None:
         # Initializes the start state tracker first
         self._started: bool = False
 
@@ -81,8 +81,10 @@ class MicroControllerInterfaces:
         )
 
         # Initializes internal tracker variables
-        self._previous_volume: dict[int, float] = {i: 0.0 for i in valve_ids}
-        self._previous_tone_duration: dict[int, int] = {i: 0 for i in valve_ids}
+        self._previous_left_volume: float = 0.0
+        self._previous_right_volume: float = 0.0
+        self._previous_left_tone_duration: float = 0.0
+        self._previous_right_tone_duration: float = 0.0
         self._lick_monitoring: bool = False # Tracks both lick ports
 
         self._delay_timer = PrecisionTimer("ms")
@@ -92,17 +94,29 @@ class MicroControllerInterfaces:
         # TTL trigger, etc.
 
         # Module interfaces:
-        self.valves = {i: ValveInterface(
-            module_id=np.uint8(i),
+        self.valve_left = ValveInterface(
+            module_id=np.uint8(1),
             valve_calibration_data=self._system_configuration.microcontrollers.valve_calibration_data,  # type: ignore
             debug=False,
-        ) for i in valve_ids}
+        )
 
-        self.licks = {i: LickInterface(
-            module_id=np.uint8(i),
+        self.valve_right = ValveInterface(
+            module_id=np.uint8(2),
+            valve_calibration_data=self._system_configuration.microcontrollers.valve_calibration_data,  # type: ignore
+            debug=False,
+        )
+
+        self.lick_left = LickInterface(
+            module_id=np.uint8(1),
             lick_threshold=self._system_configuration.microcontrollers.lick_threshold_adc,
             debug=False,
-        ) for i in lick_ids}
+        )
+
+        self.lick_right = LickInterface(
+            module_id=np.uint8(2),
+            lick_threshold=self._system_configuration.microcontrollers.lick_threshold_adc,
+            debug=False,
+        )
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
@@ -110,7 +124,7 @@ class MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,  # Hardcoded
             microcontroller_usb_port=self._system_configuration.microcontrollers.actor_port,
             data_logger=data_logger,
-            module_interfaces=tuple(list(self.valves.values()) + list(self.licks.values()))
+            module_interfaces=tuple(self.valve_left, self.valve_right, self.lick_left, self.lick_right),
         )
 
     def __del__(self) -> None:
@@ -149,22 +163,30 @@ class MicroControllerInterfaces:
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        for valve in self.valves.values():
-            valve.set_parameters(
-                pulse_duration=np.uint32(valve.get_duration_from_volume(5.0)),  # Hardcoded for calibration purposes
-                calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
-                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-                tone_duration=np.uint32(tone_duration),
+        self.valve_left.set_parameters(
+            pulse_duration=np.uint32(self.valve_left.get_duration_from_volume(5.0)),  # Hardcoded for calibration purposes
+            calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
+            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+            tone_duration=np.uint32(tone_duration),
         )
-
+        self.valve_right.set_parameters(
+            pulse_duration=np.uint32(self.valve_right.get_duration_from_volume(5.0)),  # Hardcoded for calibration purposes
+            calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
+            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+            tone_duration=np.uint32(tone_duration),
+        )
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
-        for lick in self.licks.values():
-            lick.set_parameters(
-                signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
-                delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
-                averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
-            )
+        self.lick_left.set_parameters(
+            signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
+            delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
+            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
+        )
+        self.lick_right.set_parameters(
+            signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
+            delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
+            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
+        )
 
         # The setup procedure is complete.
         self._started = True
@@ -205,29 +227,38 @@ class MicroControllerInterfaces:
         rate of 1 kHZ is adequate for resolving all expected single-lick events.
         """
         if not self._lick_monitoring:
-            self.lick.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self.lick_left.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
+            self.lick_right.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
             self._lick_monitoring = True
 
     def disable_lick_monitoring(self) -> None:
         """Stops monitoring the conductive lick sensor."""
         if self._lick_monitoring:
-            self.lick.reset_command_queue()
+            self.lick_left.reset_command_queue()
+            self.lick_right.reset_command_queue()
             self._lick_monitoring = False
 
-    def open_valve(self, valve_id: int) -> None:
+    def open_valve_left(self) -> None:
         """Opens the water reward solenoid valve.
 
         This method is primarily used to prime the water line with water before the first experiment or training session
         of the day.
         """
-        self.valves[valve_id].toggle(state=True)
+        self.valve_left.toggle(state=True)
 
-    def close_valve(self, valve_id: int) -> None:
-        """Closes the water reward solenoid valve."""
-        self.valves[valve_id].toggle(state=False)
+    def close_valve_left(self) -> None:
+        """Closes the left water reward solenoid valve."""
+        self.valve_left.toggle(state=False)
 
+    def open_valve_right(self) -> None:
+        """Opens the right water reward solenoid valve."""
+        self.valve_right.toggle(state=True)
 
-    def deliver_reward(self, valve_id: int, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False) -> None:
+    def close_valve_right(self) -> None:
+        """Closes the right water reward solenoid valve."""
+        self.valve_right.toggle(state=False)
+
+    def deliver_reward_left(self, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False) -> None:
         """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
         water.
 
@@ -247,24 +278,61 @@ class MicroControllerInterfaces:
         # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
         # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
         # reducing communication overhead.
-        if not ignore_parameters and (volume != self._previous_volume[valve_id] or tone_duration != self._previous_tone_duration[valve_id]):
+        if not ignore_parameters and (volume != self._previous_left_volume or tone_duration != self._previous_left_tone_duration):
             # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_volume[valve_id] = volume
-            self._previous_tone_duration[valve_id] = tone_duration
+            self._previous_left_volume = volume
+            self._previous_left_tone_duration = tone_duration
 
             # Note, calibration parameters are not used by the command below, but we explicitly set them here for
             # consistency
             tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
-            self.valves[valve_id].set_parameters(
-                pulse_duration=self.valves[valve_id].get_duration_from_volume(volume),
+            self.valve_left.set_parameters(
+                pulse_duration=self.valve_left.get_duration_from_volume(volume),
                 calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
                 calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
                 tone_duration=np.uint32(tone_duration),
             )
 
-        self.valves[valve_id].send_pulse(noblock=False)
+        self.valve_left.send_pulse(noblock=False)
 
-    def reference_valve(self, valve_id: int) -> None:
+    def deliver_reward_right(self, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False) -> None:
+        """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
+        water.
+
+        This method assumes that the valve has been calibrated before calling this method. It uses the calibration data
+        provided at class instantiation to determine the period of time the valve should be kept open to deliver the
+        requested volume of water.
+
+        Args:
+            volume: The volume of water to deliver, in microliters.
+            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
+                reward.
+            ignore_parameters: Determines whether to ignore the volume and tone_duration arguments. Calling the method
+                with this argument ensures that the delivered reward always uses the same volume and tone_duration as
+                the previous reward command. Primarily, this argument is used when receiving reward commands from Unity.
+        """
+
+        # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
+        # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
+        # reducing communication overhead.
+        if not ignore_parameters and (volume != self._previous_right_volume or tone_duration != self._previous_right_tone_duration):
+            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
+            self._previous_right_volume = volume
+            self._previous_right_tone_duration = tone_duration
+
+            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
+            # consistency
+            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
+            self.valve_right.set_parameters(
+                pulse_duration=self.valve_right.get_duration_from_volume(volume),
+                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
+                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+                tone_duration=np.uint32(tone_duration),
+            )
+
+        self.valve_right.send_pulse(noblock=False)
+
+    def reference_left_valve(self) -> None:
         """Runs the reference valve calibration procedure.
 
         Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
@@ -279,16 +347,40 @@ class MicroControllerInterfaces:
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        self.valves[valve_id].set_parameters(
-            pulse_duration=np.uint32(self.valves[valve_id].get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
+        self.valve_left.set_parameters(
+            pulse_duration=np.uint32(self.valve_left.get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
             calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
             calibration_count=np.uint16(200),  # Hardcoded to work with the 5.0 uL volume to dispense 1 ml of water.
             tone_duration=np.uint32(tone_duration),
         )  # 5 ul x 200 times
 
-        self.valves[valve_id].calibrate()
+        self.valve_left.calibrate()
 
-    def calibrate_valve(self, valve_id: int, pulse_duration: int = 15) -> None:
+    def reference_right_valve(self) -> None:
+        """Runs the reference valve calibration procedure.
+
+        Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
+        to deliver the overall volume of water recognizable for the human eye looking at the syringe holding the water
+        (water 'tank' used in our system). Additionally, this uses the 5 uL volume as the reference volume, which
+        matches the volume we use during experiments and training sessions.
+
+        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding ('tank')
+        syringe filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which
+        should overall dispense ~ 1 ml of water.
+        """
+        tone_duration: float = convert_time(  # type: ignore
+            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
+        )
+        self.valve_right.set_parameters(
+            pulse_duration=np.uint32(self.valve_right.get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
+            calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
+            calibration_count=np.uint16(200),  # Hardcoded to work with the 5.0 uL volume to dispense 1 ml of water.
+            tone_duration=np.uint32(tone_duration),
+        )  # 5 ul x 200 times
+
+        self.valve_right.calibrate()
+
+    def calibrate_left_valve(self, pulse_duration: int = 15) -> None:
         """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
         pulse_duration.
 
@@ -313,23 +405,65 @@ class MicroControllerInterfaces:
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        self.valves[valve_id].set_parameters(
+        self.valve_left.set_parameters(
             pulse_duration=np.uint32(pulse_us),
             calibration_delay=np.uint32(300000),
             calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
             tone_duration=np.uint32(tone_duration),
         )
-        self.valves[valve_id].calibrate()
+        self.valve_left.calibrate()
+
+    def calibrate_right_valve(self, pulse_duration: int = 15) -> None:
+        """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
+        pulse_duration.
+
+        The valve is kept open for the specified number of milliseconds. Between pulses, the valve is kept closed for
+        300 ms. Due to our valve design, keeping the valve closed for less than 200-300 ms generates a large pressure
+        at the third (Normally Open) port, which puts unnecessary strain on the port plug and internal mechanism of the
+        valve.
+
+        Notes:
+            The calibration should be run with the following durations: 15 ms, 30 ms, 45 ms, and 60 ms. During testing,
+            we found that these values cover the water reward range from 2 uL to 10 uL, which is enough to cover most
+            training and experiment runtimes.
+
+            Make sure that the water line is primed, deaerated, and the holding ('tank') syringe filled exactly to the
+            5 mL mark at the beginning of each calibration cycle. Depending on the calibrated pulse_duration, you may
+            need to refill the syringe during the calibration runtime.
+
+        Args:
+            pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
+        """
+        pulse_us = pulse_duration * 1000  # Converts milliseconds to microseconds
+        tone_duration: float = convert_time(  # type: ignore
+            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
+        )
+        self.valve_right.set_parameters(
+            pulse_duration=np.uint32(pulse_us),
+            calibration_delay=np.uint32(300000),
+            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+            tone_duration=np.uint32(tone_duration),
+        )
+        self.valve_right.calibrate()
 
     @property
-    def delivered_water_volume(self) -> np.float64:
-        """Returns the total volume of water, in microliters, dispensed by the valve since runtime onset."""
-        return self.valve.delivered_volume
+    def delivered_water_volume_left(self) -> np.float64:
+        """Returns the total volume of water, in microliters, dispensed by the left valve since runtime onset."""
+        return self.valve_left.delivered_volume
+
+    def delivered_water_volume_right(self) -> np.float64:
+        """Returns the total volume of water, in microliters, dispensed by the right valve since runtime onset."""
+        return self.valve_right.delivered_volume
 
     @property
-    def lick_count(self) -> np.uint64:
+    def lick_count_left(self) -> np.uint64:
         """Returns the total number of licks recorded since runtime onset."""
-        return self.lick.lick_count
+        return self.lick_left.lick_count
+
+    @property
+    def lick_count_right(self) -> np.uint64:
+        """Returns the total number of licks recorded since runtime onset."""
+        return self.lick_right.lick_count
 
 class VideoSystems:
     """Interfaces with all cameras managed by Ataraxis Video System (AVS) classes that acquire and save camera frames

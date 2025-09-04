@@ -1,5 +1,5 @@
 # WJ: Run this script to start the experiment
-
+from ataraxis_base_utilities import console
 import keyboard
 from mesoscope_vr.binding_classes import MicroControllerInterfaces
 from ataraxis_data_structures import DataLogger
@@ -15,7 +15,7 @@ mc = MicroControllerInterfaces(valve_ids=valve_ids, lick_ids=lick_ids, data_logg
 mc.start()
 mc.enable_lick_monitoring()
 
-print("Experiment starts. Press 'q' to quit.")
+console.echo("Experiment starts. Press 'q' to quit.")
 
 # Only one valve is available after the first reward, deactivated after use
 # Valve is reactivated after the other valve is used 
@@ -36,8 +36,8 @@ while True:
     prev_lick_count_2 = mc.lick_count(lick_id=lick_ids[1])
 
     if keyboard.is_pressed('q'):  # Check if 'q' key is pressed
-        print("Breaking loop due to 'q' key press.")
+        console.echo("Breaking loop due to 'q' key press.")
         break
 
 mc.stop()
-print("Experiment ends.")
+console.echo("Experiment ends.")
