@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 from ataraxis_time import PrecisionTimer
-from sl_shared_assets import ZaberPositions
 from ataraxis_video_system import (
     VideoCodecs,
     VideoSystem,
@@ -20,426 +19,11 @@ from ataraxis_data_structures import DataLogger
 from ataraxis_time.time_helpers import convert_time
 from ataraxis_communication_interface import MicroControllerInterface
 
-from .tools import get_system_configuration
-from .zaber_bindings import ZaberAxis, ZaberConnection
-from ..shared_components import (
-    TTLInterface,
+from tools import get_system_configuration
+from sl_experiment.shared_components import (
     LickInterface,
-    BreakInterface,
     ValveInterface,
-    ScreenInterface,
-    TorqueInterface,
-    EncoderInterface,
 )
-
-
-class ZaberMotors:
-    """Interfaces with Zaber motors that control the position of the HeadBar, LickPort, and the running Wheel inside the
-    mesoscope cage.
-
-    This class abstracts working with Zaber motors that move the HeadBar in Z, Pitch, and Roll axes, the LickPort in
-    X, Y, and Z axes, and the Wheel in X axis. It is used by the major runtime classes, such as _MesoscopeExperiment,
-    to position various Mesoscope-VR components and the mouse in a way that promotes data acquisition and task
-    performance.
-
-    Notes:
-        The class is designed to transition the motors between a set of predefined states and should not be used
-        directly by the user. It does not contain the guards that notify users about risks associated with moving the
-        motors. Do not use any methods from this class unless you know what you are doing. It is possible to damage
-        the motors, the mesoscope, or harm the animal.
-
-        To fine-tune the position of any Zaber motors in real time, use the main Zaber Launcher interface
-        (https://software.zaber.com/zaber-launcher/download) installed on the VRPC.
-
-        Unless you know that the motors are homed and not parked, always call the prepare_motors() method before
-        calling any other methods. Otherwise, Zaber controllers will likely ignore the issued commands.
-
-    Args:
-        zaber_positions_path: The path to the zaber_positions.yaml file that stores the motor positions saved during the
-            previous runtime.
-
-    Attributes:
-        _headbar: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the headbar holder.
-        _headbar_z: The ZaberAxis class instance for the headbar z-axis motor.
-        _headbar_pitch: The ZaberAxis class instance for the headbar pitch-axis motor.
-        _headbar_roll: The ZaberAxis class instance for the headbar roll-axis motor.
-        _wheel: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the running wheel.
-        _wheel_x: The ZaberAxis class instance for the running-wheel X-axis motor.
-        _lickport: Stores the Connection class instance that manages the USB connection to a daisy-chain of Zaber
-            devices (controllers) that allow repositioning the lickport.
-        _lickport_z: Stores the Axis (motor) class that controls the position of the lickport along the Z axis.
-        _lickport_x: Stores the Axis (motor) class that controls the position of the lickport along the X axis.
-        _lickport_y: Stores the Axis (motor) class that controls the position of the lickport along the Y axis.
-        _previous_positions: An instance of _ZaberPositions class that stores the positions of Zaber motors during a
-           previous runtime. If this data is not available, this attribute is set to None to indicate there are no
-           previous positions to use.
-    """
-
-    def __init__(self, zaber_positions_path: Path) -> None:
-        # Retrieves the Mesoscope-VR system configuration parameters.
-        system_configuration = get_system_configuration()
-
-        # Initializes the connection classes first to ensure all classes exist in case the runtime encounters
-        # an error during connection.
-        self._headbar: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.headbar_port)
-        self._wheel: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.wheel_port)
-        self._lickport: ZaberConnection = ZaberConnection(port=system_configuration.additional_firmware.lickport_port)
-
-        # HeadBar controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # headbar attached to the mouse's head in Z, Roll, and Pitch axes. Note, this assumes that the chaining
-        # order of individual zaber devices is fixed and is always Z-Pitch-Roll.
-        self._headbar.connect()
-        self._headbar_z: ZaberAxis = self._headbar.get_device(0).axis
-        self._headbar_pitch: ZaberAxis = self._headbar.get_device(1).axis
-        self._headbar_roll: ZaberAxis = self._headbar.get_device(2).axis
-
-        # Lickport controller (zaber). This is an assembly of 3 zaber controllers (devices) that allow moving the
-        # lick tube in Z, X, and Y axes. Note, this assumes that the chaining order of individual zaber devices is
-        # fixed and is always Z-X-Y.
-        self._lickport.connect()
-        self._lickport_z: ZaberAxis = self._lickport.get_device(0).axis
-        self._lickport_y: ZaberAxis = self._lickport.get_device(1).axis
-        self._lickport_x: ZaberAxis = self._lickport.get_device(2).axis
-
-        # Wheel controller (zaber). Currently, this assembly includes a single controller (device) that allows moving
-        # the running wheel in the X axis.
-        self._wheel.connect()
-        self._wheel_x: ZaberAxis = self._wheel.get_device(0).axis
-
-        # If the previous positions path points to an existing .yaml file, loads the data from the file into
-        # _ZaberPositions instance. Otherwise, sets the previous_positions attribute to None to indicate there are no
-        # previous positions.
-        self._previous_positions: None | ZaberPositions = None
-        if zaber_positions_path.exists():
-            self._previous_positions = ZaberPositions.from_yaml(zaber_positions_path)  # type: ignore
-        else:
-            message = (
-                "No previous position data found when attempting to load Zaber motor positions used during a previous "
-                "runtime. Setting all Zaber motors to use the default positions cached in non-volatile memory of each "
-                "motor controller."
-            )
-            console.echo(message=message, level=LogLevel.ERROR)
-
-    def restore_position(self) -> None:
-        """Restores the Zaber motor positions to the states recorded at the end of the previous runtime.
-
-        For most runtimes, this method is used to restore the motors to the state used during a previous experiment or
-        training session for each animal. Since all animals are slightly different, the optimal Zaber motor positions
-        will vary slightly for each animal.
-
-        Notes:
-            If previous positions are not available, the method falls back to moving the motors to the general
-            'mounting' positions saved in the non-volatile memory of each motor controller. These positions are designed
-            to work for most animals and provide an initial position for the animal to be mounted into the VR rig.
-
-            This method moves all Zaber axes in parallel to optimize runtime speed. This relies on the Mesoscope-VR
-            system to be assembled in a way where it is safe to move all motors at the same time.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # If previous position data is available, restores all motors to the positions used during previous sessions.
-        # Otherwise, sets HeadBar and Wheel to mounting position and the LickPort to parking position. For LickPort,
-        # the only difference between parking and mounting positions is that the mounting position is retracted further
-        # away from the animal than the parking position.
-        self._headbar_z.move(
-            amount=self._headbar_z.mount_position
-            if self._previous_positions is None
-            else self._previous_positions.headbar_z,
-            absolute=True,
-            native=True,
-        )
-        self._headbar_pitch.move(
-            amount=self._headbar_pitch.mount_position
-            if self._previous_positions is None
-            else self._previous_positions.headbar_pitch,
-            absolute=True,
-            native=True,
-        )
-        self._headbar_roll.move(
-            amount=self._headbar_roll.mount_position
-            if self._previous_positions is None
-            else self._previous_positions.headbar_roll,
-            absolute=True,
-            native=True,
-        )
-        self._wheel_x.move(
-            amount=self._wheel_x.mount_position
-            if self._previous_positions is None
-            else self._previous_positions.wheel_x,
-            absolute=True,
-            native=True,
-        )
-        self._lickport_z.move(
-            amount=self._lickport_z.park_position
-            if self._previous_positions is None
-            else self._previous_positions.lickport_z,
-            absolute=True,
-            native=True,
-        )
-        self._lickport_x.move(
-            amount=self._lickport_x.park_position
-            if self._previous_positions is None
-            else self._previous_positions.lickport_x,
-            absolute=True,
-            native=True,
-        )
-        self._lickport_y.move(
-            amount=self._lickport_y.park_position
-            if self._previous_positions is None
-            else self._previous_positions.lickport_y,
-            absolute=True,
-            native=True,
-        )
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def prepare_motors(self) -> None:
-        """Unparks and homes all motors.
-
-        This method should be used at the beginning of each runtime (experiment, training, etc.) to ensure all Zaber
-        motors can be moved (are not parked) and have a stable point of reference. The motors are left at their
-        respective homing positions at the end of this method's runtime, and it is assumed that a different class
-        method is called after this method to set the motors into the desired position.
-
-        Notes:
-            This method moves all motor axes in parallel to optimize runtime speed.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # Homes all motors in-parallel.
-        self._headbar_z.home()
-        self._headbar_pitch.home()
-        self._headbar_roll.home()
-        self._wheel_x.home()
-        self._lickport_z.home()
-        self._lickport_x.home()
-        self._lickport_y.home()
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def park_position(self) -> None:
-        """Moves all motors to their parking positions and parks (locks) them preventing future movements.
-
-        This method should be used at the end of each runtime (experiment, training, etc.) to ensure all Zaber motors
-        are positioned in a way that guarantees that they can be homed during the next runtime.
-
-        Notes:
-            The motors are moved to the parking positions stored in the non-volatile memory of each motor controller.
-            This method moves all motor axes in parallel to optimize runtime speed.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # Moves all Zaber motors to their parking positions
-        self._headbar_z.move(amount=self._headbar_z.park_position, absolute=True, native=True)
-        self._headbar_pitch.move(amount=self._headbar_pitch.park_position, absolute=True, native=True)
-        self._headbar_roll.move(amount=self._headbar_roll.park_position, absolute=True, native=True)
-        self._wheel_x.move(amount=self._wheel_x.park_position, absolute=True, native=True)
-        self._lickport_z.move(amount=self._lickport_z.park_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.park_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.park_position, absolute=True, native=True)
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def maintenance_position(self) -> None:
-        """Moves all motors to the Mesoscope-VR system maintenance position.
-
-        This position is stored in the non-volatile memory of each motor controller. Primarily, this position is used
-        during the water valve calibration and during running-wheel maintenance (cleaning, replacing surface material,
-        etc.).
-
-        Notes:
-            This method moves all motor axes in parallel to optimize runtime speed.
-
-            Formerly, the only maintenance step was the calibration of the water-valve, so some low-level functions
-            still reference it as 'valve-position' and 'calibrate-position'.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # Moves all motors to their maintenance positions
-        self._headbar_z.move(amount=self._headbar_z.valve_position, absolute=True, native=True)
-        self._headbar_pitch.move(amount=self._headbar_pitch.valve_position, absolute=True, native=True)
-        self._headbar_roll.move(amount=self._headbar_roll.valve_position, absolute=True, native=True)
-        self._wheel_x.move(amount=self._wheel_x.valve_position, absolute=True, native=True)
-        self._lickport_z.move(amount=self._lickport_z.valve_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.valve_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.valve_position, absolute=True, native=True)
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def mount_position(self) -> None:
-        """Moves all motors to the animal mounting position.
-
-        This position is stored in the non-volatile memory of each motor controller. This position is used when the
-        animal is mounted into the VR rig to provide the experimenter with easy access to the head bar holder.
-
-        Notes:
-            This method moves all MOTOR axes in parallel to optimize runtime speed.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # Moves all lickport motors to the mount position
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-
-        # If previous positions are not available, moves the rest of the motors to the default mounting positions
-        if self._previous_positions is None:
-            self._headbar_z.move(amount=self._headbar_z.mount_position, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._headbar_pitch.mount_position, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._headbar_roll.mount_position, absolute=True, native=True)
-            self._wheel_x.move(amount=self._wheel_x.mount_position, absolute=True, native=True)
-
-        # If previous positions are available, restores other motors to the position used during the previous runtime.
-        # This relies on the idea that mounting is primarily facilitated by moving the lickport away, while all mouse
-        # positioning motors can be set to the parameters optimal for the mouse being mounted.
-        else:
-            self._headbar_z.move(amount=self._previous_positions.headbar_z, absolute=True, native=True)
-            self._headbar_pitch.move(amount=self._previous_positions.headbar_pitch, absolute=True, native=True)
-            self._headbar_roll.move(amount=self._previous_positions.headbar_roll, absolute=True, native=True)
-            self._wheel_x.move(amount=self._previous_positions.wheel_x, absolute=True, native=True)
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def unmount_position(self) -> None:
-        """Moves the lick-port back to the mount position in all axes while keeping all other motors in their current
-        positions.
-
-        This command facilitates removing (unmounting) the animal from the VR rig while being safe to execute when the
-        mesoscope objective and other mesoscope-VR elements are positioned for imaging.
-
-        Notes:
-            Technically, calling the mount_position() method after generating a new ZaberMotors snapshot will behave
-            identically to this command. However, to improve runtime safety and the clarity of the class API, it is
-            highly encouraged to use this method to unmount the animal.
-        """
-
-        # Disables the safety motor lock before moving the motors.
-        self.unpark_motors()
-
-        # Moves the lick-port back to the mount position, while keeping all other motors in their current positions.
-        self._lickport_y.move(amount=self._lickport_y.mount_position, absolute=True, native=True)
-        self._lickport_z.move(amount=self._lickport_z.mount_position, absolute=True, native=True)
-        self._lickport_x.move(amount=self._lickport_x.mount_position, absolute=True, native=True)
-
-        # Waits for all motors to finish moving before returning to caller.
-        self.wait_until_idle()
-
-        # Prevents further interaction with the motors without manually disabling the parking lock.
-        self.park_motors()
-
-    def generate_position_snapshot(self) -> ZaberPositions:
-        """Queries the current positions of all managed Zaber motors, packages the position data into a ZaberPositions
-        instance, and returns it to the caller.
-
-        This method is used by runtime classes to update the ZaberPositions instance cached on disk for each animal.
-        The method also updates the local ZaberPositions copy stored inside the class instance with the data from the
-        generated snapshot. Primarily, this has to be done to support the Zaber motor shutdown sequence.
-        """
-        self._previous_positions = ZaberPositions(
-            headbar_z=int(self._headbar_z.get_position(native=True)),
-            headbar_pitch=int(self._headbar_pitch.get_position(native=True)),
-            headbar_roll=int(self._headbar_roll.get_position(native=True)),
-            wheel_x=int(self._wheel_x.get_position(native=True)),
-            lickport_z=int(self._lickport_z.get_position(native=True)),
-            lickport_x=int(self._lickport_x.get_position(native=True)),
-            lickport_y=int(self._lickport_y.get_position(native=True)),
-        )
-        return self._previous_positions
-
-    def wait_until_idle(self) -> None:
-        """Blocks in-place while at least one motor in the managed motor group(s) is moving.
-
-        Primarily, this method is used to issue commands to multiple motor groups and then block until all motors in
-        all groups finish moving. This optimizes the overall time taken to move the motors.
-        """
-
-        # Waits for the motors to finish moving. Note, motor state polling includes the built-in delay mechanism to
-        # prevent overwhelming the communication interface.
-        while (
-            self._headbar_z.is_busy
-            or self._headbar_pitch.is_busy
-            or self._headbar_roll.is_busy
-            or self._wheel_x.is_busy
-            or self._lickport_z.is_busy
-            or self._lickport_x.is_busy
-            or self._lickport_y.is_busy
-        ):
-            pass
-
-    def disconnect(self) -> None:
-        """Disconnects from the communication port(s) of the managed motor groups.
-
-        This method should be called after the motors are parked (moved to their final parking position) to release
-        the connection resources. If this method is not called, the runtime will NOT be able to terminate.
-        """
-        self._headbar.disconnect()
-        self._wheel.disconnect()
-        self._lickport.disconnect()
-
-    def park_motors(self) -> None:
-        """Parks all managed motor groups, preventing them from being moved via this library or Zaber GUI until
-        they are unparked via the unpark_motors() command."""
-        self._headbar_pitch.park()
-        self._headbar_roll.park()
-        self._headbar_z.park()
-        self._wheel_x.park()
-        self._lickport_x.park()
-        self._lickport_y.park()
-        self._lickport_z.park()
-
-    def unpark_motors(self) -> None:
-        """Unparks all managed motor groups, allowing them to be moved via this library or the Zaber GUI."""
-        self._headbar_pitch.unpark()
-        self._headbar_roll.unpark()
-        self._headbar_z.unpark()
-        self._wheel_x.unpark()
-        self._lickport_x.unpark()
-        self._lickport_y.unpark()
-        self._lickport_z.unpark()
-
-    @property
-    def is_connected(self) -> bool:
-        """Returns True if all managed motor connections are active and False if at least one connection is inactive."""
-        connections = [
-            self._headbar.is_connected,
-            self._lickport.is_connected,
-            self._wheel.is_connected,
-        ]
-        return all(connections)
-
-
 class MicroControllerInterfaces:
     """Interfaces with all Ataraxis Micro Controller (AMC) devices that control Mesoscope-VR system hardware and acquire
     non-video behavior data.
@@ -472,27 +56,16 @@ class MicroControllerInterfaces:
         _previous_volume: Tracks the volume of water dispensed during previous deliver_reward() calls.
         _previous_tone_duration: Tracks the auditory tone duration during previous deliver_reward() or simulate_reward()
             calls.
-        _screen_state: Tracks the current VR screen state.
-        _frame_monitoring: Tracks the current mesoscope frame monitoring state.
-        _torque_monitoring: Tracks the current torque monitoring state.
         _lick_monitoring: Tracks the current lick monitoring state.
         _encoder_monitoring: Tracks the current encoder monitoring state.
-        _break_state: Tracks the current break state.
         _delay_timer: Stores a millisecond-precise timer used by certain sequential command methods.
-        wheel_break: The interface that controls the electromagnetic break attached to the running wheel.
         valve: The interface that controls the solenoid water valve that delivers water to the animal.
-        screens: The interface that controls the power state of the VR display screens.
         _actor: The main interface for the 'Actor' Ataraxis Micro Controller (AMC) device.
-        mesoscope_frame: The interface that monitors frame acquisition timestamp signals sent by the mesoscope.
         lick: The interface that monitors animal's interactions with the lick sensor (detects licks).
-        torque: The interface that monitors the torque applied by the animal to the running wheel.
-        _sensor: The main interface for the 'Sensor' Ataraxis Micro Controller (AMC) device.
-        wheel_encoder: The interface that monitors the rotation of the running wheel and converts it into the distance
-            traveled by the animal.
-        _encoder: The main interface for the 'Encoder' Ataraxis Micro Controller (AMC) device.
+
     """
 
-    def __init__(self, data_logger: DataLogger) -> None:
+    def __init__(self, data_logger: DataLogger, valve_ids: tuple[int], lick_ids: tuple[int]) -> None:
         # Initializes the start state tracker first
         self._started: bool = False
 
@@ -508,14 +81,9 @@ class MicroControllerInterfaces:
         )
 
         # Initializes internal tracker variables
-        self._previous_volume: float = 0.0
-        self._previous_tone_duration: int = 0
-        self._screen_state: bool = False
-        self._frame_monitoring: bool = False
-        self._torque_monitoring: bool = False
-        self._lick_monitoring: bool = False
-        self._encoder_monitoring: bool = False
-        self._break_state: bool = True  # The break is normally engaged, so it starts engaged by default
+        self._previous_volume: dict[int, float] = {i: 0.0 for i in valve_ids}
+        self._previous_tone_duration: dict[int, int] = {i: 0 for i in valve_ids}
+        self._lick_monitoring: bool = False # Tracks both lick ports
 
         self._delay_timer = PrecisionTimer("ms")
 
@@ -524,20 +92,17 @@ class MicroControllerInterfaces:
         # TTL trigger, etc.
 
         # Module interfaces:
-        self.wheel_break = BreakInterface(
-            minimum_break_strength=self._system_configuration.microcontrollers.minimum_break_strength_g_cm,
-            maximum_break_strength=self._system_configuration.microcontrollers.maximum_break_strength_g_cm,
-            object_diameter=self._system_configuration.microcontrollers.wheel_diameter_cm,
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.valve = ValveInterface(
+        self.valves = {i: ValveInterface(
+            module_id=np.uint8(i),
             valve_calibration_data=self._system_configuration.microcontrollers.valve_calibration_data,  # type: ignore
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.screens = ScreenInterface(
-            initially_on=False,  # Initial Screen State is hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
+            debug=False,
+        ) for i in valve_ids}
+
+        self.licks = {i: LickInterface(
+            module_id=np.uint8(i),
+            lick_threshold=self._system_configuration.microcontrollers.lick_threshold_adc,
+            debug=False,
+        ) for i in lick_ids}
 
         # Main interface:
         self._actor: MicroControllerInterface = MicroControllerInterface(
@@ -545,59 +110,7 @@ class MicroControllerInterfaces:
             microcontroller_serial_buffer_size=8192,  # Hardcoded
             microcontroller_usb_port=self._system_configuration.microcontrollers.actor_port,
             data_logger=data_logger,
-            module_interfaces=(self.wheel_break, self.valve, self.screens),
-        )
-
-        # SENSOR. Sensor AMC controls the hardware that collects data at regular intervals. This includes lick sensors,
-        # torque sensors, and input TTL recorders. Critically, all managed hardware does not rely on hardware interrupt
-        # logic to maintain the necessary precision.
-
-        # Module interfaces:
-        self.mesoscope_frame: TTLInterface = TTLInterface(
-            module_id=np.uint8(1),  # Hardcoded
-            report_pulses=True,  # Hardcoded
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.lick: LickInterface = LickInterface(
-            lick_threshold=self._system_configuration.microcontrollers.lick_threshold_adc,
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-        self.torque: TorqueInterface = TorqueInterface(
-            baseline_voltage=self._system_configuration.microcontrollers.torque_baseline_voltage_adc,
-            maximum_voltage=self._system_configuration.microcontrollers.torque_maximum_voltage_adc,
-            sensor_capacity=self._system_configuration.microcontrollers.torque_sensor_capacity_g_cm,
-            object_diameter=self._system_configuration.microcontrollers.wheel_diameter_cm,
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-
-        # Main interface:
-        self._sensor: MicroControllerInterface = MicroControllerInterface(
-            controller_id=np.uint8(152),  # Hardcoded
-            microcontroller_serial_buffer_size=8192,  # Hardcoded
-            microcontroller_usb_port=self._system_configuration.microcontrollers.sensor_port,
-            data_logger=data_logger,
-            module_interfaces=(self.mesoscope_frame, self.lick, self.torque),
-        )
-
-        # ENCODER. Encoder AMC is specifically designed to interface with a rotary encoder connected to the running
-        # wheel. The encoder uses hardware interrupt logic to maintain high precision and, therefore, it is isolated
-        # to a separate microcontroller to ensure adequate throughput.
-
-        # Module interfaces:
-        self.wheel_encoder: EncoderInterface = EncoderInterface(
-            encoder_ppr=self._system_configuration.microcontrollers.wheel_encoder_ppr,
-            object_diameter=self._system_configuration.microcontrollers.wheel_diameter_cm,
-            cm_per_unity_unit=self._system_configuration.microcontrollers.cm_per_unity_unit,
-            debug=self._system_configuration.microcontrollers.debug,
-        )
-
-        # Main interface:
-        self._encoder: MicroControllerInterface = MicroControllerInterface(
-            controller_id=np.uint8(203),  # Hardcoded
-            microcontroller_serial_buffer_size=8192,  # Hardcoded
-            microcontroller_usb_port=self._system_configuration.microcontrollers.encoder_port,
-            data_logger=data_logger,
-            module_interfaces=(self.wheel_encoder,),
+            module_interfaces=tuple(list(self.valves.values()) + list(self.licks.values()))
         )
 
     def __del__(self) -> None:
@@ -631,51 +144,27 @@ class MicroControllerInterfaces:
         # Starts all microcontroller interfaces
         self._actor.start()
         self._actor.unlock_controller()  # Only Actor outputs data, so no need to unlock other controllers.
-        self._sensor.start()
-        self._encoder.start()
-
-        # Configures the encoder to only report forward motion (CW) if the motion exceeds ~ 1 mm of distance.
-        self.wheel_encoder.set_parameters(
-            report_cw=self._system_configuration.microcontrollers.wheel_encoder_report_cw,
-            report_ccw=self._system_configuration.microcontrollers.wheel_encoder_report_ccw,
-            delta_threshold=self._system_configuration.microcontrollers.wheel_encoder_delta_threshold_pulse,
-        )
-
-        # Configures screen trigger pulse duration
-        screen_pulse_duration: float = convert_time(  # type: ignore
-            time=self._system_configuration.microcontrollers.screen_trigger_pulse_duration_ms,
-            from_units="ms",
-            to_units="us",
-        )
-        self.screens.set_parameters(pulse_duration=np.uint32(screen_pulse_duration))
 
         # Configures the water valve to deliver ~ 5 uL of water by default.
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        self.valve.set_parameters(
-            pulse_duration=np.uint32(self.valve.get_duration_from_volume(5.0)),  # Hardcoded for calibration purposes
-            calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
-            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-            tone_duration=np.uint32(tone_duration),
+        for valve in self.valves.values():
+            valve.set_parameters(
+                pulse_duration=np.uint32(valve.get_duration_from_volume(5.0)),  # Hardcoded for calibration purposes
+                calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
+                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
+                tone_duration=np.uint32(tone_duration),
         )
 
         # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
         # (used as a proxy for detecting licks).
-        self.lick.set_parameters(
-            signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
-            delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
-            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
-        )
-
-        # Configures the torque sensor to filter out noise and sub-threshold 'slack' torque signals.
-        self.torque.set_parameters(
-            report_ccw=np.bool(self._system_configuration.microcontrollers.torque_report_ccw),
-            report_cw=np.bool(self._system_configuration.microcontrollers.torque_report_cw),
-            signal_threshold=np.uint16(self._system_configuration.microcontrollers.torque_signal_threshold_adc),
-            delta_threshold=np.uint16(self._system_configuration.microcontrollers.torque_delta_threshold_adc),
-            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.torque_averaging_pool_size),
-        )
+        for lick in self.licks.values():
+            lick.set_parameters(
+                signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
+                delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
+                averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
+            )
 
         # The setup procedure is complete.
         self._started = True
@@ -704,72 +193,9 @@ class MicroControllerInterfaces:
 
         # Stops all microcontroller interfaces. This directly shuts down and resets all managed hardware modules.
         self._actor.stop()
-        self._sensor.stop()
-        self._encoder.stop()
 
         message = "Ataraxis Micro Controller (AMC) Interfaces: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
-
-    def enable_encoder_monitoring(self) -> None:
-        """Enables wheel encoder monitoring at a 2 kHz rate.
-
-        This means that, at most, the Encoder will send the data to the PC at the 2 kHz rate. The Encoder collects data
-        at the native rate supported by the microcontroller hardware, which likely exceeds the reporting rate.
-        """
-        if not self._encoder_monitoring:
-            self.wheel_encoder.reset_pulse_count()
-            self.wheel_encoder.check_state(
-                repetition_delay=np.uint32(self._system_configuration.microcontrollers.wheel_encoder_polling_delay_us)
-            )
-            self._encoder_monitoring = True
-
-    def disable_encoder_monitoring(self) -> None:
-        """Stops monitoring the wheel encoder."""
-        if self._encoder_monitoring:
-            self.wheel_encoder.reset_command_queue()
-            self._encoder_monitoring = False
-
-    def enable_break(self) -> None:
-        """Engages the wheel break at maximum strength, preventing the animal from running on the wheel."""
-        if not self._break_state:
-            self.wheel_break.toggle(state=True)
-            self._break_state = True
-
-    def disable_break(self) -> None:
-        """Disengages the wheel break, enabling the animal to run on the wheel."""
-        if self._break_state:
-            self.wheel_break.toggle(state=False)
-            self._break_state = False
-
-    def enable_vr_screens(self) -> None:
-        """Sets the VR screens to be ON."""
-        if not self._screen_state:  # If screens are OFF
-            self.screens.toggle()  # Sets them ON
-            self._screen_state = True
-
-    def disable_vr_screens(self) -> None:
-        """Sets the VR screens to be OFF."""
-        if self._screen_state:  # If screens are ON
-            self.screens.toggle()  # Sets them OFF
-            self._screen_state = False
-
-    def enable_mesoscope_frame_monitoring(self) -> None:
-        """Enables monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame at
-        ~ 1 kHZ rate.
-
-        The mesoscope sends the HIGH phase of the TTL pulse while it is scanning the frame, which produces a pulse of
-        ~100ms. This is followed by ~5ms LOW phase during which the Galvos are executing the flyback procedure. This
-        command checks the state of the TTL pin at the 1 kHZ rate, which is enough to accurately report both phases.
-        """
-        if not self._frame_monitoring:
-            self.mesoscope_frame.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
-            self._frame_monitoring = True
-
-    def disable_mesoscope_frame_monitoring(self) -> None:
-        """Stops monitoring the TTL pulses sent by the mesoscope to communicate when it is scanning a frame."""
-        if self._frame_monitoring:
-            self.mesoscope_frame.reset_command_queue()
-            self._frame_monitoring = False
 
     def enable_lick_monitoring(self) -> None:
         """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
@@ -788,37 +214,20 @@ class MicroControllerInterfaces:
             self.lick.reset_command_queue()
             self._lick_monitoring = False
 
-    def enable_torque_monitoring(self) -> None:
-        """Enables monitoring the torque sensor at ~ 1 kHZ rate.
-
-        The torque sensor detects CW and CCW torques applied by the animal to the wheel. Currently, we do not have a
-        way of reliably calibrating the sensor, so detected torque magnitudes are only approximate. However, the sensor
-        reliably distinguishes large torques from small torques and accurately tracks animal motion activity when the
-        wheel break is engaged.
-        """
-        if not self._torque_monitoring:
-            self.torque.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
-            self._torque_monitoring = True
-
-    def disable_torque_monitoring(self) -> None:
-        """Stops monitoring the torque sensor."""
-        if self._torque_monitoring:
-            self.torque.reset_command_queue()
-            self._torque_monitoring = False
-
-    def open_valve(self) -> None:
+    def open_valve(self, valve_id: int) -> None:
         """Opens the water reward solenoid valve.
 
         This method is primarily used to prime the water line with water before the first experiment or training session
         of the day.
         """
-        self.valve.toggle(state=True)
+        self.valves[valve_id].toggle(state=True)
 
-    def close_valve(self) -> None:
+    def close_valve(self, valve_id: int) -> None:
         """Closes the water reward solenoid valve."""
-        self.valve.toggle(state=False)
+        self.valves[valve_id].toggle(state=False)
 
-    def deliver_reward(self, volume: float = 5.0, tone_duration: int = 300, ignore_parameters: bool = False) -> None:
+
+    def deliver_reward(self, valve_id: int, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False) -> None:
         """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
         water.
 
@@ -838,80 +247,24 @@ class MicroControllerInterfaces:
         # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
         # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
         # reducing communication overhead.
-        if not ignore_parameters and (volume != self._previous_volume or tone_duration != self._previous_tone_duration):
+        if not ignore_parameters and (volume != self._previous_volume[valve_id] or tone_duration != self._previous_tone_duration[valve_id]):
             # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_volume = volume
-            self._previous_tone_duration = tone_duration
+            self._previous_volume[valve_id] = volume
+            self._previous_tone_duration[valve_id] = tone_duration
 
             # Note, calibration parameters are not used by the command below, but we explicitly set them here for
             # consistency
             tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
-            self.valve.set_parameters(
-                pulse_duration=self.valve.get_duration_from_volume(volume),
+            self.valves[valve_id].set_parameters(
+                pulse_duration=self.valves[valve_id].get_duration_from_volume(volume),
                 calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
                 calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
                 tone_duration=np.uint32(tone_duration),
             )
 
-        self.valve.send_pulse(noblock=False)
+        self.valves[valve_id].send_pulse(noblock=False)
 
-    def simulate_reward(self, tone_duration: int = 300) -> None:
-        """Simulates delivering water reward by emitting an audible 'reward' tone without triggering the valve.
-
-        This method is used during training when the animal refuses to consume water rewards. In this case, the water
-        rewards are not delivered, but the tones are still played to notify the animal it is performing the task as
-        required.
-
-        Args:
-            tone_duration: The duration of the auditory tone, in milliseconds, to emit while simulating the water
-                reward delivery.
-        """
-
-        # This ensures that the valve settings are only updated if tone_duration changed compared to the previous
-        # command runtime. This ensures that the valve settings are only updated when this is necessary, reducing
-        # communication overhead.
-        if tone_duration != self._previous_tone_duration:
-            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_tone_duration = tone_duration
-
-            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
-            # consistency
-            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
-            self.valve.set_parameters(
-                pulse_duration=self.valve.get_duration_from_volume(self._previous_volume),
-                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-                tone_duration=np.uint32(tone_duration),
-            )
-
-        self.valve.tone()
-
-    def configure_reward_parameters(self, volume: float = 5.0, tone_duration: int = 300) -> None:
-        """Configures all future water rewards to use the provided volume and tone duration parameters.
-
-        Primarily, this function is used to reconfigure the system from GUI and trigger reward delivery from Unity.
-
-        Args:
-            volume: The volume of water to deliver, in microliters.
-            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
-                reward.
-        """
-        if volume != self._previous_volume or tone_duration != self._previous_tone_duration:
-            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_volume = volume
-            self._previous_tone_duration = tone_duration
-
-            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
-            # consistency
-            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")  # type: ignore
-            self.valve.set_parameters(
-                pulse_duration=self.valve.get_duration_from_volume(volume),
-                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-                tone_duration=np.uint32(tone_duration),
-            )
-
-    def reference_valve(self) -> None:
+    def reference_valve(self, valve_id: int) -> None:
         """Runs the reference valve calibration procedure.
 
         Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
@@ -926,16 +279,16 @@ class MicroControllerInterfaces:
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        self.valve.set_parameters(
-            pulse_duration=np.uint32(self.valve.get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
+        self.valves[valve_id].set_parameters(
+            pulse_duration=np.uint32(self.valves[valve_id].get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
             calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
             calibration_count=np.uint16(200),  # Hardcoded to work with the 5.0 uL volume to dispense 1 ml of water.
             tone_duration=np.uint32(tone_duration),
         )  # 5 ul x 200 times
 
-        self.valve.calibrate()
+        self.valves[valve_id].calibrate()
 
-    def calibrate_valve(self, pulse_duration: int = 15) -> None:
+    def calibrate_valve(self, valve_id: int, pulse_duration: int = 15) -> None:
         """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
         pulse_duration.
 
@@ -960,28 +313,13 @@ class MicroControllerInterfaces:
         tone_duration: float = convert_time(  # type: ignore
             time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
         )
-        self.valve.set_parameters(
+        self.valves[valve_id].set_parameters(
             pulse_duration=np.uint32(pulse_us),
             calibration_delay=np.uint32(300000),
             calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
             tone_duration=np.uint32(tone_duration),
         )
-        self.valve.calibrate()
-
-    def reset_mesoscope_frame_count(self) -> None:
-        """Resets the mesoscope frame counter to 0."""
-        self.mesoscope_frame.reset_pulse_count()
-
-    def reset_distance_tracker(self) -> None:
-        """Resets the total distance traveled by the animal since runtime onset and the current position of the animal
-        relative to runtime onset to 0.
-        """
-        self.wheel_encoder.reset_distance_tracker()
-
-    @property
-    def mesoscope_frame_count(self) -> np.uint64:
-        """Returns the total number of mesoscope frame acquisition pulses recorded since runtime onset."""
-        return self.mesoscope_frame.pulse_count
+        self.valves[valve_id].calibrate()
 
     @property
     def delivered_water_volume(self) -> np.float64:
@@ -992,21 +330,6 @@ class MicroControllerInterfaces:
     def lick_count(self) -> np.uint64:
         """Returns the total number of licks recorded since runtime onset."""
         return self.lick.lick_count
-
-    @property
-    def traveled_distance(self) -> np.float64:
-        """Returns the total distance, in centimeters, traveled by the animal since runtime onset.
-
-        This value does not account for the direction of travel and is a monotonically increasing count of traveled
-        centimeters.
-        """
-        return self.wheel_encoder.traveled_distance
-
-    @property
-    def position(self) -> np.float64:
-        """Returns the current absolute position of the animal, in Unity units, relative to runtime onset."""
-        return self.wheel_encoder.absolute_position
-
 
 class VideoSystems:
     """Interfaces with all cameras managed by Ataraxis Video System (AVS) classes that acquire and save camera frames
