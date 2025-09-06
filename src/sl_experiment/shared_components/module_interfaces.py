@@ -2,7 +2,6 @@
 These interfaces are designed to work with the hardware modules assembled and configured according to the instructions
 from our microcontrollers' library: https://github.com/Sun-Lab-NBB/sl-micro-controllers."""
 
-import math
 from typing import Any
 
 import numpy as np
@@ -20,6 +19,7 @@ from ataraxis_communication_interface import (
     RepeatedModuleCommand,
 )
 
+
 class ValveInterface(ModuleInterface):
     """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
 
@@ -29,35 +29,25 @@ class ValveInterface(ModuleInterface):
     valve or to cycle opening and closing in a way that ensures a specific amount of fluid passes through the
     valve.
 
-    Notes:
-        This interface comes pre-configured to receive valve pulse triggers from Unity via the "Gimbl/Reward/"
-        topic.
-
-        The valve will notify the PC about its initial state (Open or Closed) after setup.
-
-        Our valve is statically configured to deliver audible tones when it is pulsed. This is used exclusively by the
-        Pulse command, so the tone will not sound when the valve is activated during Calibration or Open commands. The
-        default pulse duration is 100 ms, and this is primarily used to provide the animal with an auditory cue for the
-        water reward.
-
     Args:
         valve_calibration_data: A tuple of tuples that contains the data required to map pulse duration to delivered
             fluid volume. Each sub-tuple should contain the integer that specifies the pulse duration in microseconds
-            and a float that specifies the delivered fluid volume in microliters. If you do not know this data,
-            initialize the class using a placeholder calibration tuple and use the calibration() class method to
-            collect this data using the ValveModule.
+            and a float that specifies the delivered fluid volume in microliters. If this data is not known at class
+            initialization, use a placeholder calibration tuple and use the calibration() class method to collect this
+            data using the ValveModule.
         debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
             the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
+    Notes:
+        This class is explicitly designed to work with the valves whose calibration curve is most closely approximated
+        using a power law equation. Modify the source code of the class to use a different calibration procedure when
+        using a valve whose calibration curve deviates from this assumption.
+
     Attributes:
-        _scale_coefficient: Stores the scale coefficient derived from the calibration data. We use the power law to
-            fit the data, which results in better overall fit than using the linera equation.
+        _scale_coefficient: Stores the power law scale coefficient derived from the calibration data.
         _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that
             some valves may have a minimum open time or dispensed fluid volume, which is captured by the intercept.
             This improves the precision of fluid-volume-to-valve-open-time conversions.
-        _calibration_cov: Stores the covariance matrix that describes the quality of fitting the calibration data using
-            the power law. This is used to determine how well the valve performance is approximated by the power law.
-        _reward_topic: Stores the topic used by Unity to issue reward commands to the module.
         _debug: Stores the debug flag.
         _valve_tracker: Stores the SharedMemoryArray that tracks the total volume of water dispensed by the valve
             during runtime.
@@ -69,7 +59,10 @@ class ValveInterface(ModuleInterface):
     """
 
     def __init__(
-        self, module_id: np.uint8, valve_calibration_data: tuple[tuple[int | float, int | float], ...], debug: bool = False
+        self,
+        module_id: np.uint8,
+        valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+        debug: bool = False,
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
         # kOpen, kClosed, kCalibrated, kToneOn, kToneOff, kTonePinNotSet
@@ -104,14 +97,10 @@ class ValveInterface(ModuleInterface):
         # Fits the power-law model to the input calibration data and saves the fit parameters and covariance matrix to
         # class attributes
         # noinspection PyTupleAssignmentBalance
-        params, fit_cov_matrix = curve_fit(f=power_law_model, xdata=pulse_durations, ydata=fluid_volumes)
+        params, _ = curve_fit(f=power_law_model, xdata=pulse_durations, ydata=fluid_volumes)
         scale_coefficient, nonlinearity_exponent = params
-        self._calibration_cov: NDArray[np.float64] = fit_cov_matrix
         self._scale_coefficient: np.float64 = np.round(a=np.float64(scale_coefficient), decimals=8)
         self._nonlinearity_exponent: np.float64 = np.round(a=np.float64(nonlinearity_exponent), decimals=8)
-
-        # Stores the reward topic to make it accessible via property
-        self._reward_topic: str = "Gimbl/Reward/"
 
         # Precreates a shared memory array used to track and share valve state data. Index 0 tracks the total amount of
         # water dispensed by the valve during runtime.
@@ -139,16 +128,7 @@ class ValveInterface(ModuleInterface):
         self._valve_tracker.disconnect()
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
-        """Processes incoming data.
-
-        Valve calibration events (code 54) are sent to the terminal via console regardless of the debug flag. If the
-        class was initialized in the debug mode, Valve opening (code 52) and closing (code 53) codes are also sent to
-        the terminal. Also, stores the total number of times the valve was opened under _reward_tracker index 0 and the
-        total volume of water delivered during runtime under _reward_tracker index 1.
-
-        Note:
-            Make sure the console is enabled before calling this method.
-        """
+        """Processes incoming data sent by the module to the PC."""
         if message.event == 52:
             if self._debug:
                 console.echo(f"Valve Opened")
@@ -163,8 +143,7 @@ class ValveInterface(ModuleInterface):
                 console.echo(f"Valve Closed")
 
             # Each time the valve transitions to closed state, records the period of time the valve was open and uses it
-            # to estimate the volume of fluid delivered through the valve. Accumulates the total volume in the tracker
-            # array.
+            # to estimate the volume of fluid delivered through the valve.
             if self._previous_state:
                 self._previous_state = False
                 open_duration = self._cycle_timer.elapsed  # type: ignore
@@ -189,7 +168,6 @@ class ValveInterface(ModuleInterface):
         pulse_duration: np.uint32 = np.uint32(35590),
         calibration_delay: np.uint32 = np.uint32(200000),
         calibration_count: np.uint16 = np.uint16(200),
-        tone_duration: np.uint32 = np.uint32(300000),
     ) -> None:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
@@ -209,17 +187,14 @@ class ValveInterface(ModuleInterface):
                 Calibration works by repeatedly pulsing the valve the requested number of times. Delaying after closing
                 the valve (ending the pulse) ensures the valve hardware has enough time to respond to the inactivation
                 phase before starting the next calibration cycle.
-            calibration_count: The number of times to pulse the valve during calibration. A number between 10 and 100 is
-                enough for most use cases.
-            tone_duration: The time, in microseconds, to sound the audible tone when the valve is pulsed. This is only
-                used if the hardware ValveModule instance was provided with the TonePin argument at instantiation. If
-                your use case involves emitting tones, make sure this value is higher than the pulse_duration value.
+            calibration_count: The number of times to pulse the valve during calibration. A number between 100 and 200
+                is enough for most use cases.
         """
         message = ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),
-            parameter_data=(pulse_duration, calibration_delay, calibration_count, tone_duration),
+            parameter_data=(pulse_duration, calibration_delay, calibration_count),
         )
         self._input_queue.put(message)  # type: ignore
 
@@ -307,48 +282,8 @@ class ValveInterface(ModuleInterface):
         )
         self._input_queue.put(command)  # type: ignore
 
-    def tone(self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False) -> None:
-        """Triggers ValveModule to an audible tone without changing the state of the managed valve.
-
-        This command will only work for ValveModules connected to a piezoelectric buzzer and configured to interface
-        with the buzzer's trigger pin. It allows emitting tones without water rewards, which is primarily used during
-        training runtimes that pause delivering water when the animal is not consuming rewards.
-
-        Notes:
-            While enforcing auditory tone durations is not as important as enforcing valve open times, this command
-            runs in blocking mode by default to match the behavior of the tone-emitting valve pulse command.
-
-        Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
-                will only run once. The exact repetition delay will be further affected by other modules managed by the
-                same microcontroller and may not be perfectly accurate.
-            noblock: Determines whether the command should block the microcontroller while the tone is delivered.
-                Blocking ensures precise tone duration. Non-blocking allows the microcontroller to perform other
-                operations while waiting, increasing its throughput.
-        """
-        command: OneOffModuleCommand | RepeatedModuleCommand
-        if repetition_delay == 0:
-            command = OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(5),
-                noblock=np.bool(noblock),
-            )
-        else:
-            command = RepeatedModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(5),
-                noblock=np.bool(noblock),
-                cycle_delay=repetition_delay,
-            )
-        self._input_queue.put(command)  # type: ignore
-
     def get_duration_from_volume(self, target_volume: float) -> np.uint32:
-        """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
-        will use to deliver that fluid volume.
+        """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds.
 
         Use this method to convert the desired fluid volume into the pulse_duration value that can be submitted to the
         ValveModule via the set_parameters() class method.
@@ -361,10 +296,10 @@ class ValveInterface(ModuleInterface):
                 calibration data.
 
         Returns:
-            The microsecond pulse duration that would be used to deliver the specified volume.
+            The microsecond pulse duration that would allow the valve deliver the specified volume of fluid.
         """
-        # Determines the minimum valid pulse duration. We hardcode this at 10 ms as this is the lower calibration
-        # boundary
+        # Determines the minimum valid pulse duration. This is hardcoded at 10 ms as this is the lower calibration
+        # boundary.
         min_pulse_duration = 10.0  # microseconds
         min_dispensed_volume = self._scale_coefficient * np.power(min_pulse_duration, self._nonlinearity_exponent)
 
@@ -382,13 +317,8 @@ class ValveInterface(ModuleInterface):
         return np.uint32(np.round(pulse_duration))
 
     @property
-    def mqtt_topic(self) -> str:
-        """Returns the MQTT topic monitored by the module to receive reward commands from Unity."""
-        return self._reward_topic
-
-    @property
     def scale_coefficient(self) -> np.float64:
-        """Returns the scaling coefficient (A) from the power‐law calibration.
+        """Returns the scaling coefficient (A) derived during the power‐law calibration.
 
         In the calibration model, fluid_volume = A * (pulse_duration)^B, this coefficient
         converts pulse duration (in microseconds) into the appropriate fluid volume (in microliters)
@@ -398,7 +328,7 @@ class ValveInterface(ModuleInterface):
 
     @property
     def nonlinearity_exponent(self) -> np.float64:
-        """Returns the nonlinearity exponent (B) from the power‐law calibration.
+        """Returns the nonlinearity exponent (B) derived during the power‐law calibration.
 
         In the calibration model, fluid_volume = A * (pulse_duration)^B, this exponent indicates
         the degree of nonlinearity in how the dispensed volume scales with the valve’s pulse duration.
@@ -407,34 +337,9 @@ class ValveInterface(ModuleInterface):
         return self._nonlinearity_exponent
 
     @property
-    def calibration_covariance(self) -> NDArray[np.float64]:
-        """Returns the 2x2 covariance matrix associated with the power‐law calibration fit.
-
-        The covariance matrix contains the estimated variances of the calibration parameters
-        on its diagonal (i.e., variance of the scale coefficient and the nonlinearity exponent)
-        and the covariances between these parameters in its off-diagonal elements.
-
-        This information can be used to assess the uncertainty in the calibration.
-
-        Returns:
-            A NumPy array (2x2) representing the covariance matrix.
-        """
-        return self._calibration_cov
-
-    @property
     def delivered_volume(self) -> np.float64:
-        """Returns the total volume of water, in microliters, delivered by the valve during the current runtime."""
+        """Returns the total volume of water, in microliters, delivered by the valve during this runtime."""
         return self._valve_tracker.read_data(index=0, convert_output=False)  # type: ignore
-
-    @property
-    def valve_tracker(self) -> SharedMemoryArray:
-        """Returns the SharedMemoryArray that stores the total number of valve pulses and the total volume of water
-        delivered during the current runtime.
-
-        The number of valve pulses is stored under index 0, while the total delivered volume is stored under index 1.
-        Both values are stored as a float64 datatype. The total delivered volume is given in microliters.
-        """
-        return self._valve_tracker
 
 
 class LickInterface(ModuleInterface):

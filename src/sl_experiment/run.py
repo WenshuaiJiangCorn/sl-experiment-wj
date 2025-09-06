@@ -1,11 +1,13 @@
 # WJ: Run this script to start the experiment
 import time
+
 import keyboard
 from ataraxis_base_utilities import console
-from mesoscope_vr.binding_classes import MicroControllerInterfaces
 from ataraxis_data_structures import DataLogger
+from mesoscope_vr.binding_classes import MicroControllerInterfaces
 
 output_dir = r"test_output"
+
 
 def run_experiment():
     data_logger = DataLogger(output_directory=output_dir)
@@ -48,6 +50,7 @@ def run_experiment():
     finally:
         mc.stop()
         console.echo("Experiment ends.")
+
 
 # Run experiment
 if __name__ == "__main__":
