@@ -4,7 +4,8 @@ import time
 import keyboard
 from ataraxis_base_utilities import console
 from ataraxis_data_structures import DataLogger
-from mesoscope_vr.binding_classes import MicroControllerInterfaces
+
+from src.sl_experiment.binding_classes import MicroControllerInterfaces
 
 output_dir = r"test_output"
 

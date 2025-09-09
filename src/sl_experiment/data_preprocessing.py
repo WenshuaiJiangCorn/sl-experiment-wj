@@ -36,8 +36,9 @@ from sl_shared_assets import (
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import compress_npy_logs
 
+from src.sl_experiment.shared_components import WaterSheet, SurgerySheet
+
 from .tools import MesoscopeData, get_system_configuration
-from ..shared_components import WaterSheet, SurgerySheet
 
 
 def _delete_directory(directory_path: Path) -> None:
@@ -432,7 +433,6 @@ def _process_invariant_metadata(file: Path, ops_path: Path, metadata_path: Path)
         metadata_path: The path to the metadata.json file that should be created by this function. This is resolved
             by the ProjectData class to match the processed project, animal, and session combination.
     """
-
     # Reads the frame-invariant metadata from the first page (frame) of the stack. This metadata is the same across
     # all frames and stacks.
     with tifffile.TiffFile(file) as tiff:
@@ -464,7 +464,6 @@ def _preprocess_video_names(session_data: SessionData) -> None:
     Args:
         session_data: The SessionData instance for the processed session.
     """
-
     # Resolves the path to the camera frame directory
     camera_frame_directory = Path(session_data.raw_data.camera_data_path)
     session_name = session_data.session_name
@@ -601,8 +600,8 @@ def _pull_mesoscope_data(
     # If the user has repeatedly failed 5 attempts in a row, exits with a runtime error.
     if error:
         message = (
-            f"Failed 5 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
-            f"data processing and terminating the preprocessing runtime."
+            "Failed 5 consecutive attempts to locate all required mesoscope frame files. Aborting mesoscope "
+            "data processing and terminating the preprocessing runtime."
         )
         console.error(message=message, error=RuntimeError)
 
@@ -781,7 +780,7 @@ def _preprocess_mesoscope_directory(
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         # Submits all tasks
         future_to_file = set()
-        for file, frame in zip(tiff_files, frame_numbers):
+        for file, frame in zip(tiff_files, frame_numbers, strict=False):
             # noinspection PyTypeChecker
             future_to_file.add(executor.submit(process_func, file, frame))
 
@@ -890,7 +889,6 @@ def _resolve_telomere_marker(session_data: SessionData) -> None:
     Args:
         session_data: The SessionData instance for the processed session.
     """
-
     # Loads the session descriptor file to read the state of the 'incomplete' flag.
     descriptor_path = Path(session_data.raw_data.session_descriptor_path)
     descriptor: RunTrainingDescriptor | LickTrainingDescriptor | MesoscopeExperimentDescriptor
@@ -927,7 +925,6 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     Raises:
         ValueError: If the session_type attribute of the input SessionData instance is not one of the supported options.
     """
-
     # Queries the data acquisition system configuration parameters.
     system_configuration = get_system_configuration()
 
@@ -988,7 +985,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
             session_type=session_data.session_type,
         )
 
-        message = f"Water restriction log entry: Written."
+        message = "Water restriction log entry: Written."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Loads the surgery log Google Sheet file
@@ -1003,7 +1000,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     if quality != "":
         sl_sheet.update_surgery_quality(quality=int(quality))
 
-        message = f"Surgery quality: Updated."
+        message = "Surgery quality: Updated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     # Extracts the surgery data from the Google sheet file
@@ -1012,7 +1009,7 @@ def _preprocess_google_sheet_data(session_data: SessionData) -> None:
     # Saves the data as a .yaml file to the session directory
     data.to_yaml(Path(session_data.raw_data.surgery_metadata_path))
 
-    message = f"Surgery data snapshot: Saved."
+    message = "Surgery data snapshot: Saved."
     console.echo(message=message, level=LogLevel.SUCCESS)
 
 
@@ -1039,7 +1036,6 @@ def _push_data(
             advised to set this value so that num_threads * 2 (number of destinations) does not exceed the total
             number of CPU cores - 4.
     """
-
     # Uses SessionData to get the paths to remote destinations
     mesoscope_data = MesoscopeData(session_data)
     destinations = (
@@ -1331,7 +1327,6 @@ def purge_failed_session(session_data: SessionData) -> None:
     Args:
         session_data: The SessionData instance for the session whose data needs to be removed.
     """
-
     # If a session does not contain the nk.bin marker, this suggests that it was able to successfully initialize the
     # runtime and likely contains valid data. IN this case, asks the user to confirm they intend to proceed with the
     # deletion. Sessions with nk.bin markers are considered safe for removal at all times.
@@ -1352,7 +1347,7 @@ def purge_failed_session(session_data: SessionData) -> None:
                 break
 
             # Aborts without deleting
-            elif answer.lower() == "no":
+            if answer.lower() == "no":
                 message = f"Session {session_data.session_name} data purging: Aborted"
                 console.echo(message=message, level=LogLevel.SUCCESS)
                 return
