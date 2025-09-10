@@ -1,15 +1,13 @@
 """This module provides the API for interfacing with hardware modules managed by a Teensy 4.0 microcontroller."""
 
 from enum import IntEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from scipy.optimize import curve_fit
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, SharedMemoryArray
-from ataraxis_time.time_helpers import convert_time
 from ataraxis_communication_interface import (
     ModuleData,
     ModuleState,
@@ -17,11 +15,23 @@ from ataraxis_communication_interface import (
     MicroControllerInterface,
 )
 
+# Prevents typing-related imports from being imported at runtime
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 # Defines constants used in this module
 _ZERO_LONG = np.uint32(0)
 _ZERO_BYTE = np.uint8(0)
 _BOOL_FALSE = np.bool(False)
+_BOOL_TRUE = np.bool(True)
 _FIVE_MICROLITERS = np.float64(5)
+
+# Microcontroller parameters
+_CONTROLLED_ID = np.uint8(101)
+_CONTROLLER_PORT = "/dev/ttyACM0"
+_CONTROLLER_BUFFER_SIZE = 8192
+_CONTROLLER_BAUDRATE = 115200
+_CONTROLLER_KEEPALIVE_INTERVAL = 500
 
 # Valve module calibration parameters
 # The delay between calibration pulses in us. Should never be below 200000.
@@ -126,11 +136,11 @@ class ValveInterface(ModuleInterface):
         self,
         module_id: np.uint8,
         valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+        *,
         debug: bool = False,
     ) -> None:
         error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
         # kOpen, kClosed, kCalibrated
-        # data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}
         data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
 
         self._debug: bool = debug
@@ -200,7 +210,7 @@ class ValveInterface(ModuleInterface):
             # Resets the cycle timer each time the valve transitions to open state.
             if not self._previous_state:
                 self._previous_state = True
-                self._cycle_timer.reset()
+                self._cycle_timer.reset()  # type: ignore[union-attr]
 
         elif message.event == _ValveStateCodes.VALVE_CLOSED:
             if self._debug:
@@ -210,7 +220,7 @@ class ValveInterface(ModuleInterface):
             # to estimate the volume of fluid delivered through the valve.
             if self._previous_state:
                 self._previous_state = False
-                open_duration = self._cycle_timer.elapsed
+                open_duration = self._cycle_timer.elapsed  # type: ignore[union-attr]
 
                 # Accumulates delivered fluid volumes into the tracker.
                 delivered_volume = np.float64(
@@ -223,7 +233,7 @@ class ValveInterface(ModuleInterface):
         elif message.event == _ValveStateCodes.VALVE_CALIBRATED:
             console.echo("Valve Calibration: Complete")
 
-    def dispense_volume(self, volume: np.float64 = _FIVE_MICROLITERS, noblock: bool = True) -> None:
+    def dispense_volume(self, volume: np.float64 = _FIVE_MICROLITERS, noblock: np.bool = _BOOL_TRUE) -> None:
         """Delivers teh requested volume of fluid through the valve.
 
         Args:
@@ -278,7 +288,7 @@ class ValveInterface(ModuleInterface):
 
     @property
     def scale_coefficient(self) -> np.float64:
-        """Returns the scaling coefficient (A) derived during the power‐law calibration.
+        """Returns the scaling coefficient (A) derived during the power-law calibration.
 
         In the calibration model, fluid_volume = A * (pulse_duration)^B, this coefficient
         converts pulse duration (in microseconds) into the appropriate fluid volume (in microliters)
@@ -288,10 +298,10 @@ class ValveInterface(ModuleInterface):
 
     @property
     def nonlinearity_exponent(self) -> np.float64:
-        """Returns the nonlinearity exponent (B) derived during the power‐law calibration.
+        """Returns the nonlinearity exponent (B) derived during the power-law calibration.
 
         In the calibration model, fluid_volume = A * (pulse_duration)^B, this exponent indicates
-        the degree of nonlinearity in how the dispensed volume scales with the valve’s pulse duration.
+        the degree of nonlinearity in how the dispensed volume scales with the valve`s pulse duration.
         For example, an exponent of 1 would indicate a linear relationship.
         """
         return self._nonlinearity_exponent
@@ -299,7 +309,7 @@ class ValveInterface(ModuleInterface):
     @property
     def dispensed_volume(self) -> np.float64:
         """Returns the total volume of fluid, in microliters, delivered by the valve during the current runtime."""
-        return self._valve_tracker.read_data(index=0, convert_output=False)
+        return self._valve_tracker.read_data(index=0, convert_output=False)  # type: ignore[no-any-return]
 
 
 class LickInterface(ModuleInterface):
@@ -323,7 +333,7 @@ class LickInterface(ModuleInterface):
         _once: Ensures that the sensor detection configuration is applied exactly once per instance life cycle.
     """
 
-    def __init__(self, module_id: np.uint8, debug: bool = False) -> None:
+    def __init__(self, module_id: np.uint8, *, debug: bool = False) -> None:
         data_codes: set[np.uint8] = {np.uint8(51)}  # kChanged
         self._debug: bool = debug
 
@@ -369,7 +379,7 @@ class LickInterface(ModuleInterface):
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Processes incoming data sent by the module to the PC."""
         # Currently, only code 51 messages are passed to this method. From each, extracts the detected voltage level.
-        detected_voltage: np.uint16 = message.data_object
+        detected_voltage: np.uint16 = message.data_object  # type: ignore[union-attr, assignment]
 
         # If the class is initialized in debug mode, prints each received voltage level to the terminal.
         if self._debug:
@@ -431,7 +441,7 @@ class LickInterface(ModuleInterface):
     @property
     def lick_count(self) -> np.uint64:
         """Returns the total number of licks detected by the module since runtime onset."""
-        return self._lick_tracker.read_data(index=0, convert_output=False)
+        return self._lick_tracker.read_data(index=0, convert_output=False)  # type: ignore[no-any-return]
 
     @property
     def lick_threshold(self) -> np.uint16:
@@ -441,7 +451,7 @@ class LickInterface(ModuleInterface):
         return self._lick_threshold
 
 
-class MicroControllerInterfaces:
+class AMCInterface:
     """Interfaces with all Ataraxis Micro Controller (AMC) interfaces used to acquire non-video behavior data.
 
     This class interfaces with the single AMC device used to both record the behavior data and interface with the
@@ -458,11 +468,7 @@ class MicroControllerInterfaces:
 
     Attributes:
         _started: Tracks whether the VR system and experiment runtime are currently running.
-        _sensor_polling_delay: Stores the delay, in microseconds, between any two consecutive sensor readout polls. This
-            delay is the same for most sensor modules.
-        _lick_monitoring: Tracks the current lick monitoring state.
-        _delay_timer: Stores a millisecond-precise timer used by certain sequential command methods.
-        _actor: The main interface for the 'Actor' Ataraxis Micro Controller (AMC) device.
+        _controller: The main interface for the Ataraxis Micro Controller (AMC) device managing the hardware modules.
 
     """
 
@@ -470,387 +476,91 @@ class MicroControllerInterfaces:
         # Initializes the start state tracker first
         self._started: bool = False
 
-        # Initializes internal tracker variables
-        self._previous_left_volume: float = 0.0
-        self._previous_right_volume: float = 0.0
-        self._previous_left_tone_duration: float = 0.0
-        self._previous_right_tone_duration: float = 0.0
-        self._lick_monitoring: bool = False  # Tracks both lick ports
-
-        self._delay_timer = PrecisionTimer("ms")
-
         # Module interfaces:
-        self.valve_left = ValveInterface(
+        self.left_valve = ValveInterface(
+            module_id=np.uint8(1),
+            valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
+            debug=False,
+        )
+
+        self.right_valve = ValveInterface(
+            module_id=np.uint8(2),
+            valve_calibration_data=_RIGHT_VALVE_CALIBRATION_DATA,
+            debug=False,
+        )
+
+        self.left_lick_sensor = LickInterface(
             module_id=np.uint8(1),
             debug=False,
         )
 
-        self.valve_right = ValveInterface(
+        self.right_lick_sensor = LickInterface(
             module_id=np.uint8(2),
-            debug=False,
-        )
-
-        self.lick_left = LickInterface(
-            module_id=np.uint8(1),
-            lick_threshold=450,
-            debug=False,
-        )
-
-        self.lick_right = LickInterface(
-            module_id=np.uint8(2),
-            lick_threshold=450,
             debug=False,
         )
 
         # Main interface:
-        self._actor: MicroControllerInterface = MicroControllerInterface(
-            controller_id=np.uint8(101),  # Hardcoded
-            microcontroller_serial_buffer_size=8192,  # Hardcoded
-            microcontroller_usb_port="dev/ACMO1",
+        self._controller: MicroControllerInterface = MicroControllerInterface(
+            controller_id=_CONTROLLED_ID,
+            buffer_size=_CONTROLLER_BUFFER_SIZE,
+            port=_CONTROLLER_PORT,
             data_logger=data_logger,
-            module_interfaces=(self.valve_left, self.valve_right, self.lick_left, self.lick_right),
+            module_interfaces=(self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor),
+            baudrate=_CONTROLLER_BAUDRATE,
+            keepalive_interval=_CONTROLLER_KEEPALIVE_INTERVAL,
         )
 
     def __del__(self) -> None:
-        """Ensures that all hardware resources are released when the object is garbage-collected."""
+        """Releases all reserved resources before the object is garbage-collected."""
         self.stop()
 
     def start(self) -> None:
-        """Starts MicroController communication processes and configures all hardware modules to use the runtime
-        parameters loaded from the acquisition system configuration file.
+        """Starts the microcontroller communication process and verifies the connected microcontroller's configuration.
 
-        This method sets up the necessary assets that enable MicroController-PC communication. Until this method is
-        called, all other class methods will not function correctly.
-
-        Notes:
-            After calling this method, most hardware modules will be initialized to an idle state. The only exception to
-            this rule is the wheel break, which initializes to the 'engaged' state. Use other class methods to
-            switch individual hardware modules into the desired state.
-
-            Since most modules initialize to an idle state, they will not be generating data. Therefore, it is safe
-            to call this method before enabling the DataLogger class. However, it is strongly advised to enable the
-            DataLogger as soon as possible to avoid data piling up in the buffer.
+        This method sets up the necessary assets that enable microcontroller-PC communication. Calling this method is
+        a prerequisite for using all other microcontroller and module interface methods.
         """
         # Prevents executing this method if the MicroControllers are already running.
         if self._started:
             return
 
-        message = "Initializing Ataraxis Micro Controller (AMC) Interfaces..."
+        message = "Initializing the Ataraxis Micro Controller (AMC) Interface..."
         console.echo(message=message, level=LogLevel.INFO)
 
-        # Starts all microcontroller interfaces
-        self._actor.start()
-        self._actor.unlock_controller()  # Only Actor outputs data, so no need to unlock other controllers.
+        # Starts all microcontroller communication process
+        self._controller.start()
 
-        # Configures the water valve to deliver ~ 5 uL of water by default.
-        tone_duration: float = convert_time(
-            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
-        )
-        self.valve_left.set_parameters(
-            pulse_duration=np.uint32(
-                self.valve_left.get_duration_from_volume(5.0)
-            ),  # Hardcoded for calibration purposes
-            calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
-            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-            tone_duration=np.uint32(tone_duration),
-        )
-        self.valve_right.set_parameters(
-            pulse_duration=np.uint32(
-                self.valve_right.get_duration_from_volume(5.0)
-            ),  # Hardcoded for calibration purposes
-            calibration_delay=np.uint32(300000),  # Hardcoded! Do not decrease unless you know what you are doing!
-            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-            tone_duration=np.uint32(tone_duration),
-        )
-        # Configures the lick sensor to filter out dry touches and only report significant changes in detected voltage
-        # (used as a proxy for detecting licks).
-        self.lick_left.set_parameters(
-            signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
-            delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
-            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
-        )
-        self.lick_right.set_parameters(
-            signal_threshold=np.uint16(self._system_configuration.microcontrollers.lick_signal_threshold_adc),
-            delta_threshold=np.uint16(self._system_configuration.microcontrollers.lick_delta_threshold_adc),
-            averaging_pool_size=np.uint8(self._system_configuration.microcontrollers.lick_averaging_pool_size),
-        )
+        # Unlocks all microcontroller pins. This allows the microcontroller to change the state of all manged pins.
+        self._controller.toggle_action_lock(toggle=False)
+        self._controller.toggle_ttl_lock(toggle=False)
 
         # The setup procedure is complete.
         self._started = True
 
-        message = "Ataraxis Micro Controller (AMC) Interfaces: Initialized."
+        message = "Ataraxis Micro Controller (AMC) Interface: Initialized."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
     def stop(self) -> None:
-        """Stops all MicroController communication processes and releases all resources.
-
-        This method needs to be called at the end of each runtime to release the resources reserved by the start()
-        method. Until the stop() method is called, the DataLogger instance may receive data from running
-        MicroControllers, so calling this method also guarantees no MicroController data will be lost if the DataLogger
-        process is terminated.
+        """Stops the microcontroller communication process and releases the resources reserved by the process during
+        runtime.
         """
         # Prevents stopping an already stopped VR process.
         if not self._started:
             return
 
-        message = "Terminating Ataraxis Micro Controller (AMC) Interfaces..."
+        message = "Terminating the Ataraxis Micro Controller (AMC) Interface..."
         console.echo(message=message, level=LogLevel.INFO)
 
         # Resets the _started tracker
         self._started = False
 
-        # Stops all microcontroller interfaces. This directly shuts down and resets all managed hardware modules.
-        self._actor.stop()
+        # Stops the microcontroller interface. This directly shuts down and resets all managed hardware modules.
+        self._controller.stop()
 
-        message = "Ataraxis Micro Controller (AMC) Interfaces: Terminated."
+        message = "Ataraxis Micro Controller (AMC) Interface: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
 
-    def enable_lick_monitoring(self) -> None:
-        """Enables monitoring the state of the conductive lick sensor at ~ 1 kHZ rate.
-
-        The lick sensor measures the voltage across the lick sensor and reports surges in voltage to the PC as a
-        reliable proxy for tongue-to-sensor contact. Most lick events span at least 100 ms of time and, therefore, the
-        rate of 1 kHZ is adequate for resolving all expected single-lick events.
-        """
-        if not self._lick_monitoring:
-            self.lick_left.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
-            self.lick_right.check_state(repetition_delay=np.uint32(self._sensor_polling_delay))
-            self._lick_monitoring = True
-
-    def disable_lick_monitoring(self) -> None:
-        """Stops monitoring the conductive lick sensor."""
-        if self._lick_monitoring:
-            self.lick_left.reset_command_queue()
-            self.lick_right.reset_command_queue()
-            self._lick_monitoring = False
-
-    def open_valve_left(self) -> None:
-        """Opens the water reward solenoid valve.
-
-        This method is primarily used to prime the water line with water before the first experiment or training session
-        of the day.
-        """
-        self.valve_left.toggle(state=True)
-
-    def close_valve_left(self) -> None:
-        """Closes the left water reward solenoid valve."""
-        self.valve_left.toggle(state=False)
-
-    def open_valve_right(self) -> None:
-        """Opens the right water reward solenoid valve."""
-        self.valve_right.toggle(state=True)
-
-    def close_valve_right(self) -> None:
-        """Closes the right water reward solenoid valve."""
-        self.valve_right.toggle(state=False)
-
-    def deliver_reward_left(self, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False) -> None:
-        """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
-        water.
-
-        This method assumes that the valve has been calibrated before calling this method. It uses the calibration data
-        provided at class instantiation to determine the period of time the valve should be kept open to deliver the
-        requested volume of water.
-
-        Args:
-            volume: The volume of water to deliver, in microliters.
-            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
-                reward.
-            ignore_parameters: Determines whether to ignore the volume and tone_duration arguments. Calling the method
-                with this argument ensures that the delivered reward always uses the same volume and tone_duration as
-                the previous reward command. Primarily, this argument is used when receiving reward commands from Unity.
-        """
-        # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
-        # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
-        # reducing communication overhead.
-        if not ignore_parameters and (
-            volume != self._previous_left_volume or tone_duration != self._previous_left_tone_duration
-        ):
-            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_left_volume = volume
-            self._previous_left_tone_duration = tone_duration
-
-            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
-            # consistency
-            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")
-            self.valve_left.set_parameters(
-                pulse_duration=self.valve_left.get_duration_from_volume(volume),
-                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-                tone_duration=np.uint32(tone_duration),
-            )
-
-        self.valve_left.dispense_volume(noblock=False)
-
-    def deliver_reward_right(
-        self, volume: float = 5.0, tone_duration: int = 0, ignore_parameters: bool = False
-    ) -> None:
-        """Pulses the water reward solenoid valve for the duration of time necessary to deliver the provided volume of
-        water.
-
-        This method assumes that the valve has been calibrated before calling this method. It uses the calibration data
-        provided at class instantiation to determine the period of time the valve should be kept open to deliver the
-        requested volume of water.
-
-        Args:
-            volume: The volume of water to deliver, in microliters.
-            tone_duration: The duration of the auditory tone, in milliseconds, to emit while delivering the water
-                reward.
-            ignore_parameters: Determines whether to ignore the volume and tone_duration arguments. Calling the method
-                with this argument ensures that the delivered reward always uses the same volume and tone_duration as
-                the previous reward command. Primarily, this argument is used when receiving reward commands from Unity.
-        """
-        # This ensures that the valve settings are only updated if volume, tone_duration, or both changed compared to
-        # the previous command runtime. This ensures that the valve settings are only updated when this is necessary,
-        # reducing communication overhead.
-        if not ignore_parameters and (
-            volume != self._previous_right_volume or tone_duration != self._previous_right_tone_duration
-        ):
-            # Parameters are cached here to use the tone_duration before it is converted to microseconds.
-            self._previous_right_volume = volume
-            self._previous_right_tone_duration = tone_duration
-
-            # Note, calibration parameters are not used by the command below, but we explicitly set them here for
-            # consistency
-            tone_duration: float = convert_time(time=tone_duration, from_units="ms", to_units="us")
-            self.valve_right.set_parameters(
-                pulse_duration=self.valve_right.get_duration_from_volume(volume),
-                calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-                calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-                tone_duration=np.uint32(tone_duration),
-            )
-
-        self.valve_right.dispense_volume(noblock=False)
-
-    def reference_left_valve(self) -> None:
-        """Runs the reference valve calibration procedure.
-
-        Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
-        to deliver the overall volume of water recognizable for the human eye looking at the syringe holding the water
-        (water 'tank' used in our system). Additionally, this uses the 5 uL volume as the reference volume, which
-        matches the volume we use during experiments and training sessions.
-
-        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding ('tank')
-        syringe filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which
-        should overall dispense ~ 1 ml of water.
-        """
-        tone_duration: float = convert_time(
-            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
-        )
-        self.valve_left.set_parameters(
-            pulse_duration=np.uint32(self.valve_left.get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
-            calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-            calibration_count=np.uint16(200),  # Hardcoded to work with the 5.0 uL volume to dispense 1 ml of water.
-            tone_duration=np.uint32(tone_duration),
-        )  # 5 ul x 200 times
-
-        self.valve_left.calibrate()
-
-    def reference_right_valve(self) -> None:
-        """Runs the reference valve calibration procedure.
-
-        Reference calibration is functionally similar to the calibrate_valve() method runtime. It is, however, optimized
-        to deliver the overall volume of water recognizable for the human eye looking at the syringe holding the water
-        (water 'tank' used in our system). Additionally, this uses the 5 uL volume as the reference volume, which
-        matches the volume we use during experiments and training sessions.
-
-        The reference calibration HAS to be run with the water line being primed, deaerated, and the holding ('tank')
-        syringe filled exactly to the 5 mL mark. This procedure is designed to dispense 5 uL of water 200 times, which
-        should overall dispense ~ 1 ml of water.
-        """
-        tone_duration: float = convert_time(
-            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
-        )
-        self.valve_right.set_parameters(
-            pulse_duration=np.uint32(self.valve_right.get_duration_from_volume(target_volume=5.0)),  # Hardcoded!
-            calibration_delay=np.uint32(300000),  # Hardcoded for safety reasons!
-            calibration_count=np.uint16(200),  # Hardcoded to work with the 5.0 uL volume to dispense 1 ml of water.
-            tone_duration=np.uint32(tone_duration),
-        )  # 5 ul x 200 times
-
-        self.valve_right.calibrate()
-
-    def calibrate_left_valve(self, pulse_duration: int = 15) -> None:
-        """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
-        pulse_duration.
-
-        The valve is kept open for the specified number of milliseconds. Between pulses, the valve is kept closed for
-        300 ms. Due to our valve design, keeping the valve closed for less than 200-300 ms generates a large pressure
-        at the third (Normally Open) port, which puts unnecessary strain on the port plug and internal mechanism of the
-        valve.
-
-        Notes:
-            The calibration should be run with the following durations: 15 ms, 30 ms, 45 ms, and 60 ms. During testing,
-            we found that these values cover the water reward range from 2 uL to 10 uL, which is enough to cover most
-            training and experiment runtimes.
-
-            Make sure that the water line is primed, deaerated, and the holding ('tank') syringe filled exactly to the
-            5 mL mark at the beginning of each calibration cycle. Depending on the calibrated pulse_duration, you may
-            need to refill the syringe during the calibration runtime.
-
-        Args:
-            pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
-        """
-        pulse_us = pulse_duration * 1000  # Converts milliseconds to microseconds
-        tone_duration: float = convert_time(
-            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
-        )
-        self.valve_left.set_parameters(
-            pulse_duration=np.uint32(pulse_us),
-            calibration_delay=np.uint32(300000),
-            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-            tone_duration=np.uint32(tone_duration),
-        )
-        self.valve_left.calibrate()
-
-    def calibrate_right_valve(self, pulse_duration: int = 15) -> None:
-        """Cycles solenoid valve opening and closing 500 times to determine the amount of water dispensed by the input
-        pulse_duration.
-
-        The valve is kept open for the specified number of milliseconds. Between pulses, the valve is kept closed for
-        300 ms. Due to our valve design, keeping the valve closed for less than 200-300 ms generates a large pressure
-        at the third (Normally Open) port, which puts unnecessary strain on the port plug and internal mechanism of the
-        valve.
-
-        Notes:
-            The calibration should be run with the following durations: 15 ms, 30 ms, 45 ms, and 60 ms. During testing,
-            we found that these values cover the water reward range from 2 uL to 10 uL, which is enough to cover most
-            training and experiment runtimes.
-
-            Make sure that the water line is primed, deaerated, and the holding ('tank') syringe filled exactly to the
-            5 mL mark at the beginning of each calibration cycle. Depending on the calibrated pulse_duration, you may
-            need to refill the syringe during the calibration runtime.
-
-        Args:
-            pulse_duration: The duration, in milliseconds, the valve is kept open at each calibration cycle
-        """
-        pulse_us = pulse_duration * 1000  # Converts milliseconds to microseconds
-        tone_duration: float = convert_time(
-            time=self._system_configuration.microcontrollers.auditory_tone_duration_ms, from_units="ms", to_units="us"
-        )
-        self.valve_right.set_parameters(
-            pulse_duration=np.uint32(pulse_us),
-            calibration_delay=np.uint32(300000),
-            calibration_count=np.uint16(self._system_configuration.microcontrollers.valve_calibration_pulse_count),
-            tone_duration=np.uint32(tone_duration),
-        )
-        self.valve_right.calibrate()
-
     @property
-    def delivered_water_volume_left(self) -> np.float64:
-        """Returns the total volume of water, in microliters, dispensed by the left valve since runtime onset."""
-        return self.valve_left.dispensed_volume
-
-    def delivered_water_volume_right(self) -> np.float64:
-        """Returns the total volume of water, in microliters, dispensed by the right valve since runtime onset."""
-        return self.valve_right.dispensed_volume
-
-    @property
-    def lick_count_left(self) -> np.uint64:
-        """Returns the total number of licks recorded since runtime onset."""
-        return self.lick_left.lick_count
-
-    @property
-    def lick_count_right(self) -> np.uint64:
-        """Returns the total number of licks recorded since runtime onset."""
-        return self.lick_right.lick_count
+    def controller_id(self) -> int:
+        """Returns the unique identifier code of the microcontroller."""
+        return int(_CONTROLLED_ID)

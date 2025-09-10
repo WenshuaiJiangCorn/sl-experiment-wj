@@ -1,30 +1,24 @@
-# Defines the build system used for the project. For pure-python projects, uses the hatchling build system, which is
-# used internally by scikit-build for our C-extension projects. Therefore, there is clear continuity between our
-# c-extension and pure-python projects.
+# Defines the build system used for the project.
 [build-system]
 requires = ["hatchling>=1,<2"]
 build-backend = "hatchling.build"
 
 # Project metdata section. Provides the genral ID information about the project.
 [project]
-name = "sl-experiment"
+name = "yl-experiment"
 version = "4.0.0rc1"
-description = "Provides tools to acquire, manage, and preprocess scientific data in the Sun (NeuroAI) lab."
+description = "A heavily refactored version of the sl-experiment library used to run experiments in the Yapici lab."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <3.12"  # Limited to 3.11 until AXVS (genicam) supports 3.12+
+requires-python = ">=3.13, <3.14"
 authors = [
     { name = "Ivan Kondratyev" },
-    { name = "Kushaan Gupta" },
-    { name = "Natalie Yeung" },
-    { name = "Katlynn Ryu" },
-    { name = "Jasmine Si" }
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["sunlab", "data", "acquisition", "ataraxis", "interface", "experiment", "mesoscope"]
+keywords = ["data", "acquisition", "ataraxis", "interface", "experiment"]
 
 classifiers = [
     # Development status
@@ -34,9 +28,9 @@ classifiers = [
     # License
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
     # Supported OS systems
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
 ]
 
 # Runtime project dependencies. This overlaps with the 'condarun' optional list.
@@ -48,13 +42,12 @@ dependencies = [
     "ataraxis-base-utilities==3.1.0",
     "ataraxis-data-structures==3.1.1",
     "ataraxis-communication-interface==4.0.0rc1",
-    "ataraxis-video-system==1.1.0",
     "tqdm==4.67.1",
+    "keyboard>=0,<1",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Sun-Lab-NBB/sl-experiment"
-Documentation = "https://sl-experiment-api-docs.netlify.app/"
 
 # Specifies additional dependencies that can be installed alongside the main library.
 [project.optional-dependencies]
@@ -72,6 +65,7 @@ dev = [
     # Types:
     "types-tqdm>=4,<5",
     "scipy-stubs>=1,<2",
+    "types-keyboard>=0,<1",
 ]
 
 # No CLI exports at this time
@@ -83,13 +77,13 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/sl_experiment"]
+packages = ["src/yl_experiment"]
 
 # Ruff Configuration.
 [tool.ruff]
 line-length = 120         # The maximum column length is set to 120 for this project.
 indent-width = 4          # Same as black, indents are 4 spaces
-target-version = "py311"  # Targets the lowest supported version of python
+target-version = "py313"  # Targets the lowest supported version of python
 src = ["src"]             # The name of the source directory
 
 # Excludes 'service' .py files, such as the sphinx configuration file, from linting.
@@ -100,6 +94,17 @@ lint.select = ["ALL"]
 
 # General ignore directives
 lint.ignore = [
+    "UP038",  # This rule is deprecated.
+    "W291",  # Conflicts with docstring formatting
+    "ANN401",  # While suboptimal, ANY is a helpful type when used with caution
+    "C901",  # Sometimes complex functions are necessary
+    "PLR0913",  # Sometimes complex functions are necessary
+    "PLR0912",  # Sometimes complex functions are necessary
+    "PLR0915",  # Sometimes complex type defenitions are necessary
+    "PLR0911", # Sometimes complex return graphs are necessary
+    "FBT001", # Sometimes positional boolean atguments are necessary
+    "FBT002", # Sometimes positional boolean arguments are necessary
+    "SLF001",  # Sometimes accessing private members is necessary
     "COM812", # Conflicts with the formatter
     "ISC001", # Conflicts with the formatter
     "PT001", # https://github.com/astral-sh/ruff/issues/8796#issuecomment-182590771
@@ -140,10 +145,29 @@ length-sort = true                 # Places shorter imports first
 
 # MyPy configuration section.
 [tool.mypy]
-disallow_untyped_defs = true # Enforces function annotation
-warn_unused_ignores = true   # Warns against using 'type: ignore' for packages that have type stubs available.
+# Strict mode settings (equivalent to --strict)
+warn_unused_configs = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+# Extra checks (equivalent to --extra-checks)
+extra_checks = true
+
+# Pretty output (equivalent to --pretty)
+pretty = true
+
 exclude = [
-    "sl-experiment-\\d+", # Ignores temporary folder created by setuptools when building the sdist
+    "yl-experiment-\\d+", # Ignores temporary folder created by setuptools when building the sdist
     "venv.*/",            # Ignores virtual environments
     "build/",             # Ignores the sdist directory
     "dist/",              # Ignores the wheel directory
@@ -152,13 +176,3 @@ exclude = [
     "recipe/",            # Ignores recipe directory (grayskull output target)
     "tests/",             # Ignores the test directory.
 ]
-
-# This is used by the 'test' tox tasks to aggregate coverage data produced during pytest runtimes.
-[tool.coverage.paths]
-
-# Maps coverage measured in site-packages to source files in src
-source = ["src/", ".tox/*/lib/python*/site-packages/"]
-
-# Same as above, specifies the output directory for the coverage .html report
-[tool.coverage.html]
-directory = "reports/coverage_html"
