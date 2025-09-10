@@ -9,9 +9,9 @@ import numpy as np
 import keyboard
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
-from ataraxis_communication_interface import ExtractedModuleData, extract_logged_hardware_module_data
 
-from .microcontrollers import AMCInterface
+from .data_processing import process_microcontroller_log
+from .microcontroller import AMCInterface
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
 with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
@@ -77,21 +77,11 @@ def run_experiment() -> None:
             remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
         )
 
-        # Reads the log file and extracts the data for each module as an ExtractedModuleData instance. Your choice what
-        # to do with it next.
-        data: tuple[ExtractedModuleData, ...] = extract_logged_hardware_module_data(
-            log_path=data_logger.output_directory.joinpath(f"{mc.controller_id!s}_log.npz"),
-            module_type_id=(
-                (int(mc.left_valve.type_id), int(mc.left_valve.module_id)),
-                (int(mc.right_valve.type_id), int(mc.right_valve.module_id)),
-                (int(mc.left_lick_sensor.type_id), int(mc.left_lick_sensor.module_id)),
-                (int(mc.right_lick_sensor.type_id), int(mc.right_lick_sensor.module_id)),
-            ),
+        # Extracts all logged data as module-specific .feather files. These files can be read via
+        # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
+        process_microcontroller_log(
+            data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
         )
-
-        console.echo("Extracted module data:", level=LogLevel.INFO)
-        for module in data:
-            console.echo(f"Module {module.module_id}-{module.module_type}: {data}", level=LogLevel.INFO)
 
 
 # Run experiment

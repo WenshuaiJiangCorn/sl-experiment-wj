@@ -32,7 +32,7 @@ _LICK_DELTA_THRESHOLD: Incomplete
 _LICK_AVERAGING_POOL: Incomplete
 _LICK_POLLING_DELAY: Incomplete
 
-class _ModuleTypeCodes(IntEnum):
+class ModuleTypeCodes(IntEnum):
     VALVE_MODULE = 101
     LICK_MODULE = 102
 

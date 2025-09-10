@@ -1,7 +1,7 @@
 from _typeshed import Incomplete
-from ataraxis_communication_interface import ExtractedModuleData as ExtractedModuleData
 
-from .microcontrollers import AMCInterface as AMCInterface
+from .data_processing import process_microcontroller_log as process_microcontroller_log
+from .microcontroller import AMCInterface as AMCInterface
 
 output_dir: Incomplete
 _REWARD_VOLUME: Incomplete

@@ -44,6 +44,8 @@ dependencies = [
     "ataraxis-communication-interface==4.0.0rc1",
     "tqdm==4.67.1",
     "keyboard>=0,<1",
+    "polars>=1,<2",
+    "pyarrow>=21,<22",
 ]
 
 [project.urls]

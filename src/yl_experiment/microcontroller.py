@@ -77,7 +77,7 @@ _LICK_AVERAGING_POOL = np.uint8(2)
 _LICK_POLLING_DELAY = np.uint32(1000)
 
 
-class _ModuleTypeCodes(IntEnum):
+class ModuleTypeCodes(IntEnum):
     """Stores the module type (family) codes used by the hardware modules supported by this library version."""
 
     VALVE_MODULE = 101
@@ -151,7 +151,7 @@ class ValveInterface(ModuleInterface):
             data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}
 
         super().__init__(
-            module_type=np.uint8(_ModuleTypeCodes.VALVE_MODULE),
+            module_type=np.uint8(ModuleTypeCodes.VALVE_MODULE),
             module_id=module_id,
             data_codes=data_codes,
             error_codes=error_codes,
@@ -339,7 +339,7 @@ class LickInterface(ModuleInterface):
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
-            module_type=np.uint8(_ModuleTypeCodes.LICK_MODULE),
+            module_type=np.uint8(ModuleTypeCodes.LICK_MODULE),
             module_id=module_id,
             data_codes=data_codes,
             error_codes=None,
