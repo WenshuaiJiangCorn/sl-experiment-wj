@@ -27,7 +27,7 @@ _BOOL_TRUE = np.bool(True)
 _FIVE_MICROLITERS = np.float64(5)
 
 # Microcontroller parameters
-_CONTROLLED_ID = np.uint8(101)
+_CONTROLLED_ID = np.uint8(111)
 _CONTROLLER_PORT = "/dev/ttyACM0"
 _CONTROLLER_BUFFER_SIZE = 8192
 _CONTROLLER_BAUDRATE = 115200
@@ -480,7 +480,7 @@ class AMCInterface:
         self.left_valve = ValveInterface(
             module_id=np.uint8(1),
             valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
-            debug=False,
+            debug=True,
         )
 
         self.right_valve = ValveInterface(

@@ -10,8 +10,8 @@ import keyboard
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
 
-from .data_processing import process_microcontroller_log
-from .microcontroller import AMCInterface, LickInterface
+from yl_experiment.data_processing import process_microcontroller_log
+from yl_experiment.microcontroller import AMCInterface, LickInterface
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
 with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
@@ -25,14 +25,8 @@ def run_test() -> None:
     """Initializes, manages, and terminates a test runtime cycle in the Yapici lab. 
     Valve deactivated for 5 seconds after dispensing reward."""
 
-    data_logger = DataLogger(output_directory=output_dir)
+    data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
     mc = AMCInterface(data_logger=data_logger)
-
-    # Enable debug mode for left lick sensor to read the voltage 
-    mc.left_lick_sensor = LickInterface(
-            module_id=np.uint8(1),
-            debug=True,
-        )
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
         mc.start()
