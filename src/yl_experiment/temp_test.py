@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 import tempfile
 
-import numpy as np
 import keyboard
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
@@ -28,8 +27,14 @@ def run_test() -> None:
         data_logger.start()  # Has to be done before starting any data-generation processes
         mc.start()
         console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
+        mc.left_valve.toggle(state=True)
+
+        start_time = time.time()
 
         while True:
+            elapsed_time = time.time() - start_time
+            if elapsed_time % 5 < 0.01:  # Every 5 seconds
+                mc.left_valve.toggle(state=False)
 
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the test loop due to the 'q' key press.")
@@ -38,21 +43,22 @@ def run_test() -> None:
             time.sleep(0.01)
 
     finally:
+        mc.left_valve.toggle(state=False)
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
 
         data_logger.stop()  # Data logger needs to be stopped last
 
-        # Combines all log entries into a single .npz log file for each source.
-        data_logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
-        )
+        # # Combines all log entries into a single .npz log file for each source.
+        # data_logger.compress_logs(
+        #     remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
+        # )
 
-        # Extracts all logged data as module-specific .feather files. These files can be read via
-        # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
-        process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
-        )
+        # # Extracts all logged data as module-specific .feather files. These files can be read via
+        # # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
+        # process_microcontroller_log(
+        #     data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
+        # )
 
 
 # Run test
