@@ -11,14 +11,15 @@ from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
 
 from yl_experiment.data_processing import process_microcontroller_log
-from yl_experiment.microcontroller import AMCInterface, LickInterface
+from microcontroller import AMCInterface
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
-with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
-    output_dir = Path(temp_dir_path).joinpath("test_output")
+#with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
+    #output_dir = Path(temp_dir_path).joinpath("test_output")
 
+output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 
-_REWARD_VOLUME = np.float64(0.5)  # 500 microliters
+_REWARD_VOLUME = np.float64(2)  # 2 microliters
 
 
 def run_test() -> None:
@@ -46,6 +47,7 @@ def run_test() -> None:
                 mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                 valve_left_active = False
                 valve_left_deactivated_time = time.time()
+                console.echo(f"lick left: {lick_left}")
 
             # check if 5 seconds passed since deactivation
             if not valve_left_active and valve_left_deactivated_time is not None:

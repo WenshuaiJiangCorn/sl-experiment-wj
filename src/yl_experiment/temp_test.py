@@ -27,14 +27,14 @@ def run_test() -> None:
         data_logger.start()  # Has to be done before starting any data-generation processes
         mc.start()
         console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
-        mc.left_valve.toggle(state=True)
 
         start_time = time.time()
 
         while True:
             elapsed_time = time.time() - start_time
-            if elapsed_time % 5 < 0.01:  # Every 5 seconds
-                mc.left_valve.toggle(state=False)
+
+            if elapsed_time % 5 < 0.01:
+                mc.left_valve.dispense_volume(volume=2)
 
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the test loop due to the 'q' key press.")
