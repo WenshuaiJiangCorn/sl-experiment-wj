@@ -256,7 +256,7 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     # Right Valve
     _parse_valve_data(
         extracted_module_data=data[0],
-        output_file=output_directory / "right_valve_data.feather",
+        output_file=output_directory / "left_valve_data.feather",
         scale_coefficient=microcontroller.right_valve.scale_coefficient,
         nonlinearity_exponent=microcontroller.right_valve.nonlinearity_exponent,
     )
@@ -264,7 +264,7 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     # Left Valve
     _parse_valve_data(
         extracted_module_data=data[1],
-        output_file=output_directory / "left_valve_data.feather",
+        output_file=output_directory / "right_valve_data.feather",
         scale_coefficient=microcontroller.left_valve.scale_coefficient,
         nonlinearity_exponent=microcontroller.left_valve.nonlinearity_exponent,
     )
@@ -272,13 +272,13 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     # Right Lick Sensor
     _parse_lick_data(
         extracted_module_data=data[2],
-        output_file=output_directory / "right_lick_sensor.feather",
+        output_file=output_directory / "left_lick_sensor.feather",
         lick_threshold=microcontroller.right_lick_sensor.lick_threshold,
     )
 
     # Left Lick Sensor
     _parse_lick_data(
         extracted_module_data=data[3],
-        output_file=output_directory / "left_lick_sensor.feather",
+        output_file=output_directory / "right_lick_sensor.feather",
         lick_threshold=microcontroller.left_lick_sensor.lick_threshold,
     )

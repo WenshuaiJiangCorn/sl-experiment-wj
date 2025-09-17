@@ -257,9 +257,10 @@ class ValveInterface(ModuleInterface):
 
             # Inverts the power-law calibration to get the pulse duration.
             pulse_duration = (volume / self._scale_coefficient) ** (1.0 / self._nonlinearity_exponent)
+            pulse_duration_us = np.uint32(np.ceil(pulse_duration))
 
             # Updates the runtime configuration of the valve to deliver the requested volume of fluid.
-            self.send_parameters(parameter_data=(pulse_duration, _VALVE_CALIBRATION_DELAY, _VALVE_CALIBRAZTION_COUNT))
+            self.send_parameters(parameter_data=(pulse_duration_us, _VALVE_CALIBRATION_DELAY, _VALVE_CALIBRAZTION_COUNT))
 
         # Instructs the valve to execute the command
         self.send_command(command=np.uint8(1), noblock=noblock, repetition_delay=_ZERO_LONG)

@@ -7,7 +7,7 @@ import tempfile
 
 import numpy as np
 import keyboard
-from ataraxis_base_utilities import LogLevel, console
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger
 
 from yl_experiment.data_processing import process_microcontroller_log
@@ -77,10 +77,13 @@ def run_test() -> None:
             remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
         )
 
+        procesed_dir = output_dir.joinpath("processed")
+        ensure_directory_exists(procesed_dir)
+
         # Extracts all logged data as module-specific .feather files. These files can be read via
         # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
         process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
+            data_logger=data_logger, microcontroller=mc, output_directory=procesed_dir
         )
 
 
