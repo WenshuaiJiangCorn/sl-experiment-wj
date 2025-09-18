@@ -1,6 +1,7 @@
 from pathlib import Path
 import polars as pl
 
-target = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test\\test_output\\processed\\left_lick_sensor.feather")
+target = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test\\test_output\\processed\\right_lick_sensor.feather")
 data = pl.read_ipc(target)
+print(data[0:5])
 print(data)

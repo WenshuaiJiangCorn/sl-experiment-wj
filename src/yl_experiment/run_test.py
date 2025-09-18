@@ -12,6 +12,7 @@ from ataraxis_data_structures import DataLogger
 
 from yl_experiment.data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
+from visualizers import BehaviorVisualizer
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
 #with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
@@ -19,7 +20,7 @@ from microcontroller import AMCInterface
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 
-_REWARD_VOLUME = np.float64(2)  # 2 microliters
+_REWARD_VOLUME = np.float64(5)  # 5 microliters
 
 
 def run_test() -> None:
@@ -28,10 +29,14 @@ def run_test() -> None:
 
     data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
     mc = AMCInterface(data_logger=data_logger)
+    visualizer = BehaviorVisualizer()
+    console.echo(mc._controller._port)
+
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
         mc.start()
         mc.left_lick_sensor.check_state()
+        visualizer.open()  # Open the visualizer window
         console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
 
         # Initial valve availability
@@ -41,13 +46,20 @@ def run_test() -> None:
         valve_left_deactivated_time = None  # Track when the left valve was deactivated
 
         while True:
+            visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
 
-            if lick_left > prev_lick_left and valve_left_active:
-                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
-                valve_left_active = False
-                valve_left_deactivated_time = time.time()
-                console.echo(f"lick left: {lick_left}")
+            if lick_left > prev_lick_left:
+                visualizer.add_lick_event()
+
+                if valve_left_active:
+
+                    mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    valve_left_active = False
+                    visualizer.add_valve_event()
+
+                    valve_left_deactivated_time = time.time()
+                    console.echo(f"lick left: {lick_left}")
 
             # check if 5 seconds passed since deactivation
             if not valve_left_active and valve_left_deactivated_time is not None:
@@ -68,6 +80,7 @@ def run_test() -> None:
 
     finally:
         mc.stop()
+        visualizer.close()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
 
         data_logger.stop()  # Data logger needs to be stopped last
