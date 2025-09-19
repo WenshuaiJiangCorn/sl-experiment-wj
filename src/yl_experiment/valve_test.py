@@ -8,8 +8,8 @@ import keyboard
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
 
-from .data_processing import process_microcontroller_log
-from .microcontroller import AMCInterface
+from yl_experiment.data_processing import process_microcontroller_log
+from microcontroller import AMCInterface
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
 with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:

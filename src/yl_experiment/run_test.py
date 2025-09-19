@@ -20,7 +20,7 @@ from visualizers import BehaviorVisualizer
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 
-_REWARD_VOLUME = np.float64(5)  # 5 microliters
+_REWARD_VOLUME = np.float64(10)  # 5 microliters
 
 
 def run_test() -> None:
@@ -59,7 +59,6 @@ def run_test() -> None:
                     visualizer.add_valve_event()
 
                     valve_left_deactivated_time = time.time()
-                    console.echo(f"lick left: {lick_left}")
 
             # check if 5 seconds passed since deactivation
             if not valve_left_active and valve_left_deactivated_time is not None:
@@ -70,7 +69,7 @@ def run_test() -> None:
             prev_lick_left = lick_left
 
             if keyboard.is_pressed("q"):
-                console.echo("Breaking the test loop due to the 'q' key press.")
+                console.echo("Ending the test.")
 
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()

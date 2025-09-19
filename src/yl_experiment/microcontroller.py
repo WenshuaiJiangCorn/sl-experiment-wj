@@ -48,10 +48,10 @@ _RIGHT_VALVE_CALIBRATION_DATA = (
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.10),
-    (30000, 3.00),
-    (45000, 6.25),
-    (60000, 10.90),
+    (15000, 1.03),
+    (30000, 2.70),
+    (45000, 5.33),
+    (60000, 7.00),
 )
 
 # Lick module calibration parameters
