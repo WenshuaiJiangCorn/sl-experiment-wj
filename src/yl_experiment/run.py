@@ -12,13 +12,12 @@ from ataraxis_data_structures import DataLogger
 
 from .data_processing import process_microcontroller_log
 from .microcontroller import AMCInterface
-
-# Note, prevents the context manager from automatically deleting the temporary directory.
-with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
-    output_dir = Path(temp_dir_path).joinpath("test_output")
+from visualizers import BehaviorVisualizer
 
 
-_REWARD_VOLUME = np.float64(0.5)  # 500 microliters
+output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
+
+_REWARD_VOLUME = np.float64(5)  # 5 microliters
 
 
 def run_experiment() -> None:
@@ -31,7 +30,7 @@ def run_experiment() -> None:
         mc.start()
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
-        console.echo("Experiment: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
+        console.echo("Experiment: started. Press 'q' to stop.", level=LogLevel.SUCCESS)
 
         # Initial valve availability
         valve_left_active = True

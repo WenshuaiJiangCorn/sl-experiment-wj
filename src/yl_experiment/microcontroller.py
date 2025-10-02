@@ -48,15 +48,15 @@ _RIGHT_VALVE_CALIBRATION_DATA = (
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.03),
-    (30000, 2.70),
-    (45000, 5.33),
-    (60000, 7.00),
+    (15000, 0.86),
+    (30000, 2.11),
+    (45000, 4.24),
+    (60000, 6.40),
 )
 
 # Lick module calibration parameters
 # In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
-_LICK_SIGNAL_THRESHOLD = np.uint16(200)
+_LICK_SIGNAL_THRESHOLD = np.uint16(500)
 
 # In 12-bit ADC units. The level for classifying a sensor activation event as a lick. Any sensor-reported value above
 # this threshold is considered a lick

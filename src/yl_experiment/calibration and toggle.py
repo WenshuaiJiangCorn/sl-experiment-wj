@@ -17,6 +17,7 @@ with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
 if not console.enabled:
     console.enable()
 _CALIBRATION_PULSE_DURATION = np.uint32(60000) # microseconds
+_TOGGLE_DURATION = 2  # seconds
 
 def calibrate_valve():
     """Calibrates the valve by sending a pulse of specified duration."""
@@ -30,15 +31,31 @@ def calibrate_valve():
 
         console.echo('Calibration starts')
 
-        #mc.left_valve.calibrate(_CALIBRATION_PULSE_DURATION)
-        mc.left_valve.toggle(state=True)
-        time.sleep(0.2)
+        mc.left_valve.calibrate(_CALIBRATION_PULSE_DURATION)
+
     finally:
         mc.left_valve.toggle(state=False)
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
+        data_logger.stop()
 
+def toggle_valve():
+    """Toggles the valve state for a specified duration."""
+    data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
+    mc = AMCInterface(data_logger=data_logger)
+    console.echo(mc._controller._port)
+
+    try:
+        data_logger.start()
+        mc.start()
+        mc.left_valve.toggle(state=True)
+        time.sleep(_TOGGLE_DURATION)
+    finally:
+        mc.left_valve.toggle(state=False)
+        mc.stop()
+        console.echo("Test: ended.", level=LogLevel.SUCCESS)
         data_logger.stop()
 
 if __name__ == "__main__":
     calibrate_valve()
+    # toggle_valve()
