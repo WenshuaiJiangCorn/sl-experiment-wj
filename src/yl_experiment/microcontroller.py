@@ -82,6 +82,7 @@ class ModuleTypeCodes(IntEnum):
 
     VALVE_MODULE = 101
     LICK_MODULE = 102
+    ANALOG_MODULE = 103
 
 
 class _ValveStateCodes(IntEnum):
@@ -452,6 +453,58 @@ class LickInterface(ModuleInterface):
         return self._lick_threshold
 
 
+class AnalogInterface(ModuleInterface):
+    """Interfaces with AnalogModule instances running on Ataraxis MicroControllers.
+       
+
+    Args:
+        module_id: The unique identifier for the AnalogModule instance.
+
+    Attributes:
+        _volt_per_adc_unit: Stores the conversion factor to translate the raw analog values recorded by the 12-bit ADC
+            into voltage in Volts."""
+
+    def __init__(self, module_id: np.uint8, debug: bool = False) -> None:
+        data_codes: set[np.uint8] = {np.uint8(51)}  # kNonZero
+        self._debug: bool = debug
+
+        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
+        super().__init__(
+            module_type=np.uint8(np.uint8(ModuleTypeCodes.ANALOG_MODULE)),  # ModuleTypeCodes.ANALOG_MODULE
+            module_id=module_id,
+            data_codes=data_codes,
+            error_codes=None,
+        )
+
+        self._volt_per_adc_unit: np.float64 = np.round(a=np.float64(3.3 / (2**12)), decimals=8)
+
+        # We don't need any trackers for now, just need to initialize one for PC to detect the module
+        self._analog_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"{self._module_type}_{self._module_id}_analog_tracker",
+            prototype=np.zeros(shape=1, dtype=np.uint64),
+            exist_ok=True,
+        )
+
+
+    def initialize_remote_assets(self) -> None:
+        """Connects to the SharedMemoryArray used to communicate lick status to other processes."""
+        self._analog_tracker.connect()
+
+    def terminate_remote_assets(self) -> None:
+        """Disconnects from the lick-tracker SharedMemoryArray."""
+        self._analog_tracker.disconnect()  # Does not destroy the array to support start / stop cycling.
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """Processes incoming data sent by the module to the PC."""
+        # Currently, only code 51 messages are passed to this method. From each, extracts the detected voltage level.
+        detected_voltage: np.uint16 = message.data_object  # type: ignore[union-attr, assignment]
+
+        # If the class is initialized in debug mode, prints each received voltage level to the terminal.
+        if self._debug:
+            console.echo(f"Analog ADC signal: {detected_voltage}")
+
+
+
 class AMCInterface:
     """Interfaces with all Ataraxis Micro Controller (AMC) interfaces used to acquire non-video behavior data.
 
@@ -481,7 +534,7 @@ class AMCInterface:
         self.left_valve = ValveInterface(
             module_id=np.uint8(1),
             valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
-            debug=True,
+            debug=False,
         )
 
         self.right_valve = ValveInterface(
@@ -500,13 +553,18 @@ class AMCInterface:
             debug=False,
         )
 
+        self.analog_input = AnalogInterface(
+            module_id=np.uint8(1),
+            debug=False,
+        )
+
         # Main interface:
         self._controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=_CONTROLLED_ID,
             buffer_size=_CONTROLLER_BUFFER_SIZE,
             port=_CONTROLLER_PORT,
             data_logger=data_logger,
-            module_interfaces=(self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor),
+            module_interfaces=(self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor, self.analog_input),
             baudrate=_CONTROLLER_BAUDRATE,
             keepalive_interval=_CONTROLLER_KEEPALIVE_INTERVAL,
         )
@@ -565,3 +623,4 @@ class AMCInterface:
     def controller_id(self) -> int:
         """Returns the unique identifier code of the microcontroller."""
         return int(_CONTROLLED_ID)
+
