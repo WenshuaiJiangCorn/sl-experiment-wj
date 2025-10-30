@@ -20,7 +20,7 @@ def run_test() -> None:
     """Initializes, manages, and terminates a test runtime cycle in the Yapici lab. 
     Valve deactivated for 5 seconds after dispensing reward."""
 
-    data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
+    data_logger = DataLogger(output_directory=output_dir, instance_name="valve_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 

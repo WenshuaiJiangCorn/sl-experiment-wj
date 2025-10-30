@@ -180,7 +180,7 @@ class ValveInterface(ModuleInterface):
         self._valve_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_valve_tracker",
             prototype=np.zeros(shape=1, dtype=np.float64),
-            exist_ok=True,
+            exists_ok=True,
         )
         self._previous_state: bool = False
         self._cycle_timer: PrecisionTimer | None = None
@@ -227,10 +227,10 @@ class ValveInterface(ModuleInterface):
                 delivered_volume = np.float64(
                     self._scale_coefficient * np.power(open_duration, self._nonlinearity_exponent)
                 )
-                previous_volume = np.float64(self._valve_tracker.read_data(index=0, convert_output=False))
+                previous_volume = np.float64(self._valve_tracker[0])
                 new_volume = previous_volume + delivered_volume
                 # noinspection PyTypeChecker
-                self._valve_tracker.write_data(index=0, data=new_volume)
+                self._valve_tracker[0] = new_volume
         elif message.event == _ValveStateCodes.VALVE_CALIBRATED:
             console.echo("Valve Calibration: Complete")
 
@@ -357,7 +357,7 @@ class LickInterface(ModuleInterface):
         self._lick_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_lick_tracker",
             prototype=np.zeros(shape=1, dtype=np.uint64),
-            exist_ok=True,
+            exists_ok=True,
         )
 
         # Precreates storage variables used to prevent excessive lick reporting
@@ -399,9 +399,9 @@ class LickInterface(ModuleInterface):
         # licks, only does it once per encountering a zero-value.
         if detected_voltage >= self._lick_threshold and self._previous_readout_zero:
             # Increments the lick count and updates the tracker array with new data
-            count = self._lick_tracker.read_data(index=0, convert_output=False)
+            count = self._lick_tracker[0]
             count += 1
-            self._lick_tracker.write_data(index=0, data=count)
+            self._lick_tracker[0] = count
 
             # This disables further reports until the sensor sends a zero-value again
             self._previous_readout_zero = False
@@ -482,7 +482,7 @@ class AnalogInterface(ModuleInterface):
         self._analog_tracker: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._module_type}_{self._module_id}_analog_tracker",
             prototype=np.zeros(shape=1, dtype=np.uint64),
-            exist_ok=True,
+            exists_ok=True,
         )
 
 

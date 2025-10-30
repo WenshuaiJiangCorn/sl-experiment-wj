@@ -8,7 +8,7 @@ import tempfile
 import numpy as np
 import keyboard
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import DataLogger
+from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 from .data_processing import process_microcontroller_log
 from .microcontroller import AMCInterface
@@ -22,7 +22,7 @@ _REWARD_VOLUME = np.float64(5)  # 5 microliters
 
 def run_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab."""
-    data_logger = DataLogger(output_directory=output_dir)
+    data_logger = DataLogger(output_directory=output_dir, instance_name="final_test")
     mc = AMCInterface(data_logger=data_logger)
 
     try:
@@ -72,8 +72,12 @@ def run_experiment() -> None:
         data_logger.stop()  # Data logger needs to be stopped last
 
         # Combines all log entries into a single .npz log file for each source.
-        data_logger.compress_logs(
-            remove_sources=True, memory_mapping=False, verbose=True, compress=False, verify_integrity=False
+        assemble_log_archives(
+            log_directory=output_dir, 
+            remove_sources=True,
+            memory_mapping=False,
+            verbose=True,
+            verify_integrity=False
         )
 
         # Extracts all logged data as module-specific .feather files. These files can be read via
