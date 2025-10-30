@@ -21,7 +21,7 @@ _TOGGLE_DURATION = 2  # seconds
 
 def calibrate_valve():
     """Calibrates the valve by sending a pulse of specified duration."""
-    data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
+    data_logger = DataLogger(output_directory=output_dir, instance_name="calibration_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
@@ -41,7 +41,7 @@ def calibrate_valve():
 
 def toggle_valve():
     """Toggles the valve state for a specified duration."""
-    data_logger = DataLogger(output_directory=output_dir, exist_ok=True)
+    data_logger = DataLogger(output_directory=output_dir, instance_name="toggle_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
