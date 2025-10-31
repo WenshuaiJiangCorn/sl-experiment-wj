@@ -589,10 +589,6 @@ class AMCInterface:
         # Starts all microcontroller communication process
         self._controller.start()
 
-        # Unlocks all microcontroller pins. This allows the microcontroller to change the state of all manged pins.
-        self._controller.toggle_action_lock(toggle=False)
-        self._controller.toggle_ttl_lock(toggle=False)
-
         # The setup procedure is complete.
         self._started = True
 

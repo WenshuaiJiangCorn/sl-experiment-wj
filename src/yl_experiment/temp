@@ -1,2 +1,1 @@
-import subprocess
-subprocess.run(["ffmpeg", "-version"])
+from ataraxis_video_system import VideoSystem
