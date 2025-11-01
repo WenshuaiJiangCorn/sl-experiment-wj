@@ -10,7 +10,7 @@ import keyboard
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-from yl_experiment.data_processing import process_microcontroller_log
+from data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
 from visualizers import BehaviorVisualizer
 
@@ -27,6 +27,9 @@ def run_test() -> None:
     """Initializes, manages, and terminates a test runtime cycle in the Yapici lab. 
     Valve deactivated for 5 seconds after dispensing reward."""
 
+    if not console.enabled:
+        console.enable()
+        
     data_logger = DataLogger(output_directory=output_dir, instance_name="valve_lick_test")
     mc = AMCInterface(data_logger=data_logger)
     visualizer = BehaviorVisualizer()

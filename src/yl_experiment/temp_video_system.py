@@ -1,4 +1,5 @@
 from pathlib import Path
+import keyboard
 
 import numpy as np
 import tempfile
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=0,  # Uses the default system webcam
         display_frame_rate=15,
-        frame_rate
+        frame_rate=30,
         frame_width=1280,
         frame_height=720, 
         color=False,  # Acquires images in MONOCHROME mode
@@ -79,8 +80,8 @@ if __name__ == "__main__":
     console.echo(f"VideoSystem: Started", level=LogLevel.SUCCESS)
 
     console.echo(f"Acquiring frames without saving...")
-    timer = PrecisionTimer("s")
-    timer.delay(delay=5, block=False)  # During this delay, camera frames are displayed to the user but are not saved
+    timer = PrecisionTimer("ms")
+    timer.delay(delay=5000, block=False)  # During this delay, camera frames are displayed to the user but are not saved
 
     # Begins saving frames to disk as an MP4 video file
     console.echo(f"Saving the acquired frames to disk...")
@@ -88,7 +89,12 @@ if __name__ == "__main__":
     vs2.start_frame_saving()
     vs3.start_frame_saving()
 
-    timer.delay(delay=5, block=False)  # Records frames for 60 seconds, generating ~1800 frames
+    #timer.delay(delay=5, block=False)  # Records frames for 60 seconds, generating ~1800 frames
+    while True:
+        if keyboard.is_pressed("q"):
+            console.echo(f"'q' key pressed, stopping acquisition.")
+            break
+        timer.delay(delay=50, block=False) # Checks every 20 ms whether the 'q' key has been pressed
     
     vs1.stop_frame_saving()
     vs2.stop_frame_saving()
