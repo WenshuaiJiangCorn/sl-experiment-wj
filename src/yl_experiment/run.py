@@ -6,13 +6,11 @@ import keyboard
 from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, assemble_log_archives
-from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
 
-
-from .data_processing import process_microcontroller_log
-from .microcontroller import AMCInterface
-from .visualizers import BehaviorVisualizer
-from .binding_classes import VideoSystems
+from data_processing import process_microcontroller_log
+from microcontroller import AMCInterface
+from visualizers import BehaviorVisualizer
+from binding_classes import VideoSystems
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 _REWARD_VOLUME = np.float64(5)  # 5 microliters
@@ -54,7 +52,6 @@ def run_experiment() -> None:
 
             if lick_left > prev_lick_left:
                 visualizer.add_left_lick_event()
-
                 if valve_left_active:
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = False
@@ -62,7 +59,6 @@ def run_experiment() -> None:
 
             elif lick_right > prev_lick_right:
                 visualizer.add_right_lick_event()
-
                 if valve_right_active:
                     mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = True

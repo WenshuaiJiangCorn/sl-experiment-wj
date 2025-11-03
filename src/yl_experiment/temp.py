@@ -1,0 +1,2 @@
+from microcontroller import ModuleTypeCodes
+print(ModuleTypeCodes.ANALOG_MODULE)
