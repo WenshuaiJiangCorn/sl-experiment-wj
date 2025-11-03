@@ -113,8 +113,8 @@ class BehaviorVisualizer:
         the visualizer initialization before starting runtime.
 
     Attributes:
-        _event_tick_true: Stores a NumPy uint8 value of 1 to expedite visualization data processing.
-        _event_tick_false: Stores a NumPy uint8 value of 0 to expedite visualization data processing.
+        _left_event_tick_true: Stores a NumPy uint8 value of 1 to expedite visualization data processing.
+        _left_event_tick_false: Stores a NumPy uint8 value of 0 to expedite visualization data processing.
         _time_window: Specifies the time window, in seconds, to visualize during runtime. Currently, this is statically
             set to 10 seconds.
         _time_step: Specifies the interval, in milliseconds, at which to update the visualization plots. Currently, this
@@ -124,22 +124,24 @@ class BehaviorVisualizer:
             milliseconds.
         _timestamps: A numpy array that stores the timestamps of the displayed data during visualization runtime. The
             timestamps are generated at class initialization and are kept constant during runtime.
-        _lick_data: A numpy array that stores the data used to generate the lick sensor state plot.
-        _valve_data: A numpy array that stores the data used to generate the solenoid valve state plot.
-        _lick_event: Determines whether the runtime has detected a new lick event since the last visualizer update.
-        _valve_event: Determines whether the runtime has detected a new valve event since the last visualizer update.
-        _lick_line: Stores the line class used to plot the lick sensor data.
-        _valve_line: Stores the line class used to plot the solenoid valve data.
+        _left_lick_data: A numpy array that stores the data used to generate the lick sensor state plot.
+        _left_valve_data: A numpy array that stores the data used to generate the solenoid valve state plot.
+        _left_lick_event: Determines whether the runtime has detected a new lick event since the last visualizer update.
+        _left_valve_event: Determines whether the runtime has detected a new valve event since the last visualizer update.
+        _left_lick_line: Stores the line class used to plot the lick sensor data.
+        _left_valve_line: Stores the line class used to plot the solenoid valve data.
         _figure: Stores the matplotlib figure instance used to display the plots.
-        _lick_axis: The axis object used to plot the lick sensor data during visualization runtime.
-        _valve_axis: The axis object used to plot the solenoid valve data during visualization runtime.
+        _left_lick_axis: The axis object used to plot the lick sensor data during visualization runtime.
+        _left_valve_axis: The axis object used to plot the solenoid valve data during visualization runtime.
         _once: This flag is used to limit certain visualizer operations to only be called once during runtime.
         _is_open: Tracks whether the visualizer plot has been created.
     """
 
     # Pre-initializes NumPy event ticks to slightly reduce cyclic visualizer update speed
-    _event_tick_true = np.uint8(1)
-    _event_tick_false = np.uint8(0)
+    _left_event_tick_true = np.uint8(1)
+    _left_event_tick_false = np.uint8(0)
+    _right_event_tick_true = np.uint8(1)
+    _right_event_tick_false = np.uint8(0)
 
     def __init__(
         self,
@@ -154,19 +156,28 @@ class BehaviorVisualizer:
         self._timestamps: NDArray[np.float32] = np.arange(
             start=0 - self._time_window, stop=self._time_step / 1000, step=self._time_step / 1000, dtype=np.float32
         )
-        self._lick_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
-        self._valve_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
-        self._valve_event: bool = False
-        self._lick_event: bool = False
+        self._left_lick_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._left_valve_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._left_valve_event: bool = False
+        self._left_lick_event: bool = False
+
+        self._right_lick_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._right_valve_data: NDArray[np.uint8] = np.zeros_like(a=self._timestamps, dtype=np.uint8)
+        self._right_valve_event: bool = False
+        self._right_lick_event: bool = False
 
         # Line objects (to be created during open())
-        self._lick_line: Line2D | None = None
-        self._valve_line: Line2D | None = None
+        self._left_lick_line: Line2D | None = None
+        self._left_valve_line: Line2D | None = None
+        self._right_lick_line: Line2D | None = None
+        self._right_valve_line: Line2D | None = None
 
         # Figure objects (to be created during open())
         self._figure: Figure | None = None
-        self._lick_axis: Axes | None = None
-        self._valve_axis: Axes | None = None
+        self._left_lick_axis: Axes | None = None
+        self._left_valve_axis: Axes | None = None
+        self._right_lick_axis: Axes | None = None
+        self._right_valve_axis: Axes | None = None
 
         # Tracks if the visualizer is opened
         self._is_open: bool = False
@@ -181,51 +192,83 @@ class BehaviorVisualizer:
             return  # Already open
 
         # Creates the figure with two subplots sharing the same x-axis
-        self._figure, (self._lick_axis, self._valve_axis) = plt.subplots(
+        self._figure, axes = plt.subplots(
             2,
-            1,
+            2,
             figsize=(10, 8),
             sharex=True,
             num="Runtime Behavior Visualizer",
             # Ensures that the third subplot is thrice as tall
             gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1]},
         )
+        self._left_lick_axis = axes[0, 0]
+        self._left_valve_axis = axes[1, 0]
+        self._right_lick_axis = axes[0, 1]
+        self._right_valve_axis = axes[1, 1]
 
         # Sets consistent y-label padding for all axes
-        self._lick_axis.yaxis.labelpad = 15
-        self._valve_axis.yaxis.labelpad = 15
+        self._left_lick_axis.yaxis.labelpad = 15
+        self._left_valve_axis.yaxis.labelpad = 15
+        self._right_lick_axis.yaxis.labelpad = 15
+        self._right_valve_axis.yaxis.labelpad = 15
 
         # Set up axes properties
         # Lick axis
-        self._lick_axis.set_title("Lick Sensor State", fontdict=_fontdict_title)
-        self._lick_axis.set_ylim(-0.05, 1.05)
-        self._lick_axis.set_ylabel("Lick State", fontdict=_fontdict_axis_label)
-        self._lick_axis.set_xlabel("")
-        self._lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
-        self._lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
+        self._left_lick_axis.set_title("Left Lick Sensor State", fontdict=_fontdict_title)
+        self._left_lick_axis.set_ylim(-0.05, 1.05)
+        self._left_lick_axis.set_ylabel("Left Lick State", fontdict=_fontdict_axis_label)
+        self._left_lick_axis.set_xlabel("")
+        self._left_lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._left_lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
+
+        self._right_lick_axis.set_title("Right Lick Sensor State", fontdict=_fontdict_title)
+        self._right_lick_axis.set_ylim(-0.05, 1.05)
+        self._right_lick_axis.set_ylabel("Right Lick State", fontdict=_fontdict_axis_label)
+        self._right_lick_axis.set_xlabel("")
+        self._right_lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._right_lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
 
         # Valve axis
-        self._valve_axis.set_title("Reward Valve State", fontdict=_fontdict_title)
-        self._valve_axis.set_ylim(-0.05, 1.05)
-        self._valve_axis.set_ylabel("Valve State", fontdict=_fontdict_axis_label)
-        self._valve_axis.set_xlabel("")
-        self._valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
-        self._valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))
+        self._left_valve_axis.set_title("Left Reward Valve State", fontdict=_fontdict_title)
+        self._left_valve_axis.set_ylim(-0.05, 1.05)
+        self._left_valve_axis.set_ylabel("Left Valve State", fontdict=_fontdict_axis_label)
+        self._left_valve_axis.set_xlabel("")
+        self._left_valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._left_valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))
+
+        self._right_valve_axis.set_title("Right Reward Valve State", fontdict=_fontdict_title)
+        self._right_valve_axis.set_ylim(-0.05, 1.05)
+        self._right_valve_axis.set_ylabel("Right Valve State", fontdict=_fontdict_axis_label)
+        self._right_valve_axis.set_xlabel("")
+        self._right_valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
+        self._right_valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))
 
         # Sets x-limits for all axes (shared x-axis)
-        self._valve_axis.set_xlim(-self._time_window, 0)
+        self._left_valve_axis.set_xlim(-self._time_window, 0)
+        self._right_valve_axis.set_xlim(-self._time_window, 0)
 
         # Hides x-tick labels for top plots
-        plt.setp(self._lick_axis.get_xticklabels(), visible=False)
+        plt.setp(self._left_lick_axis.get_xticklabels(), visible=False)
+        plt.setp(self._right_lick_axis.get_xticklabels(), visible=False)
 
         # Aligns all y-labels
-        self._figure.align_ylabels([self._lick_axis, self._valve_axis])
+        self._figure.align_ylabels([self._left_lick_axis, self._left_valve_axis, self._right_lick_axis, self._right_valve_axis])
 
         # Creates the plot artists
         # Lick plot
-        (self._lick_line,) = self._lick_axis.plot(
+        (self._left_lick_line,) = self._left_lick_axis.plot(
             self._timestamps,
-            self._lick_data,
+            self._left_lick_data,
+            drawstyle="steps-post",
+            color=_plt_palette("red"),
+            linewidth=2,
+            alpha=1.0,
+            linestyle="solid",
+        )
+
+        (self._right_lick_line,) = self._right_lick_axis.plot(
+            self._timestamps,
+            self._right_lick_data,
             drawstyle="steps-post",
             color=_plt_palette("red"),
             linewidth=2,
@@ -234,9 +277,19 @@ class BehaviorVisualizer:
         )
 
         # Valve plot
-        (self._valve_line,) = self._valve_axis.plot(
+        (self._left_valve_line,) = self._left_valve_axis.plot(
             self._timestamps,
-            self._valve_data,
+            self._left_valve_data,
+            drawstyle="steps-post",
+            color=_plt_palette("blue"),
+            linewidth=2,
+            alpha=1.0,
+            linestyle="solid",
+        )
+
+        (self._right_valve_line,) = self._right_valve_axis.plot(
+            self._timestamps,
+            self._right_valve_data,
             drawstyle="steps-post",
             color=_plt_palette("blue"),
             linewidth=2,
@@ -281,8 +334,10 @@ class BehaviorVisualizer:
         self._sample_data()
 
         # Updates the artists with new data
-        self._lick_line.set_data(self._timestamps, self._lick_data)  # type: ignore
-        self._valve_line.set_data(self._timestamps, self._valve_data)  # type: ignore
+        self._left_lick_line.set_data(self._timestamps, self._left_lick_data)  # type: ignore
+        self._left_valve_line.set_data(self._timestamps, self._left_valve_data)  # type: ignore
+        self._right_lick_line.set_data(self._timestamps, self._right_lick_data)  # type: ignore
+        self._right_valve_line.set_data(self._timestamps, self._right_valve_data)  # type: ignore
 
         # Renders the changes
         self._figure.canvas.draw()  # type: ignore
@@ -301,33 +356,55 @@ class BehaviorVisualizer:
         """
 
         # Rolls arrays by one position to the left, so the first element becomes the last
-        self._valve_data = np.roll(self._valve_data, shift=-1)
-        self._lick_data = np.roll(self._lick_data, shift=-1)
+        self._left_valve_data = np.roll(self._left_valve_data, shift=-1)
+        self._left_lick_data = np.roll(self._left_lick_data, shift=-1)
+        self._right_valve_data = np.roll(self._right_valve_data, shift=-1)
+        self._right_lick_data = np.roll(self._right_lick_data, shift=-1)
 
         # Replaces the last element (previously the first or 'oldest' value) with new data:
 
         # If the runtime has detected at least one lick event since the last visualizer update, emits a lick tick.
-        if self._lick_event:
-            self._lick_data[-1] = self._event_tick_true
+        if self._left_lick_event:
+            self._left_lick_data[-1] = self._left_event_tick_true
         else:
-            self._lick_data[-1] = self._event_tick_false
-        self._lick_event = False  # Resets the lick event flag
+            self._left_lick_data[-1] = self._left_event_tick_false
+        self._left_lick_event = False  # Resets the left lick event flag
+
+        if self._right_lick_event:
+            self._right_lick_data[-1] = self._right_event_tick_true
+        else:
+            self._right_lick_data[-1] = self._right_event_tick_false
+        self._right_lick_event = False  # Resets the right lick event flag
 
         # If the runtime has detected at least one water reward (valve) event since the last visualizer update, emits a
         # valve activation tick.
-        if self._valve_event:
-            self._valve_data[-1] = self._event_tick_true
+        if self._left_valve_event:
+            self._left_valve_data[-1] = self._left_event_tick_true
         else:
-            self._valve_data[-1] = self._event_tick_false
-        self._valve_event = False  # Resets the valve event flag
+            self._left_valve_data[-1] = self._left_event_tick_false
+        self._left_valve_event = False  # Resets the valve event flag
 
-    def add_lick_event(self) -> None:
+        if self._right_valve_event:
+            self._right_valve_data[-1] = self._right_event_tick_true
+        else:
+            self._right_valve_data[-1] = self._right_event_tick_false
+        self._right_valve_event = False  # Resets the valve event flag
+
+    def add_left_lick_event(self) -> None:
         """Configures the visualizer to render a new lick event during the next update cycle."""
-        self._lick_event = True
+        self._left_lick_event = True
 
-    def add_valve_event(self) -> None:
-        """Configures the visualizer to render a new valve activation event during the next update cycle."""
-        self._valve_event = True
+    def add_right_lick_event(self) -> None:
+        """Configures the visualizer to render a new right lick event during the next update cycle."""
+        self._right_lick_event = True
+
+    def add_left_valve_event(self) -> None:
+        """Configures the visualizer to render a new left valve activation event during the next update cycle."""
+        self._left_valve_event = True
+
+    def add_right_valve_event(self) -> None:
+        """Configures the visualizer to render a new right valve activation event during the next update cycle."""
+        self._right_valve_event = True
 
     @property
     def is_open(self) -> bool:

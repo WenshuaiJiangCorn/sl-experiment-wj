@@ -53,13 +53,13 @@ def run_test() -> None:
             lick_left = mc.left_lick_sensor.lick_count
 
             if lick_left > prev_lick_left:
-                visualizer.add_lick_event()
+                visualizer.add_left_lick_event()
 
                 if valve_left_active:
 
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = False
-                    visualizer.add_valve_event()
+                    visualizer.add_left_valve_event()
 
                     valve_left_deactivated_time = time.time()
 

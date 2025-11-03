@@ -78,6 +78,8 @@ class VideoSystems:
         self._top_camera.start_frame_saving()
         self._left_camera.start_frame_saving()
         self._right_camera.start_frame_saving()
+        
+        self._cameras_started = True
 
 
     def stop(self) -> None:
