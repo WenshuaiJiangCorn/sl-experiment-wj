@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import keyboard
 from ataraxis_time import PrecisionTimer
-from ataraxis_base_utilities import LogLevel, console
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 from data_processing import process_microcontroller_log
@@ -13,7 +13,7 @@ from visualizers import BehaviorVisualizer
 from binding_classes import VideoSystems
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
-_REWARD_VOLUME = np.float64(5)  # 5 microliters
+_REWARD_VOLUME = np.float64(10)  # 10 microliters
 
 
 def run_experiment() -> None:
@@ -94,10 +94,14 @@ def run_experiment() -> None:
             verify_integrity=False
         )
 
+        processed_dir = output_dir.joinpath("processed")
+        ensure_directory_exists(processed_dir)
+
         # Extracts all logged data as module-specific .feather files. These files can be read via
         # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
         process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
+            data_logger=data_logger, microcontroller=mc, output_directory=processed_dir
         )
 
-        vs.show_frame_rates()
+        # Extract and save video frame timestamps
+        vs.extract_video_time_stamps(output_directory=processed_dir)

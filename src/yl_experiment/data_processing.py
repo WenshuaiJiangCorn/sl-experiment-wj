@@ -328,3 +328,6 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
         extracted_module_data=data[4],
         output_file=output_directory / "analog_signal.feather",
     )
+
+
+    

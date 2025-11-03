@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import keyboard
+import polars as pl
+
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
 from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
@@ -98,34 +100,64 @@ class VideoSystems:
         console.echo(f"VideoSystems: All cameras terminated.", level=LogLevel.SUCCESS)
 
     
-    def show_frame_rates(self) -> None:
-        """Extracts and computes the frame rates of the interfaced cameras based on logged timestamp data."""
+    def _save_time_stamps(self, log_path: Path, output_file: Path):
+        """Extracts and save time stamps of each frame, computes the frame rates of 
+           the interfaced cameras based on logged timestamp data.
+           
+           Args:
+               log_path (Path): The path to the assembled log archive (.npz file) containing the logged data.
+            
+           Notes:
+               This method save the extracted timestamps to disk and returns the computed frame rates.
 
-        console.echo(f"Extracting frame acquisition timestamps from the assembled log archive...")
-        timestamps1 = extract_logged_camera_timestamps(log_path=self._data_logger.output_directory.joinpath(f"101_log.npz"))
-        timestamps2 = extract_logged_camera_timestamps(log_path=self._data_logger.output_directory.joinpath(f"102_log.npz"))
-        timestamps3 = extract_logged_camera_timestamps(log_path=self._data_logger.output_directory.joinpath(f"103_log.npz"))
+            Returns:
+                fps (np.float64): The computed frame rate based on the extracted timestamps.
+           """
+        timestamps = extract_logged_camera_timestamps(
+            log_path=log_path
+            )
+
+        # Saves the extracted timestamps to a .feather file
+        timestamp_array = np.array(timestamps, dtype=np.uint64)
+        timestamp_dataframe = pl.DataFrame({"time_us": timestamp_array})
+        timestamp_dataframe.write_ipc(
+            file=output_file
+        )
 
         # Computes and prints the frame rate of the camera based on the extracted frame timestamp data.
-        timestamp_array1 = np.array(timestamps1, dtype=np.uint64)
-        time_diffs1 = np.diff(timestamp_array1)
-        fps1 = 1 / (np.mean(time_diffs1) / 1e6)
+        time_diffs = np.diff(timestamp_array)
+        fps = 1 / (np.mean(time_diffs) / 1e6)
 
-        timestamp_array2 = np.array(timestamps2, dtype=np.uint64)
-        time_diffs2 = np.diff(timestamp_array2)
-        fps2 = 1 / (np.mean(time_diffs2) / 1e6)
+        return fps
+        
 
-        timestamp_array3 = np.array(timestamps3, dtype=np.uint64)
-        time_diffs3 = np.diff(timestamp_array3)
-        fps3 = 1 / (np.mean(time_diffs3) / 1e6)
+    def extract_video_time_stamps(self, output_directory: Path) -> None:
+        """Extracts and save time stamps of each frame for all cameras, computes the frame rates of 
+           the interfaced cameras based on logged timestamp data."""
+
+        console.echo(f"Extracting frame acquisition timestamps from the assembled log archive...")
+        fps_top = self._save_time_stamps(
+            log_path=self._data_logger.output_directory.joinpath(f"101_log.npz"),
+            output_file=output_directory / "top_camera_timestamps.feather"
+            )
+        
+        fps_left = self._save_time_stamps(
+            log_path=self._data_logger.output_directory.joinpath(f"102_log.npz"),
+            output_file=output_directory / "left_camera_timestamps.feather"
+            )
+        
+        fps_right = self._save_time_stamps(
+            log_path=self._data_logger.output_directory.joinpath(f"103_log.npz"),
+            output_file=output_directory / "right_camera_timestamps.feather"
+            )
 
         console.echo(
             message=(
                 f"According to the extracted timestamps, the interfaced cameras had acquisition frame rates of: "
-                f"Top camera {fps1:.2f} frames / second"
-                f"Left camera {fps2:.2f} frames / second"
-                f"Right camera {fps3:.2f} frames / second"
+                f"Top camera {fps_top:.2f} frames / second"
+                f"Left camera {fps_left:.2f} frames / second"
+                f"Right camera {fps_right:.2f} frames / second"
+                f"Time stamps saved."
             ),
             level=LogLevel.SUCCESS,
         )
-
