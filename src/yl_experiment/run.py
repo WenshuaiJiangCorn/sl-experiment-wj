@@ -1,33 +1,41 @@
-"""This module provides the executable script used to run experiments in the Yapici lab."""
-
-# WJ: Run this script to start the experiment
 import time
 from pathlib import Path
-import tempfile
 
 import numpy as np
 import keyboard
+from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, assemble_log_archives
+from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
+
 
 from .data_processing import process_microcontroller_log
 from .microcontroller import AMCInterface
-from visualizers import BehaviorVisualizer
-
+from .visualizers import BehaviorVisualizer
+from .binding_classes import VideoSystems
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
-
 _REWARD_VOLUME = np.float64(5)  # 5 microliters
 
 
 def run_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab."""
+
+    if not console.enabled:
+        console.enable()
+    
     data_logger = DataLogger(output_directory=output_dir, instance_name="final_test")
     mc = AMCInterface(data_logger=data_logger)
+    vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
+    visualizer = BehaviorVisualizer()
 
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
+        vs.start()
+
+        # Start the microcontroller, execute reward delivery logic
         mc.start()
+        visualizer.open()  # Open the visualizer window
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
         console.echo("Experiment: started. Press 'q' to stop.", level=LogLevel.SUCCESS)
@@ -40,21 +48,29 @@ def run_experiment() -> None:
         prev_lick_right = mc.right_lick_sensor.lick_count
 
         while True:
+            visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
             lick_right = mc.right_lick_sensor.lick_count
 
-            if lick_left > prev_lick_left and valve_left_active:
-                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
-                valve_left_active = False
-                valve_right_active = True
+            if lick_left > prev_lick_left:
+                visualizer.add_left_lick_event()
 
-            elif lick_right > prev_lick_right and valve_right_active:
-                mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
-                valve_right_active = False
-                valve_left_active = True
+                if valve_left_active:
+                    mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    valve_left_active = False
+                    valve_right_active = True
+
+            elif lick_right > prev_lick_right:
+                visualizer.add_right_lick_event()
+
+                if valve_right_active:
+                    mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    valve_left_active = True
+                    valve_right_active = False
 
             prev_lick_left, prev_lick_right = lick_left, lick_right
 
+            timer = PrecisionTimer("ms")
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the experiment loop due to the 'q' key press.")
 
@@ -63,10 +79,12 @@ def run_experiment() -> None:
                 mc.right_lick_sensor.reset_command_queue()
                 break
 
-            time.sleep(0.01)
+            timer.delay(delay=10, block=False) # 10ms delay to prevent CPU overuse
 
     finally:
+        vs.stop()
         mc.stop()
+        visualizer.close()
         console.echo("Experiment: ended.", level=LogLevel.SUCCESS)
 
         data_logger.stop()  # Data logger needs to be stopped last
@@ -86,7 +104,4 @@ def run_experiment() -> None:
             data_logger=data_logger, microcontroller=mc, output_directory=output_dir.joinpath("processed")
         )
 
-
-# Run experiment
-if __name__ == "__main__":
-    run_experiment()
+        vs.show_frame_rates()
