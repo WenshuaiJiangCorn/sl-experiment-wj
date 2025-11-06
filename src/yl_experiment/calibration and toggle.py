@@ -1,5 +1,4 @@
 # Calibration script for the microcontroller
-# 9/19/2025 calibration result: 80ms = 10uL
 
 import time
 from pathlib import Path
@@ -11,19 +10,20 @@ from ataraxis_data_structures import DataLogger
 
 from microcontroller import AMCInterface
 
-with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
-    output_dir = Path(temp_dir_path).joinpath("test_output")
 
-if not console.enabled:
-    console.enable()
-_CALIBRATION_PULSE_DURATION = np.uint32(60000) # microseconds
-_TOGGLE_DURATION = 2  # seconds
-
-def calibrate_valve():
+def calibrate_valve(valve_side) -> None:
     """Calibrates the valve by sending a pulse of specified duration."""
     data_logger = DataLogger(output_directory=output_dir, instance_name="calibration_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
+
+    if valve_side == 'left':
+        valve = mc.left_valve
+    elif valve_side == 'right':
+        valve = mc.right_valve
+    else:
+        console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
+        return
 
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
@@ -31,31 +31,84 @@ def calibrate_valve():
 
         console.echo('Calibration starts')
 
-        mc.left_valve.calibrate(_CALIBRATION_PULSE_DURATION)
+        valve.calibrate(_CALIBRATION_PULSE_DURATION)
 
     finally:
-        mc.left_valve.toggle(state=False)
+        valve.toggle(state=False)
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
         data_logger.stop()
 
-def toggle_valve():
+
+def toggle_valve(valve_side) -> None:
     """Toggles the valve state for a specified duration."""
     data_logger = DataLogger(output_directory=output_dir, instance_name="toggle_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
+    if valve_side == 'left':
+        valve = mc.left_valve
+    elif valve_side == 'right':
+        valve = mc.right_valve
+    else:
+        console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
+        return
+
     try:
         data_logger.start()
         mc.start()
-        mc.left_valve.toggle(state=True)
+        valve.toggle(state=True)
         time.sleep(_TOGGLE_DURATION)
+
     finally:
-        mc.left_valve.toggle(state=False)
+        valve.toggle(state=False)
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
         data_logger.stop()
 
+
+def deliver_test(valve_side, volume=100) -> None:
+    """Delivers a specified volume (default 100uL) of fluid through the specified valve to test dispensing."""
+    data_logger = DataLogger(output_directory=output_dir, instance_name="deliver_test")
+    mc = AMCInterface(data_logger=data_logger)
+    console.echo(mc._controller._port)
+
+    if valve_side == 'left':
+        valve = mc.left_valve
+    elif valve_side == 'right':
+        valve = mc.right_valve
+    else:
+        console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
+        return
+
+    try:
+        data_logger.start()
+        mc.start()
+        valve.dispense_volume(volume=volume)
+    finally:
+        mc.stop()
+        console.echo("Test: ended.", level=LogLevel.SUCCESS)
+        data_logger.stop()
+
+
 if __name__ == "__main__":
-    calibrate_valve()
-    # toggle_valve()
+    
+    if not console.enabled:
+        console.enable()
+
+    _CALIBRATION_PULSE_DURATION = np.uint32(15000) # microseconds
+    _TOGGLE_DURATION = 2  # seconds
+
+    with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
+        output_dir = Path(temp_dir_path).joinpath("test_output")
+
+    # calibrate_valve(valve_side='left')
+
+
+
+
+    #calibrate_valve(valve_side='right')
+    # deliver_test(valve_side='left')
+    # deliver_test(valve_side='right')
+    #toggle_valve(valve_side='right')
+    toggle_valve(valve_side='left')

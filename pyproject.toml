@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "yl-experiment"
-version = "4.0.0rc1"
+version = "4.0.0"
 description = "A heavily refactored version of the sl-experiment library used to run experiments in the Yapici lab."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -42,7 +42,7 @@ dependencies = [
     "ataraxis-time==5.0.0",
     "ataraxis-base-utilities==5.0.0",
     "ataraxis-data-structures==5.0.0",
-    "ataraxis-communication-interface==4.0.0rc2",
+    "ataraxis-communication-interface==4.0.1rc3",
     "tqdm==4.67.1",
     "keyboard>=0,<1",
     "polars>=1,<2",
@@ -63,7 +63,7 @@ dev = [
     "tox-uv>=1,<2",
 
     # Development Automation
-    "ataraxis-automation>=6,<7",
+    "ataraxis-automation>=7,<8",
 
     # Types:
     "types-tqdm>=4,<5",

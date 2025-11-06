@@ -80,9 +80,9 @@ _LICK_POLLING_DELAY = np.uint32(1000)
 class ModuleTypeCodes(IntEnum):
     """Stores the module type (family) codes used by the hardware modules supported by this library version."""
 
-    VALVE_MODULE = 101
-    LICK_MODULE = 102
-    ANALOG_MODULE = 103
+    VALVE_MODULE = 1
+    LICK_MODULE = 2
+    ANALOG_MODULE = 3
 
 
 class _ValveStateCodes(IntEnum):
