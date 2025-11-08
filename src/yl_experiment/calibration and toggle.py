@@ -1,6 +1,5 @@
 # Calibration script for the microcontroller
-
-import time
+from ataraxis_time import PrecisionTimer
 from pathlib import Path
 import tempfile
 
@@ -57,11 +56,13 @@ def toggle_valve(valve_side) -> None:
     try:
         data_logger.start()
         mc.start()
+        mc.connect_to_smh()
         valve.toggle(state=True)
-        time.sleep(_TOGGLE_DURATION)
+        timer.delay(_TOGGLE_DURATION)
 
     finally:
         valve.toggle(state=False)
+        mc.disconnect_to_smh()
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
         data_logger.stop()
@@ -98,11 +99,11 @@ if __name__ == "__main__":
 
     _CALIBRATION_PULSE_DURATION = np.uint32(15000) # microseconds
     _TOGGLE_DURATION = 2  # seconds
-
+    timer = PrecisionTimer("s")
     with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
         output_dir = Path(temp_dir_path).joinpath("test_output")
 
-    # calibrate_valve(valve_side='left')
+    #calibrate_valve(valve_side='left')
 
 
 

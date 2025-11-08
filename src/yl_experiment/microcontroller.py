@@ -35,7 +35,6 @@ _CONTROLLER_KEEPALIVE_INTERVAL = 500
 
 # Valve module calibration parameters
 # The delay between calibration pulses in us. Should never be below 200000.
-_VALVE_CALIBRATION_DELAY = np.uint32(200000)
 _VALVE_CALIBRAZTION_COUNT = np.uint16(200)  # The of calibration pulses to use at each calibration level.
 
 # Maps right valve pulse durations in microseconds to the corresponding dispensed volume of fluid in microliters.
@@ -88,9 +87,9 @@ class ModuleTypeCodes(IntEnum):
 class _ValveStateCodes(IntEnum):
     """Stores the message state codes used by the ValveModule instances that require online processing at runtime."""
 
-    VALVE_OPEN = 52
-    VALVE_CLOSED = 53
-    VALVE_CALIBRATED = 54
+    VALVE_OPEN = 51
+    VALVE_CLOSED = 52
+    VALVE_CALIBRATED = 53
 
 
 class _LickStateCodes(IntEnum):
@@ -140,16 +139,16 @@ class ValveInterface(ModuleInterface):
         *,
         debug: bool = False,
     ) -> None:
-        error_codes: set[np.uint8] = {np.uint8(51)}  # kOutputLocked
+        error_codes = None
         # kOpen, kClosed, kCalibrated
-        data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}  # kOpen, kClosed, kCalibrated
+        data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}  # kOpen, kClosed, kCalibrated
 
         self._debug: bool = debug
 
         # If the interface runs in the debug mode, expands the list of processed data codes to include all codes used
         # by the valve module.
         if debug:
-            data_codes = {np.uint8(52), np.uint8(53), np.uint8(54)}
+            data_codes = {np.uint8(51), np.uint8(52), np.uint8(53)}
 
         super().__init__(
             module_type=np.uint8(ModuleTypeCodes.VALVE_MODULE),
@@ -204,6 +203,7 @@ class ValveInterface(ModuleInterface):
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Processes incoming data sent by the module to the PC."""
+
         if message.event == _ValveStateCodes.VALVE_OPEN:
             if self._debug:
                 console.echo("Valve Opened")
@@ -261,7 +261,7 @@ class ValveInterface(ModuleInterface):
             pulse_duration_us = np.uint32(np.ceil(pulse_duration))
 
             # Updates the runtime configuration of the valve to deliver the requested volume of fluid.
-            self.send_parameters(parameter_data=(pulse_duration_us, _VALVE_CALIBRATION_DELAY, _VALVE_CALIBRAZTION_COUNT))
+            self.send_parameters(parameter_data=(pulse_duration_us, _VALVE_CALIBRAZTION_COUNT))
 
         # Instructs the valve to execute the command
         self.send_command(command=np.uint8(1), noblock=noblock, repetition_delay=_ZERO_LONG)
@@ -285,7 +285,7 @@ class ValveInterface(ModuleInterface):
             When activated, this command blocks in-place until the calibration cycle is completed. Currently, there
             is no way to interrupt the command, and it may take a long period of time (minutes) to complete.
         """
-        self.send_parameters(parameter_data=(pulse_duration, _VALVE_CALIBRATION_DELAY, _VALVE_CALIBRAZTION_COUNT))
+        self.send_parameters(parameter_data=(pulse_duration, _VALVE_CALIBRAZTION_COUNT))
         self.send_command(command=np.uint8(4), noblock=_BOOL_FALSE, repetition_delay=_ZERO_LONG)
 
     @property
@@ -311,7 +311,7 @@ class ValveInterface(ModuleInterface):
     @property
     def dispensed_volume(self) -> np.float64:
         """Returns the total volume of fluid, in microliters, delivered by the valve during the current runtime."""
-        return self._valve_tracker.read_data(index=0, convert_output=False)  # type: ignore[no-any-return]
+        return self._valve_tracker[0]  # type: ignore[no-any-return]
 
 
 class LickInterface(ModuleInterface):
@@ -443,7 +443,7 @@ class LickInterface(ModuleInterface):
     @property
     def lick_count(self) -> np.uint64:
         """Returns the total number of licks detected by the module since runtime onset."""
-        return self._lick_tracker.read_data(index=0, convert_output=False)  # type: ignore[no-any-return]
+        return self._lick_tracker[0]  # type: ignore[no-any-return]
 
     @property
     def lick_threshold(self) -> np.uint16:
@@ -470,7 +470,7 @@ class AnalogInterface(ModuleInterface):
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
-            module_type=np.uint8(np.uint8(ModuleTypeCodes.ANALOG_MODULE)),  # ModuleTypeCodes.ANALOG_MODULE
+            module_type=np.uint8(ModuleTypeCodes.ANALOG_MODULE),  # ModuleTypeCodes.ANALOG_MODULE
             module_id=module_id,
             data_codes=data_codes,
             error_codes=None,
@@ -485,6 +485,10 @@ class AnalogInterface(ModuleInterface):
             exists_ok=True,
         )
 
+    def __del__(self) -> None:
+        """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
+        self._analog_tracker.disconnect()
+        self._analog_tracker.destroy()
 
     def initialize_remote_assets(self) -> None:
         """Connects to the SharedMemoryArray used to communicate lick status to other processes."""
@@ -534,7 +538,7 @@ class AMCInterface:
         self.left_valve = ValveInterface(
             module_id=np.uint8(1),
             valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
-            debug=False,
+            debug=True
         )
 
         self.right_valve = ValveInterface(
@@ -558,13 +562,15 @@ class AMCInterface:
             debug=False,
         )
 
+        self.module_interfaces = (self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor, self.analog_input)
+
         # Main interface:
         self._controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=_CONTROLLED_ID,
             buffer_size=_CONTROLLER_BUFFER_SIZE,
             port=_CONTROLLER_PORT,
             data_logger=data_logger,
-            module_interfaces=(self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor, self.analog_input),
+            module_interfaces=self.module_interfaces,
             baudrate=_CONTROLLER_BAUDRATE,
             keepalive_interval=_CONTROLLER_KEEPALIVE_INTERVAL,
         )
@@ -614,6 +620,16 @@ class AMCInterface:
 
         message = "Ataraxis Micro Controller (AMC) Interface: Terminated."
         console.echo(message=message, level=LogLevel.SUCCESS)
+
+    def connect_to_smh(self) -> None:
+        """Establishes connections to SharedMemoryArray for all modules. This function needs to be called after start()."""
+        for module in self.module_interfaces:
+            module.initialize_remote_assets()
+
+    def disconnect_to_smh(self) -> None:
+        """Disconnects from SharedMemoryArray for all modules. This function needs to be called before stop()."""
+        for module in self.module_interfaces:
+            module.terminate_remote_assets()
 
     @property
     def controller_id(self) -> int:

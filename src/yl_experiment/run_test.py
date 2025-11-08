@@ -35,19 +35,19 @@ def run_test() -> None:
     visualizer = BehaviorVisualizer()
     console.echo(mc._controller._port)
 
+    data_logger.start()  # Has to be done before starting any data-generation processes
+    mc.start()
+    mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
+    mc.left_lick_sensor.check_state()
+    visualizer.open()  # Open the visualizer window
+    console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
+
+    # Initial valve availability
+    valve_left_active = True
+
+    prev_lick_left = mc.left_lick_sensor.lick_count
+    valve_left_deactivated_time = None  # Track when the left valve was deactivated
     try:
-        data_logger.start()  # Has to be done before starting any data-generation processes
-        mc.start()
-        mc.left_lick_sensor.check_state()
-        visualizer.open()  # Open the visualizer window
-        console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
-
-        # Initial valve availability
-        valve_left_active = True
-
-        prev_lick_left = mc.left_lick_sensor.lick_count
-        valve_left_deactivated_time = None  # Track when the left valve was deactivated
-
         while True:
             visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
@@ -78,9 +78,10 @@ def run_test() -> None:
                 mc.left_lick_sensor.reset_command_queue()
                 break
 
-            time.sleep(0.01)
+            time.sleep(0.05)
 
     finally:
+        mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
@@ -89,20 +90,20 @@ def run_test() -> None:
 
         # Combines all log entries into a single .npz log file for each source.
         assemble_log_archives(
-            log_directory=output_dir, 
+            log_directory=data_logger.output_directory,
             remove_sources=True,
             memory_mapping=False,
             verbose=True,
             verify_integrity=False
         )
 
-        procesed_dir = output_dir.joinpath("processed")
-        ensure_directory_exists(procesed_dir)
+        processed_dir = output_dir.joinpath("processed")
+        ensure_directory_exists(processed_dir)
 
         # Extracts all logged data as module-specific .feather files. These files can be read via
         # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
         process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=procesed_dir
+            data_logger=data_logger, microcontroller=mc, output_directory=processed_dir
         )
 
 

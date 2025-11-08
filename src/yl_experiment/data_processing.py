@@ -85,21 +85,21 @@ def _parse_valve_data(
         nonlinearity_exponent: Stores the nonlinearity exponent used in the fitted power law equation that
             translates valve pulses into dispensed water volumes.
     """
-    log_data = extracted_module_data.data
+    log_data = extracted_module_data.event_data
 
-    # This function looks for event-codes 52 (Valve Open) and event-codes 53 (Valve Closed).
+    # This function looks for event-codes 51 (Valve Open) and event-codes 52 (Valve Closed).
 
-    # The way this module is implemented guarantees there is at least one code 53 message, but there may be no code
-    # 52 messages.
-    open_data = log_data.get(np.uint8(52), [])
-    closed_data = log_data[np.uint8(53)]
+    # The way this module is implemented guarantees there is at least one code 52 message, but there may be no code
+    # 51 messages.
+    open_data = log_data.get(np.uint8(51), [])
+    closed_data = log_data[np.uint8(52)]
 
     # If there were no valve open events, no water was dispensed. In this case, uses the first code 53 timestamp
     # to report a zero-volume reward and ends the runtime early.
     if not open_data:
         module_dataframe = pl.DataFrame(
             {
-                "time_us": np.array([closed_data[0]["timestamp"]], dtype=np.uint64),
+                "time_us": np.array([closed_data[0].timestamp], dtype=np.uint64),
                 "dispensed_water_volume_uL": np.array([0], dtype=np.float64),
             }
         )
@@ -120,12 +120,12 @@ def _parse_valve_data(
     # the time the valve remains open into the fluid volume dispensed to the animal, which is then used to convert each
     # Open/Close cycle duration into the dispensed volume.
 
-    # Extracts Open (Code 52) trigger codes. Statically assigns the value '1' to denote Open signals.
-    timestamps[:n_on] = np.array([v["timestamp"] for v in open_data], dtype=np.uint64)
+    # Extracts Open (Code 51) trigger codes. Statically assigns the value '1' to denote Open signals.
+    timestamps[:n_on] = np.array([v.timestamp for v in open_data], dtype=np.uint64)
     volume[:n_on] = 1  # Open state
 
-    # Extracts Closed (Code 53) trigger codes.
-    timestamps[n_on:] = np.array([v["timestamp"] for v in closed_data], dtype=np.uint64)
+    # Extracts Closed (Code 52) trigger codes.
+    timestamps[n_on:] = np.array([v.timestamp for v in closed_data], dtype=np.uint64)
     volume[n_on:] = 0  # Closed state
 
     # Sorts both arrays based on timestamps.
@@ -188,7 +188,7 @@ def _parse_lick_data(extracted_module_data: ExtractedModuleData, output_file: Pa
         system by applying a different lick threshold from the one used at runtime, potentially augmenting data
         analysis.
     """
-    log_data = extracted_module_data.data
+    log_data = extracted_module_data.event_data
 
     # LickModule only sends messages with code 51 (Voltage level changed). Therefore, this extraction pipeline has
     # to apply the threshold filter, similar to how the real-time processing method.
@@ -199,8 +199,8 @@ def _parse_lick_data(extracted_module_data: ExtractedModuleData, output_file: Pa
     # Extract timestamps and voltage levels. Timestamps use uint64 datatype. Lick sensor
     # voltage levels come in as uint16, but they are later used to generate a binary uint8 lick classification mask.
     voltage_data = log_data[np.uint8(51)]
-    timestamps = np.array([v["timestamp"] for v in voltage_data], dtype=np.uint64)
-    voltages = np.array([v["data"] for v in voltage_data], dtype=np.uint16)
+    timestamps = np.array([v.timestamp for v in voltage_data], dtype=np.uint64)
+    voltages = np.array([v.data for v in voltage_data], dtype=np.uint16)
 
     # Sorts all arrays by timestamp. This is technically not needed as the extracted values are already sorted by
     # timestamp, but this is still done for additional safety.
@@ -239,11 +239,11 @@ def _parse_analog_data(extracted_module_data: ExtractedModuleData, output_file: 
         associated with each analog signal sample.
     """
 
-    log_data = extracted_module_data.data
+    log_data = extracted_module_data.event_data
 
     voltage_data = log_data[np.uint8(51)]
-    timestamps = np.array([v["timestamp"] for v in voltage_data], dtype=np.uint64)
-    voltages = np.array([v["data"] for v in voltage_data], dtype=np.uint16)
+    timestamps = np.array([v.timestamp for v in voltage_data], dtype=np.uint64)
+    voltages = np.array([v.data for v in voltage_data], dtype=np.uint16)
 
     # Sorts all arrays by timestamp. This is technically not needed as the extracted values are already sorted by
     # timestamp, but this is still done for additional safety.
@@ -296,7 +296,7 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     # Right Valve
     _parse_valve_data(
         extracted_module_data=data[0],
-        output_file=output_directory / "left_valve_data.feather",
+        output_file=output_directory / "right_valve_data.feather",
         scale_coefficient=microcontroller.right_valve.scale_coefficient,
         nonlinearity_exponent=microcontroller.right_valve.nonlinearity_exponent,
     )
@@ -304,7 +304,7 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     # Left Valve
     _parse_valve_data(
         extracted_module_data=data[1],
-        output_file=output_directory / "right_valve_data.feather",
+        output_file=output_directory / "left_valve_data.feather",
         scale_coefficient=microcontroller.left_valve.scale_coefficient,
         nonlinearity_exponent=microcontroller.left_valve.nonlinearity_exponent,
     )
@@ -313,10 +313,10 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     _parse_lick_data(
         extracted_module_data=data[2],
         output_file=output_directory / "left_lick_sensor.feather",
-        lick_threshold=microcontroller.right_lick_sensor.lick_threshold,
+        lick_threshold=microcontroller.left_lick_sensor.lick_threshold,
     )
 
-    # Left Lick Sensor
+    # Right Lick Sensor
     _parse_lick_data(
         extracted_module_data=data[3],
         output_file=output_directory / "right_lick_sensor.feather",

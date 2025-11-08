@@ -72,6 +72,7 @@ def run_experiment() -> None:
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
+                # mc.analog_input.reset_command_queue()
                 break
 
             timer.delay(delay=10, block=False) # 10ms delay to prevent CPU overuse
