@@ -111,5 +111,5 @@ if __name__ == "__main__":
     #calibrate_valve(valve_side='right')
     # deliver_test(valve_side='left')
     # deliver_test(valve_side='right')
-    #toggle_valve(valve_side='right')
-    toggle_valve(valve_side='left')
+    toggle_valve(valve_side='right')
+    #toggle_valve(valve_side='left')

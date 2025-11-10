@@ -31,7 +31,7 @@ _CONTROLLED_ID = np.uint8(111)
 _CONTROLLER_PORT = "COM4"
 _CONTROLLER_BUFFER_SIZE = 8192
 _CONTROLLER_BAUDRATE = 115200
-_CONTROLLER_KEEPALIVE_INTERVAL = 500
+_CONTROLLER_KEEPALIVE_INTERVAL = 1000
 
 # Valve module calibration parameters
 # The delay between calibration pulses in us. Should never be below 200000.

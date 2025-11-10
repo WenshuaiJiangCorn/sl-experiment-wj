@@ -1,4 +1,4 @@
-"""This module provides the executable script used to run test experiments with only left valve and lick in the Yapici lab."""
+"""This module provides the executable script used to run test experiments with only right valve and lick in the Yapici lab."""
 
 # WJ: Run this script to start the test
 import time
@@ -38,47 +38,47 @@ def run_test() -> None:
     data_logger.start()  # Has to be done before starting any data-generation processes
     mc.start()
     mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
-    mc.left_lick_sensor.check_state()
+    mc.right_lick_sensor.check_state()
     visualizer.open()  # Open the visualizer window
     console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
 
     # Initial valve availability
-    valve_left_active = True
+    valve_right_active = True
 
-    prev_lick_left = mc.left_lick_sensor.lick_count
-    valve_left_deactivated_time = None  # Track when the left valve was deactivated
+    prev_lick_right = mc.right_lick_sensor.lick_count
+    valve_right_deactivated_time = None  # Track when the right valve was deactivated
     try:
         while True:
             visualizer.update()
-            lick_left = mc.left_lick_sensor.lick_count
+            lick_right = mc.right_lick_sensor.lick_count
 
-            if lick_left > prev_lick_left:
-                visualizer.add_left_lick_event()
+            if lick_right > prev_lick_right:
+                visualizer.add_right_lick_event()
 
-                if valve_left_active:
+                if valve_right_active:
 
-                    mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
-                    valve_left_active = False
-                    visualizer.add_left_valve_event()
+                    mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    valve_right_active = False
+                    visualizer.add_right_valve_event()
 
-                    valve_left_deactivated_time = time.time()
+                    valve_right_deactivated_time = time.time()
 
             # check if 5 seconds passed since deactivation
-            if not valve_left_active and valve_left_deactivated_time is not None:
-                if time.time() - valve_left_deactivated_time >= 5:
-                    valve_left_active = True
-                    valve_left_deactivated_time = None  # reset timer
+            if not valve_right_active and valve_right_deactivated_time is not None:
+                if time.time() - valve_right_deactivated_time >= 3:
+                    valve_right_active = True
+                    valve_right_deactivated_time = None  # reset timer
 
-            prev_lick_left = lick_left
+            prev_lick_right = lick_right
 
             if keyboard.is_pressed("q"):
                 console.echo("Ending the test.")
 
                 # Stops monitoring lick sensors before entering the termination clause
-                mc.left_lick_sensor.reset_command_queue()
+                mc.right_lick_sensor.reset_command_queue()
                 break
 
-            time.sleep(0.05)
+            time.sleep(0.03)
 
     finally:
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules

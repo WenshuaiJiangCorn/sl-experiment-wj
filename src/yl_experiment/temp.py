@@ -1,38 +1,28 @@
-
+import subprocess
 import time
-from pathlib import Path
-import tempfile
-
-import numpy as np
-from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import DataLogger
-
-from microcontroller import AMCInterface
-
-
-if __name__ == "__main__":
-    if not console.enabled:
-        console.enable()
-
-    with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
-        output_dir = Path(temp_dir_path).joinpath("test_output")
-
-    data_logger = DataLogger(output_directory=output_dir, instance_name="calibration_test")
-    mc = AMCInterface(data_logger=data_logger)
-    console.echo(mc._controller._port)
-
-    lick_sensor = mc.left_lick_sensor
-
+_CONTROLLER_PORT = 'COM4'  # Update this to your controller's port
+def complete_reset():
+    """Completely resets the connection."""
+    # 1. Kill Python processes (Windows)
+    subprocess.run(['taskkill', '/F', '/IM', 'python.exe'], 
+                   stderr=subprocess.DEVNULL)
+    time.sleep(1)
+    
+    # 2. Reset via serial
     try:
-        data_logger.start()  # Has to be done before starting any data-generation processes
-        mc.start()
+        import serial
+        ser = serial.Serial(_CONTROLLER_PORT, 115200)
+        ser.setDTR(False)
+        time.sleep(0.5)
+        ser.setDTR(True)
+        ser.close()
+    except:
+        pass
+    
+    time.sleep(3)
+    
+    print("Reset complete. Try running your test now.")
 
-        console.echo('Starts')
-        c = lick_sensor.check_state()
-        print(c)
-
-
-    finally:
-        mc.stop()
-        console.echo("Test: ended.", level=LogLevel.SUCCESS)
-        data_logger.stop()
+# Run this first, then run your test in a fresh Python session
+if __name__ == "__main__":
+    complete_reset()
