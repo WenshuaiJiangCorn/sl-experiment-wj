@@ -35,19 +35,20 @@ def run_test() -> None:
     visualizer = BehaviorVisualizer()
     console.echo(mc._controller._port)
 
-    data_logger.start()  # Has to be done before starting any data-generation processes
-    mc.start()
-    mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
-    mc.left_lick_sensor.check_state()
-    visualizer.open()  # Open the visualizer window
-    console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
-
-    # Initial valve availability
-    valve_left_active = True
-
-    prev_lick_left = mc.left_lick_sensor.lick_count
-    valve_left_deactivated_time = None  # Track when the left valve was deactivated
     try:
+        data_logger.start()  # Has to be done before starting any data-generation processes
+        mc.start()
+        mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
+        mc.left_lick_sensor.check_state()
+        visualizer.open()  # Open the visualizer window
+        console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
+
+        # Initial valve availability
+        valve_left_active = True
+
+        prev_lick_left = mc.left_lick_sensor.lick_count
+        valve_left_deactivated_time = None  # Track when the left valve was deactivated
+        
         while True:
             visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
@@ -63,7 +64,7 @@ def run_test() -> None:
 
                     valve_left_deactivated_time = time.time()
 
-            # check if 5 seconds passed since deactivation
+            # check if 3 seconds passed since deactivation
             if not valve_left_active and valve_left_deactivated_time is not None:
                 if time.time() - valve_left_deactivated_time >= 3:
                     valve_left_active = True

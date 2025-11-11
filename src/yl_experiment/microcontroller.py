@@ -39,18 +39,18 @@ _VALVE_CALIBRAZTION_COUNT = np.uint16(200)  # The of calibration pulses to use a
 
 # Maps right valve pulse durations in microseconds to the corresponding dispensed volume of fluid in microliters.
 _RIGHT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.10),  # 15 ms dispenses 1.10 uL of fluid.
-    (30000, 3.00),
-    (45000, 6.25),
+    (15000, 1.35),  # 15 ms dispenses 1.10 uL of fluid.
+    (30000, 3.24),
+    (45000, 7.28),
     (60000, 10.90),
 )
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
-    (15000, 0.86),
-    (30000, 2.11),
-    (45000, 4.24),
-    (60000, 6.40),
+    (15000, 0.99),
+    (30000, 3.60),
+    (45000, 6.96),
+    (60000, 10.84),
 )
 
 # Lick module calibration parameters
@@ -538,7 +538,7 @@ class AMCInterface:
         self.left_valve = ValveInterface(
             module_id=np.uint8(1),
             valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
-            debug=True
+            debug=False,
         )
 
         self.right_valve = ValveInterface(

@@ -34,20 +34,20 @@ def run_test() -> None:
     mc = AMCInterface(data_logger=data_logger)
     visualizer = BehaviorVisualizer()
     console.echo(mc._controller._port)
-
-    data_logger.start()  # Has to be done before starting any data-generation processes
-    mc.start()
-    mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
-    mc.right_lick_sensor.check_state()
-    visualizer.open()  # Open the visualizer window
-    console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
-
-    # Initial valve availability
-    valve_right_active = True
-
-    prev_lick_right = mc.right_lick_sensor.lick_count
-    valve_right_deactivated_time = None  # Track when the right valve was deactivated
     try:
+        data_logger.start()  # Has to be done before starting any data-generation processes
+        mc.start()
+        mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
+        mc.right_lick_sensor.check_state()
+        visualizer.open()  # Open the visualizer window
+        console.echo("Test: started. Press 'q' to quit.", level=LogLevel.SUCCESS)
+
+        # Initial valve availability
+        valve_right_active = True
+
+        prev_lick_right = mc.right_lick_sensor.lick_count
+        valve_right_deactivated_time = None  # Track when the right valve was deactivated
+
         while True:
             visualizer.update()
             lick_right = mc.right_lick_sensor.lick_count

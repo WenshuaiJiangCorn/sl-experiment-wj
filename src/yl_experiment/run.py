@@ -23,15 +23,16 @@ def run_experiment() -> None:
     
     data_logger = DataLogger(output_directory=output_dir, instance_name="final_test")
     mc = AMCInterface(data_logger=data_logger)
-    vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
+    #vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
     visualizer = BehaviorVisualizer()
 
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
-        vs.start()
+        #vs.start()
 
         # Start the microcontroller, execute reward delivery logic
         mc.start()
+        mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
         visualizer.open()  # Open the visualizer window
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
@@ -55,13 +56,15 @@ def run_experiment() -> None:
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = False
                     valve_right_active = True
+                    visualizer.add_left_valve_event()
 
-            elif lick_right > prev_lick_right:
+            if lick_right > prev_lick_right:
                 visualizer.add_right_lick_event()
                 if valve_right_active:
                     mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = True
                     valve_right_active = False
+                    visualizer.add_right_valve_event()
 
             prev_lick_left, prev_lick_right = lick_left, lick_right
 
@@ -78,7 +81,8 @@ def run_experiment() -> None:
             timer.delay(delay=10, block=False) # 10ms delay to prevent CPU overuse
 
     finally:
-        vs.stop()
+        #vs.stop()
+        mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
         console.echo("Experiment: ended.", level=LogLevel.SUCCESS)
@@ -87,7 +91,7 @@ def run_experiment() -> None:
 
         # Combines all log entries into a single .npz log file for each source.
         assemble_log_archives(
-            log_directory=output_dir, 
+            log_directory=data_logger.output_directory, 
             remove_sources=True,
             memory_mapping=False,
             verbose=True,
@@ -104,4 +108,7 @@ def run_experiment() -> None:
         )
 
         # Extract and save video frame timestamps
-        vs.extract_video_time_stamps(output_directory=processed_dir)
+        #vs.extract_video_time_stamps(output_directory=processed_dir)
+
+if __name__ == "__main__":
+    run_experiment()

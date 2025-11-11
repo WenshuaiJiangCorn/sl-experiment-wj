@@ -195,10 +195,9 @@ class BehaviorVisualizer:
         self._figure, axes = plt.subplots(
             2,
             2,
-            figsize=(10, 8),
+            figsize=(12, 8),
             sharex=True,
             num="Runtime Behavior Visualizer",
-            # Ensures that the third subplot is thrice as tall
             gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1]},
         )
         self._left_lick_axis = axes[0, 0]
