@@ -16,7 +16,7 @@ if __name__ == "__main__":
     # Specifies the directory where to save the acquired video frames and timestamps.
     # tempdir = tempfile.TemporaryDirectory()  # Creates a temporary directory for illustration purposes
     # output_directory = Path(tempdir.name)
-    output_directory = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test\\video_test")
+    output_directory = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test").joinpath("test_output")
 
     # The DataLogger is used to save frame acquisition timestamps to disk as uncompressed .npy files.
     logger = DataLogger(output_directory=output_directory, instance_name="webcam")

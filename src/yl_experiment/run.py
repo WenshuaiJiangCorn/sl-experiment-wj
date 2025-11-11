@@ -9,7 +9,9 @@ from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
+output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test").joinpath("test_output")
+ensure_directory_exists(output_dir)
+
 _REWARD_VOLUME = np.float64(10)  # 10uL
 
 
