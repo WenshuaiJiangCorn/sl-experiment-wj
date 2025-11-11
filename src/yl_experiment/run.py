@@ -12,7 +12,7 @@ from visualizers import BehaviorVisualizer
 from binding_classes import VideoSystems
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
-_REWARD_VOLUME = np.float64(10)  # 10 microliters
+_REWARD_VOLUME = np.float64(10)  # 10uL
 
 
 def run_experiment() -> None:
