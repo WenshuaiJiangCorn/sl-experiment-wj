@@ -203,7 +203,6 @@ class ValveInterface(ModuleInterface):
 
     def process_received_data(self, message: ModuleData | ModuleState) -> None:
         """Processes incoming data sent by the module to the PC."""
-
         if message.event == _ValveStateCodes.VALVE_OPEN:
             if self._debug:
                 console.echo("Valve Opened")
@@ -455,14 +454,15 @@ class LickInterface(ModuleInterface):
 
 class AnalogInterface(ModuleInterface):
     """Interfaces with AnalogModule instances running on Ataraxis MicroControllers.
-       
+
 
     Args:
         module_id: The unique identifier for the AnalogModule instance.
 
     Attributes:
         _volt_per_adc_unit: Stores the conversion factor to translate the raw analog values recorded by the 12-bit ADC
-            into voltage in Volts."""
+            into voltage in Volts.
+    """
 
     def __init__(self, module_id: np.uint8, debug: bool = False) -> None:
         data_codes: set[np.uint8] = {np.uint8(51)}  # kNonZero
@@ -506,7 +506,6 @@ class AnalogInterface(ModuleInterface):
         # If the class is initialized in debug mode, prints each received voltage level to the terminal.
         if self._debug:
             console.echo(f"Analog ADC signal: {detected_voltage}")
-
 
 
 class AMCInterface:
@@ -562,7 +561,13 @@ class AMCInterface:
             debug=False,
         )
 
-        self.module_interfaces = (self.left_valve, self.right_valve, self.left_lick_sensor, self.right_lick_sensor, self.analog_input)
+        self.module_interfaces = (
+            self.left_valve,
+            self.right_valve,
+            self.left_lick_sensor,
+            self.right_lick_sensor,
+            self.analog_input,
+        )
 
         # Main interface:
         self._controller: MicroControllerInterface = MicroControllerInterface(
@@ -635,4 +640,3 @@ class AMCInterface:
     def controller_id(self) -> int:
         """Returns the unique identifier code of the microcontroller."""
         return int(_CONTROLLED_ID)
-

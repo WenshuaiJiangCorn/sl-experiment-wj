@@ -1,15 +1,14 @@
 """This module provides the executable script used to run test experiments with only left valve in the Yapici lab."""
+
 # WJ: Run this script to start the test
 import time
 from pathlib import Path
 import tempfile
 
 import keyboard
+from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
-
-from yl_experiment.data_processing import process_microcontroller_log
-from microcontroller import AMCInterface
 
 # Note, prevents the context manager from automatically deleting the temporary directory.
 with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
@@ -17,9 +16,9 @@ with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
 
 
 def run_test() -> None:
-    """Initializes, manages, and terminates a test runtime cycle in the Yapici lab. 
-    Valve deactivated for 5 seconds after dispensing reward."""
-
+    """Initializes, manages, and terminates a test runtime cycle in the Yapici lab.
+    Valve deactivated for 5 seconds after dispensing reward.
+    """
     data_logger = DataLogger(output_directory=output_dir, instance_name="valve_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)

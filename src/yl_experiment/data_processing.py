@@ -6,10 +6,9 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 from numpy.typing import NDArray
+from microcontroller import AMCInterface, ModuleTypeCodes
 from ataraxis_data_structures import DataLogger
 from ataraxis_communication_interface import ExtractedModuleData, extract_logged_hardware_module_data
-
-from microcontroller import AMCInterface, ModuleTypeCodes
 
 
 def _interpolate_data(
@@ -235,10 +234,9 @@ def _parse_analog_data(extracted_module_data: ExtractedModuleData, output_file: 
 
     Notes:
         This module is used to record the timestamps of continuous analog signals, so the photometry data can be time-aligned
-        and counter the internal drift of doric console timestamps. The extraction preserves the raw 12-bit ADC voltages 
+        and counter the internal drift of doric console timestamps. The extraction preserves the raw 12-bit ADC voltages
         associated with each analog signal sample.
     """
-
     log_data = extracted_module_data.event_data
 
     voltage_data = log_data[np.uint8(51)]
@@ -258,7 +256,7 @@ def _parse_analog_data(extracted_module_data: ExtractedModuleData, output_file: 
             "voltage_12_bit_adc": voltages,
         }
     )
-    
+
     module_dataframe.write_ipc(file=output_file, compression="uncompressed")
 
 
@@ -275,7 +273,6 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
         output_directory: The path to the directory where to save the extracted .feather files.
 
     """
-
     # Determines the path to the microcontroller log file.
     log_path = data_logger.output_directory.joinpath(f"{microcontroller.controller_id}_log.npz")
 
@@ -328,6 +325,3 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
         extracted_module_data=data[4],
         output_file=output_directory / "analog_signal.feather",
     )
-
-
-    

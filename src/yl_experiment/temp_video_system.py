@@ -1,14 +1,11 @@
 from pathlib import Path
-import keyboard
 
 import numpy as np
-import tempfile
+import keyboard
 from ataraxis_time import PrecisionTimer
-from ataraxis_data_structures import DataLogger, assemble_log_archives
-from ataraxis_base_utilities import console, LogLevel
-
 from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
-
+from ataraxis_base_utilities import LogLevel, console
+from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 # Since the VideoSystem and DataLogger classes use multiprocessing under-the-hood, the runtime must be protected by the
 # __main__ guard.
@@ -17,8 +14,8 @@ if __name__ == "__main__":
     console.enable()
 
     # Specifies the directory where to save the acquired video frames and timestamps.
-    #tempdir = tempfile.TemporaryDirectory()  # Creates a temporary directory for illustration purposes
-    #output_directory = Path(tempdir.name)
+    # tempdir = tempfile.TemporaryDirectory()  # Creates a temporary directory for illustration purposes
+    # output_directory = Path(tempdir.name)
     output_directory = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test\\video_test")
 
     # The DataLogger is used to save frame acquisition timestamps to disk as uncompressed .npy files.
@@ -40,7 +37,7 @@ if __name__ == "__main__":
         display_frame_rate=15,
         frame_rate=30,
         frame_width=1280,
-        frame_height=720, 
+        frame_height=720,
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
@@ -52,7 +49,7 @@ if __name__ == "__main__":
         output_directory=output_directory,
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=1,  # Uses the default system webcam
-        display_frame_rate=15, # Displays the acquired data at a rate of 15 frames per second 
+        display_frame_rate=15,  # Displays the acquired data at a rate of 15 frames per second
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
@@ -77,25 +74,25 @@ if __name__ == "__main__":
     vs1.start()
     vs2.start()
     vs3.start()
-    console.echo(f"VideoSystem: Started", level=LogLevel.SUCCESS)
+    console.echo("VideoSystem: Started", level=LogLevel.SUCCESS)
 
-    console.echo(f"Acquiring frames without saving...")
+    console.echo("Acquiring frames without saving...")
     timer = PrecisionTimer("ms")
     timer.delay(delay=5000, block=False)  # During this delay, camera frames are displayed to the user but are not saved
 
     # Begins saving frames to disk as an MP4 video file
-    console.echo(f"Saving the acquired frames to disk...")
+    console.echo("Saving the acquired frames to disk...")
     vs1.start_frame_saving()
     vs2.start_frame_saving()
     vs3.start_frame_saving()
 
-    #timer.delay(delay=5, block=False)  # Records frames for 60 seconds, generating ~1800 frames
+    # timer.delay(delay=5, block=False)  # Records frames for 60 seconds, generating ~1800 frames
     while True:
         if keyboard.is_pressed("q"):
-            console.echo(f"'q' key pressed, stopping acquisition.")
+            console.echo("'q' key pressed, stopping acquisition.")
             break
-        timer.delay(delay=50, block=False) # Checks every 20 ms whether the 'q' key has been pressed
-    
+        timer.delay(delay=50, block=False)  # Checks every 20 ms whether the 'q' key has been pressed
+
     vs1.stop_frame_saving()
     vs2.stop_frame_saving()
     vs3.stop_frame_saving()
@@ -104,27 +101,27 @@ if __name__ == "__main__":
     # video file.
 
     # Stops the VideoSystem runtime and releases all resources
-    console.echo(f"Stopping camera 1")
+    console.echo("Stopping camera 1")
     vs1.stop()
-    console.echo(f"Stopping camera 2")
+    console.echo("Stopping camera 2")
     vs2.stop()
-    console.echo(f"Stopping camera 3")
+    console.echo("Stopping camera 3")
     vs3.stop()
-    console.echo(f"VideoSystem: Stopped", level=LogLevel.SUCCESS)
+    console.echo("VideoSystem: Stopped", level=LogLevel.SUCCESS)
 
     # Stops the DataLogger and assembles all logged data into a single .npz archive file. This step is required to be
     # able to extract the timestamps for further analysis.
     logger.stop()
 
-    console.echo(f"Assembling the frame timestamp log archive...")
+    console.echo("Assembling the frame timestamp log archive...")
     assemble_log_archives(remove_sources=True, log_directory=logger.output_directory, verbose=True)
 
     # Extracts the list of frame timestamps from the assembled log archive generated above. This returns a list of
     # timestamps. Each is given in microseconds elapsed since the UTC epoch onset.
-    console.echo(f"Extracting frame acquisition timestamps from the assembled log archive...")
-    timestamps1 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath(f"101_log.npz"))
-    timestamps2 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath(f"102_log.npz"))
-    timestamps3 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath(f"103_log.npz"))
+    console.echo("Extracting frame acquisition timestamps from the assembled log archive...")
+    timestamps1 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("101_log.npz"))
+    timestamps2 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("102_log.npz"))
+    timestamps3 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("103_log.npz"))
 
     # Computes and prints the frame rate of the camera based on the extracted frame timestamp data.
     timestamp_array1 = np.array(timestamps1, dtype=np.uint64)
@@ -148,4 +145,4 @@ if __name__ == "__main__":
     )
 
     # Cleans up the temporary directory before shutting the runtime down.
-    #tempdir.cleanup()
+    # tempdir.cleanup()

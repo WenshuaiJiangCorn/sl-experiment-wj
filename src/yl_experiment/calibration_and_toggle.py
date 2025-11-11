@@ -1,13 +1,13 @@
 # Calibration script for the microcontroller
-from ataraxis_time import PrecisionTimer
 from pathlib import Path
 import tempfile
-import keyboard
+
 import numpy as np
+import keyboard
+from ataraxis_time import PrecisionTimer
+from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
-
-from microcontroller import AMCInterface
 
 
 def calibrate_valve(valve_side) -> None:
@@ -16,9 +16,9 @@ def calibrate_valve(valve_side) -> None:
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
-    if valve_side == 'left':
+    if valve_side == "left":
         valve = mc.left_valve
-    elif valve_side == 'right':
+    elif valve_side == "right":
         valve = mc.right_valve
     else:
         console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
@@ -29,7 +29,7 @@ def calibrate_valve(valve_side) -> None:
         mc.start()
         mc.connect_to_smh()
 
-        console.echo('Calibration starts')
+        console.echo("Calibration starts")
 
         valve.calibrate(_CALIBRATION_PULSE_DURATION)
 
@@ -47,9 +47,9 @@ def toggle_valve(valve_side) -> None:
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
-    if valve_side == 'left':
+    if valve_side == "left":
         valve = mc.left_valve
-    elif valve_side == 'right':
+    elif valve_side == "right":
         valve = mc.right_valve
     else:
         console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
@@ -61,7 +61,7 @@ def toggle_valve(valve_side) -> None:
         mc.connect_to_smh()
         console.echo(f"Open {valve_side} valve. Press 'q' to close.", level=LogLevel.SUCCESS)
         valve.toggle(state=True)
-        while not keyboard.is_pressed('q'):
+        while not keyboard.is_pressed("q"):
             timer.delay(3, block=True)
 
     finally:
@@ -72,15 +72,15 @@ def toggle_valve(valve_side) -> None:
         data_logger.stop()
 
 
-def deliver_test(valve_side, volume = 30) -> None:
+def deliver_test(valve_side, volume=30) -> None:
     """Delivers a specified volume (default 30uL) of fluid through the specified valve to test dispensing."""
     data_logger = DataLogger(output_directory=output_dir, instance_name="deliver_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
 
-    if valve_side == 'left':
+    if valve_side == "left":
         valve = mc.left_valve
-    elif valve_side == 'right':
+    elif valve_side == "right":
         valve = mc.right_valve
     else:
         console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
@@ -99,18 +99,17 @@ def deliver_test(valve_side, volume = 30) -> None:
 
 
 if __name__ == "__main__":
-    
     if not console.enabled:
         console.enable()
 
-    _CALIBRATION_PULSE_DURATION = np.uint32(60000) # microseconds
+    _CALIBRATION_PULSE_DURATION = np.uint32(60000)  # microseconds
     timer = PrecisionTimer("ms")
     with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
         output_dir = Path(temp_dir_path).joinpath("test_output")
 
-    #calibrate_valve(valve_side='left')
-    calibrate_valve(valve_side='right')
-    #deliver_test(valve_side='left')
-    #deliver_test(valve_side='right')
-    #toggle_valve(valve_side='right')
-    #toggle_valve(valve_side='left')
+    # calibrate_valve(valve_side='left')
+    calibrate_valve(valve_side="right")
+    # deliver_test(valve_side='left')
+    # deliver_test(valve_side='right')
+    # toggle_valve(valve_side='right')
+    # toggle_valve(valve_side='left')

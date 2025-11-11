@@ -2,14 +2,12 @@ from pathlib import Path
 
 import numpy as np
 import keyboard
+from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
-from ataraxis_data_structures import DataLogger, assemble_log_archives
-
 from data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
-from visualizers import BehaviorVisualizer
-from binding_classes import VideoSystems
+from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
+from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 _REWARD_VOLUME = np.float64(10)  # 10uL
@@ -17,18 +15,17 @@ _REWARD_VOLUME = np.float64(10)  # 10uL
 
 def run_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab."""
-
     if not console.enabled:
         console.enable()
-    
+
     data_logger = DataLogger(output_directory=output_dir, instance_name="final_test")
     mc = AMCInterface(data_logger=data_logger)
-    #vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
+    # vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
     visualizer = BehaviorVisualizer()
 
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
-        #vs.start()
+        # vs.start()
 
         # Start the microcontroller, execute reward delivery logic
         mc.start()
@@ -78,10 +75,10 @@ def run_experiment() -> None:
                 # mc.analog_input.reset_command_queue()
                 break
 
-            timer.delay(delay=10, block=False) # 10ms delay to prevent CPU overuse
+            timer.delay(delay=10, block=False)  # 10ms delay to prevent CPU overuse
 
     finally:
-        #vs.stop()
+        # vs.stop()
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
@@ -91,11 +88,11 @@ def run_experiment() -> None:
 
         # Combines all log entries into a single .npz log file for each source.
         assemble_log_archives(
-            log_directory=data_logger.output_directory, 
+            log_directory=data_logger.output_directory,
             remove_sources=True,
             memory_mapping=False,
             verbose=True,
-            verify_integrity=False
+            verify_integrity=False,
         )
 
         processed_dir = output_dir.joinpath("processed")
@@ -103,12 +100,11 @@ def run_experiment() -> None:
 
         # Extracts all logged data as module-specific .feather files. These files can be read via
         # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
-        process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=processed_dir
-        )
+        process_microcontroller_log(data_logger=data_logger, microcontroller=mc, output_directory=processed_dir)
 
         # Extract and save video frame timestamps
-        #vs.extract_video_time_stamps(output_directory=processed_dir)
+        # vs.extract_video_time_stamps(output_directory=processed_dir)
+
 
 if __name__ == "__main__":
     run_experiment()

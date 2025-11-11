@@ -2,19 +2,17 @@
 real-time feedback on the animal's task performance and task parameters.
 
 Modified from the original Ataraxis Visualizer class to suit the needs of the Yapici lab. Bscially, the class is
-stripped down to only visualize the lick sensor and valve states, and runs on Windows OS. (WJ)"""
+stripped down to only visualize the lick sensor and valve states, and runs on Windows OS. (WJ)
+"""
 
 import numpy as np
-import matplotlib
 from numpy.typing import NDArray
-
 from ataraxis_time import PrecisionTimer
 from matplotlib.axes import Axes
-from matplotlib.text import Text
 from matplotlib.lines import Line2D
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator, FixedLocator, FixedFormatter
+from matplotlib.ticker import FixedLocator, FixedFormatter
 from ataraxis_base_utilities import console
 
 # Updates plotting dictionaries to preferentially use Arial text style and specific sizes for different text elements
@@ -58,7 +56,6 @@ def _plt_palette(color: str) -> tuple[float, float, float]:
     Raises:
         KeyError: If the provided color is not recognized.
     """
-
     try:
         return _palette_dict[color]
     except KeyError:
@@ -84,7 +81,6 @@ def _plt_line_styles(line_style: str) -> str:
     Raises:
         KeyError: If the provided line style is not recognized.
     """
-
     try:
         return str(_line_style_dict[line_style])
     except KeyError:
@@ -251,7 +247,9 @@ class BehaviorVisualizer:
         plt.setp(self._right_lick_axis.get_xticklabels(), visible=False)
 
         # Aligns all y-labels
-        self._figure.align_ylabels([self._left_lick_axis, self._left_valve_axis, self._right_lick_axis, self._right_valve_axis])
+        self._figure.align_ylabels(
+            [self._left_lick_axis, self._left_valve_axis, self._right_lick_axis, self._right_valve_axis]
+        )
 
         # Creates the plot artists
         # Lick plot
@@ -344,7 +342,6 @@ class BehaviorVisualizer:
 
     def close(self) -> None:
         """Closes the visualized figure and cleans up the resources used by the class during runtime."""
-
         if self._is_open and self._figure is not None:
             plt.close(self._figure)
             self._is_open = False
@@ -353,7 +350,6 @@ class BehaviorVisualizer:
         """Updates the visualization arrays with data sent from the central runtime class before re-rendering the
         managed plots.
         """
-
         # Rolls arrays by one position to the left, so the first element becomes the last
         self._left_valve_data = np.roll(self._left_valve_data, shift=-1)
         self._left_lick_data = np.roll(self._left_lick_data, shift=-1)

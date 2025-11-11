@@ -3,20 +3,18 @@
 # WJ: Run this script to start the test
 import time
 from pathlib import Path
-import tempfile
 
 import numpy as np
 import keyboard
+from visualizers import BehaviorVisualizer
+from data_processing import process_microcontroller_log
+from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-from data_processing import process_microcontroller_log
-from microcontroller import AMCInterface
-from visualizers import BehaviorVisualizer
-
 # Note, prevents the context manager from automatically deleting the temporary directory.
-#with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
-    #output_dir = Path(temp_dir_path).joinpath("test_output")
+# with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
+# output_dir = Path(temp_dir_path).joinpath("test_output")
 
 output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
 
@@ -24,12 +22,12 @@ _REWARD_VOLUME = np.float64(10)  # 5 microliters
 
 
 def run_test() -> None:
-    """Initializes, manages, and terminates a test runtime cycle in the Yapici lab. 
-    Valve deactivated for 5 seconds after dispensing reward."""
-
+    """Initializes, manages, and terminates a test runtime cycle in the Yapici lab.
+    Valve deactivated for 5 seconds after dispensing reward.
+    """
     if not console.enabled:
         console.enable()
-        
+
     data_logger = DataLogger(output_directory=output_dir, instance_name="valve_lick_test")
     mc = AMCInterface(data_logger=data_logger)
     visualizer = BehaviorVisualizer()
@@ -48,7 +46,7 @@ def run_test() -> None:
 
         prev_lick_left = mc.left_lick_sensor.lick_count
         valve_left_deactivated_time = None  # Track when the left valve was deactivated
-        
+
         while True:
             visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
@@ -57,7 +55,6 @@ def run_test() -> None:
                 visualizer.add_left_lick_event()
 
                 if valve_left_active:
-
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                     valve_left_active = False
                     visualizer.add_left_valve_event()
@@ -95,7 +92,7 @@ def run_test() -> None:
             remove_sources=True,
             memory_mapping=False,
             verbose=True,
-            verify_integrity=False
+            verify_integrity=False,
         )
 
         processed_dir = output_dir.joinpath("processed")
@@ -103,9 +100,7 @@ def run_test() -> None:
 
         # Extracts all logged data as module-specific .feather files. These files can be read via
         # Polars' 'read_ipc' function. Use memory-mapping mode for efficiency.
-        process_microcontroller_log(
-            data_logger=data_logger, microcontroller=mc, output_directory=processed_dir
-        )
+        process_microcontroller_log(data_logger=data_logger, microcontroller=mc, output_directory=processed_dir)
 
 
 # Run test
