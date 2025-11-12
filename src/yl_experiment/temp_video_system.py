@@ -3,9 +3,15 @@ from pathlib import Path
 import numpy as np
 import keyboard
 from ataraxis_time import PrecisionTimer
-from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, assemble_log_archives
+
+from ataraxis_video_system import (VideoSystem, 
+                                   VideoEncoders, 
+                                   CameraInterfaces, 
+                                   EncoderSpeedPresets, 
+                                   extract_logged_camera_timestamps)
+
 
 # Since the VideoSystem and DataLogger classes use multiprocessing under-the-hood, the runtime must be protected by the
 # __main__ guard.
@@ -40,6 +46,7 @@ if __name__ == "__main__":
         frame_height=360,
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+        encoder_speed_preset=EncoderSpeedPresets.FAST,
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
     )
 
@@ -52,8 +59,10 @@ if __name__ == "__main__":
         display_frame_rate=15,
         frame_width=1280,
         frame_height=720,  # Displays the acquired data at a rate of 15 frames per second
+        frame_rate=30,
         color=False,  # Acquires images in MONOCHROME mode
-        video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+        video_encoder=VideoEncoders.H264,
+        encoder_speed_preset=EncoderSpeedPresets.MEDIUM,  # Uses H264 CPU video encoder.
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
     )
 
@@ -66,8 +75,10 @@ if __name__ == "__main__":
         display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
         frame_width=640,
         frame_height=360,
+        frame_rate=30,
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+        encoder_speed_preset=EncoderSpeedPresets.FAST,
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
     )
 

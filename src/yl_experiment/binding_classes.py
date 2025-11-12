@@ -2,13 +2,19 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-from ataraxis_video_system import VideoSystem, VideoEncoders, CameraInterfaces, extract_logged_camera_timestamps
+
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
 
+from ataraxis_video_system import (VideoSystem, 
+                                   VideoEncoders, 
+                                   CameraInterfaces, 
+                                   EncoderSpeedPresets, 
+                                   extract_logged_camera_timestamps)
+
 
 class VideoSystems:
-    """Container class for managing multiple VideoSystem instances.
+    """Container class for managing 3 VideoSystem instances.
     Arags:
         data_logger (DataLogger): DataLogger instance for logging video timestamps.
         output_directory (Path): Directory where video frames and logs will be saved.
@@ -18,32 +24,34 @@ class VideoSystems:
         self._cameras_started = False
         self._data_logger = data_logger
 
-        self._top_camera = VideoSystem(
+        self._left_camera = VideoSystem(
             system_id=np.uint8(101),
             data_logger=data_logger,
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=0,  # Uses the default system webcam
+            display_frame_rate=15,  # Displays the acquired data at a rate of 15 frames per second
+            frame_width=640,
+            frame_height=360,
+            color=False,  # Acquires images in MONOCHROME mode
+            video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+            encoder_speed_preset=EncoderSpeedPresets.FAST,
+            quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
+        )
+
+        self._top_camera = VideoSystem(
+            system_id=np.uint8(102),
+            data_logger=data_logger,
+            output_directory=output_directory,
+            camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
+            camera_index=1,  # Uses the default system webcam
             display_frame_rate=15,
             frame_width=1280,
             frame_height=720,
             frame_rate=30,  # Uses 30 FPS for acquisition
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
-        )
-
-        self._left_camera = VideoSystem(
-            system_id=np.uint8(102),
-            data_logger=data_logger,
-            output_directory=output_directory,
-            camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
-            camera_index=1,  # Uses the default system webcam
-            display_frame_rate=15,  # Displays the acquired data at a rate of 15 frames per second
-            frame_width=800,
-            frame_height=600,
-            color=False,  # Acquires images in MONOCHROME mode
-            video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+            encoder_speed_preset=EncoderSpeedPresets.MEDIUM,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -54,10 +62,11 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=2,  # Uses the default system webcam
             display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
-            frame_width=800,
-            frame_height=600,
+            frame_width=640,
+            frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+            encoder_speed_preset=EncoderSpeedPresets.FAST,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -126,12 +135,12 @@ class VideoSystems:
         """
         console.echo("Extracting frame acquisition timestamps from the assembled log archive...")
         fps_top = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("101_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
             output_file=output_directory / "top_camera_timestamps.feather",
         )
 
         fps_left = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("101_log.npz"),
             output_file=output_directory / "left_camera_timestamps.feather",
         )
 
@@ -142,10 +151,10 @@ class VideoSystems:
 
         console.echo(
             message=(
-                f"According to the extracted timestamps, the interfaced cameras had acquisition frame rates of: "
-                f"Top camera {fps_top:.2f} frames / second"
-                f"Left camera {fps_left:.2f} frames / second"
-                f"Right camera {fps_right:.2f} frames / second"
+                f"According to the extracted timestamps, the interfaced cameras had acquisition frame rates of:\n "
+                f"Top camera has {fps_top:.2f} frames / second\n"
+                f"Left camera has {fps_left:.2f} frames / second\n"
+                f"Right camera has {fps_right:.2f} frames / second\n"
                 f"Time stamps saved."
             ),
             level=LogLevel.SUCCESS,
