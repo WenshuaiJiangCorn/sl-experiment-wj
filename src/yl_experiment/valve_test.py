@@ -1,6 +1,7 @@
 """This module provides the executable script used to run test experiments with only left valve in the Yapici lab."""
 
 # WJ: Run this script to start the test
+import numpy as np
 import time
 from pathlib import Path
 import tempfile
@@ -33,7 +34,7 @@ def run_test() -> None:
             elapsed_time = time.time() - start_time
 
             if elapsed_time % 5 < 0.01:
-                mc.left_valve.dispense_volume(volume=5)
+                mc.left_valve.dispense_volume(volume=np.float64(5))
 
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the test loop due to the 'q' key press.")

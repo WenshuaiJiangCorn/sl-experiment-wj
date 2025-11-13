@@ -20,6 +20,7 @@ def calibrate_valve(valve_side) -> None:
         valve = mc.left_valve
     elif valve_side == "right":
         valve = mc.right_valve
+    
     else:
         console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
         return
@@ -41,8 +42,8 @@ def calibrate_valve(valve_side) -> None:
         data_logger.stop()
 
 
-def toggle_valve(valve_side) -> None:
-    """Toggles the valve state for a specified duration."""
+def toggle_valve(valve_side, duration = 1) -> None:
+    """Opens the valve state for a specified duration. Default is 1 second"""
     data_logger = DataLogger(output_directory=output_dir, instance_name="toggle_test")
     mc = AMCInterface(data_logger=data_logger)
     console.echo(mc._controller._port)
@@ -56,13 +57,13 @@ def toggle_valve(valve_side) -> None:
         return
 
     try:
+        timer = PrecisionTimer("s")
         data_logger.start()
         mc.start()
         mc.connect_to_smh()
         console.echo(f"Open {valve_side} valve. Press 'q' to close.", level=LogLevel.SUCCESS)
         valve.toggle(state=True)
-        while not keyboard.is_pressed("q"):
-            timer.delay(3, block=True)
+        timer.delay(duration, block=True)
 
     finally:
         valve.toggle(state=False)
@@ -72,7 +73,7 @@ def toggle_valve(valve_side) -> None:
         data_logger.stop()
 
 
-def deliver_test(valve_side, volume=30) -> None:
+def deliver_test(valve_side, volume=np.float64(30)) -> None:
     """Delivers a specified volume (default 30uL) of fluid through the specified valve to test dispensing."""
     data_logger = DataLogger(output_directory=output_dir, instance_name="deliver_test")
     mc = AMCInterface(data_logger=data_logger)
@@ -102,13 +103,12 @@ if __name__ == "__main__":
     if not console.enabled:
         console.enable()
 
-    _CALIBRATION_PULSE_DURATION = np.uint32(60000)  # microseconds
-    timer = PrecisionTimer("ms")
+    _CALIBRATION_PULSE_DURATION = np.uint32(15000)  # microseconds
     with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
         output_dir = Path(temp_dir_path).joinpath("test_output")
 
-    # calibrate_valve(valve_side='left')
-    calibrate_valve(valve_side="right")
+    calibrate_valve(valve_side='left')
+    #calibrate_valve(valve_side="right")
     # deliver_test(valve_side='left')
     # deliver_test(valve_side='right')
     # toggle_valve(valve_side='right')
