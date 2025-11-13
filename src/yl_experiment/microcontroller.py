@@ -39,7 +39,7 @@ _VALVE_CALIBRAZTION_COUNT = np.uint16(200)  # The of calibration pulses to use a
 
 # Maps right valve pulse durations in microseconds to the corresponding dispensed volume of fluid in microliters.
 _RIGHT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.35),  # 15 ms dispenses 1.10 uL of fluid.
+    (15000, 1.20),  # 15 ms dispenses 1.20 uL of fluid.
     (30000, 3.90),
     (45000, 7.55),
     (60000, 11.50),
@@ -47,7 +47,7 @@ _RIGHT_VALVE_CALIBRATION_DATA = (
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.20),
+    (15000, 1.10),
     (30000, 3.70),
     (45000, 7.30),
     (60000, 11.15),
