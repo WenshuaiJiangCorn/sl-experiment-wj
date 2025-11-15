@@ -34,7 +34,7 @@ def run_test() -> None:
             elapsed_time = time.time() - start_time
 
             if elapsed_time % 5 < 0.01:
-                mc.left_valve.dispense_volume(volume=np.float64(5))
+                mc.right_valve.dispense_volume(volume=np.float64(5))
 
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the test loop due to the 'q' key press.")
@@ -43,7 +43,7 @@ def run_test() -> None:
             time.sleep(0.01)
 
     finally:
-        mc.left_valve.toggle(state=False)
+        mc.right_valve.toggle(state=False)
         mc.stop()
         console.echo("Test: ended.", level=LogLevel.SUCCESS)
 

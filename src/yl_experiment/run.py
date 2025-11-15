@@ -68,17 +68,26 @@ def run_experiment() -> None:
 
             prev_lick_left, prev_lick_right = lick_left, lick_right
 
-            timer = PrecisionTimer("ms")
+            if keyboard.is_pressed("l"):
+                console.echo("Left side: Water delivered manually")
+                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                visualizer.add_left_valve_event()
+
+            if keyboard.is_pressed("r"):
+                console.echo("Right side: Water delivered manually")
+                mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                visualizer.add_right_valve_event()
+            
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the experiment loop due to the 'q' key press.")
 
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                #mc.analog_input.reset_command_queue()
                 break
 
-            timer.delay(delay=10, block=False)  # 10ms delay to prevent CPU overuse
+            timer = PrecisionTimer("ms")
+            timer.delay(delay=20, block=False)  # 10ms delay to prevent CPU overuse
 
     finally:
         vs.stop()

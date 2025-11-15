@@ -107,9 +107,9 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
         output_dir = Path(temp_dir_path).joinpath("test_output")
 
-    calibrate_valve(valve_side='left')
+    #calibrate_valve(valve_side='left')
     #calibrate_valve(valve_side="right")
     # deliver_test(valve_side='left')
     # deliver_test(valve_side='right')
-    # toggle_valve(valve_side='right')
-    # toggle_valve(valve_side='left')
+    #toggle_valve(valve_side='right')
+    toggle_valve(valve_side='left')
