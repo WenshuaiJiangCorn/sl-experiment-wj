@@ -18,10 +18,10 @@ from ataraxis_base_utilities import console
 # Updates plotting dictionaries to preferentially use Arial text style and specific sizes for different text elements
 # in plots:
 # General parameters and the font size for axes' tick numbers
-plt.rcParams.update({"font.family": "Arial", "font.weight": "normal", "xtick.labelsize": 16, "ytick.labelsize": 16})
-_fontdict_axis_label = {"family": "Arial", "weight": "normal", "size": 18}  # Axis label fonts
-_fontdict_title = {"family": "Arial", "weight": "normal", "size": 20}  # Title fonts
-_fontdict_legend = {"family": "Arial", "weight": "normal", "size": 14}  # Legend fonts
+plt.rcParams.update({"font.family": "Arial", "font.weight": "normal", "xtick.labelsize": 12, "ytick.labelsize": 12})
+_fontdict_axis_label = {"family": "Arial", "weight": "normal", "size": 12}  # Axis label fonts
+_fontdict_title = {"family": "Arial", "weight": "normal", "size": 14}  # Title fonts
+_fontdict_legend = {"family": "Arial", "weight": "normal", "size": 10}  # Legend fonts
 
 # Initializes dictionaries to map colloquial names to specific linestyle and color parameters
 _line_style_dict = {"solid": "-", "dashed": "--", "dotdashed": "_.", "dotted": ":"}

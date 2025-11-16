@@ -16,7 +16,7 @@ from ataraxis_data_structures import DataLogger, assemble_log_archives
 # with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
 # output_dir = Path(temp_dir_path).joinpath("test_output")
 
-output_dir = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test").joinpath("test_output")
+output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test").joinpath("test_output")
 
 _REWARD_VOLUME = np.float64(10)  # 5 microliters
 
