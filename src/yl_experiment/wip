@@ -1,7 +1,23 @@
 from pathlib import Path
 import polars as pl
 
-target = Path("C:\\Users\\wj76\\Desktop\\projects\\lickometer_test\\test_output\\processed\\right_lick_sensor.feather")
+target = Path(r"C:\Users\Changwoo\Dropbox\Research_projects\dopamine\mazes\linear_track\lickometer_test\test_output\processed\analog_signal.feather")
+t = Path(r"C:\Users\Changwoo\Desktop\time_0000.csv")
+v = Path(r"C:\Users\Changwoo\Desktop\value.csv")
+
+df_t = pl.read_csv(t)
+df_v = pl.read_csv(v)
+
+dt = (df_t.row(-1)[0] - df_t.row(1)[0])
+num_samples = df_v.shape[0]
+fps0 = num_samples / dt
+
+print(f"Doric Duration: {dt:.2f} seconds, Number of samples: {num_samples}, Frame rate: {fps0:.2f} Hz")
+
 data = pl.read_ipc(target)
-print(data[-10:])
-print(data.shape)
+start, end = data[0,0], data[-1,0]
+
+duration = (end - start) * 1e-6  # in seconds
+num_samples = data.shape[0]
+fps = num_samples / duration
+print(f"AtxAnalog Duration: {duration:.2f} seconds, Number of samples: {num_samples}, Frame rate: {fps:.2f} Hz")

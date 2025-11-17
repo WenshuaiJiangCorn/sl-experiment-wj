@@ -36,6 +36,7 @@ def run_experiment() -> None:
         visualizer.open()  # Open the visualizer window
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
+        mc.analog_input.check_state()
         console.echo("Experiment: started. Press 'q' to stop.", level=LogLevel.SUCCESS)
 
         # Initial valve availability

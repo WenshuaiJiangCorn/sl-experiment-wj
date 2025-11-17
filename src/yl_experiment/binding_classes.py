@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import tempfile
 
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
@@ -159,3 +160,17 @@ class VideoSystems:
             ),
             level=LogLevel.SUCCESS,
         )
+
+
+class LinearTrackExperimentBindings:
+    """Binding class for managing the linear track experiment in the Yapici lab.
+    Arags:
+        data_logger (DataLogger): DataLogger instance for logging experiment data.
+        output_directory (Path): Directory where experiment data and logs will be saved.
+    """
+
+    def __init__(self, data_logger: DataLogger | None = None):
+        if data_logger is None:
+            with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
+                output_dir = Path(temp_dir_path).joinpath("test_output")
+            data_logger = DataLogger(output_directory=output_dir, instance_name="temp_logger")

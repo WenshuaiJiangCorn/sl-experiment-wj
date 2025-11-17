@@ -55,25 +55,46 @@ _LEFT_VALVE_CALIBRATION_DATA = (
 
 # Lick module calibration parameters
 # In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
-_LICK_SIGNAL_THRESHOLD = np.uint16(500)
+# Initial value: 500
+_LICK_SIGNAL_THRESHOLD = np.uint16(200)
 
 # In 12-bit ADC units. The level for classifying a sensor activation event as a lick. Any sensor-reported value above
 # this threshold is considered a lick
-_LICK_DETECTION_THRESHOLD = np.uint16(1000)
+# Initial value: 1000
+_LICK_DETECTION_THRESHOLD = np.uint16(800)
 
 # In 12-bit ADC units. The minimum difference between two consecutive sensor readouts for the new readout to be
 # reported to the PC. This ensures that the PC is only informed about significant voltage changes that usually
 # correspond to major event transitions (no touch / touch / lick).
-_LICK_DELTA_THRESHOLD = np.uint16(180)
+# Initial value: 180
+_LICK_DELTA_THRESHOLD = np.uint16(150)
 
 # The number of analog pin readouts to average into the final sensor value. Larger values produce smoother data, but
 # introduce detection latency. On Teensy controllers, the val=ue listed here is multiplied by 4 (e.g. averaging pool of
 # 4 actually means 4 * 4 = 16 readouts).
+# Initial value: 2
 _LICK_AVERAGING_POOL = np.uint8(2)
 
 # The number of microseconds to delay between polling (checking) the lick sensor. A value of 1000 means 1 ms, which
 # gives a polling rate of ~1000 HZ.
+# Initial value: 1000
 _LICK_POLLING_DELAY = np.uint32(1000)
+
+# Analog module calibration parameters, imitates the lick module parameters
+# In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
+# It is set really low to capture all analog signals.
+_ANALOG_SIGNAL_THRESHOLD = np.uint16(30)
+
+# The number of analog pin readouts to average into the final input value. Larger values produce smoother data, but
+# introduce detection latency. On Teensy controllers, the value listed here is multiplied by 4 (e.g. averaging pool of
+# 4 actually means 4 * 4 = 16 readouts).
+_ANALOG_AVERAGING_POOL = np.uint8(2)
+
+# The number of microseconds to delay between polling (checking) the analog input. A value of 1000 means 1 ms, which
+# gives a polling rate of ~1000 HZ.
+# The doric system gives 60Hz sampling rate, so this should roughly match it to reduce file size, 
+# here we set it to 100Hz 
+_ANALOG_POLLING_DELAY = np.uint32(10000)
 
 
 class ModuleTypeCodes(IntEnum):
@@ -485,6 +506,8 @@ class AnalogInterface(ModuleInterface):
             exists_ok=True,
         )
 
+        self._once: bool = True
+
     def __del__(self) -> None:
         """Ensures the lick_tracker is properly cleaned up when the class is garbage-collected."""
         self._analog_tracker.disconnect()
@@ -506,6 +529,19 @@ class AnalogInterface(ModuleInterface):
         # If the class is initialized in debug mode, prints each received voltage level to the terminal.
         if self._debug:
             console.echo(f"Analog ADC signal: {detected_voltage}")
+
+    def check_state(self, repetition_delay: np.uint32 = _ANALOG_POLLING_DELAY) -> None:
+        """Checks and reports the voltage level detected by the photometry analog input to the PC.
+
+        Args:
+            repetition_delay: The time, in microseconds, to delay before repeating the command. When set to 0, the
+                command only runs once.
+        """
+        # Applies sensor configuration parameters the first time the method is called
+        if self._once:
+            self.send_parameters(parameter_data=(_ANALOG_SIGNAL_THRESHOLD, _ANALOG_AVERAGING_POOL))
+            self._once = False
+        self.send_command(command=np.uint8(1), noblock=_BOOL_FALSE, repetition_delay=repetition_delay)
 
 
 class AMCInterface:
