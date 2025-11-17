@@ -1,5 +1,6 @@
 import time
 import subprocess
+from datetime import datetime
 
 _CONTROLLER_PORT = "COM4"  # Update this to your controller's port
 
@@ -30,3 +31,4 @@ def complete_reset():
 # Run this first, then run your test in a fresh Python session
 if __name__ == "__main__":
     complete_reset()
+

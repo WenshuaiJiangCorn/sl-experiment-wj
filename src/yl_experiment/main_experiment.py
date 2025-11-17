@@ -2,15 +2,25 @@ from pathlib import Path
 
 import numpy as np
 import keyboard
+from datetime import datetime
+
 from binding_classes import VideoSystems
 from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
 from data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
+
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test").joinpath("test_output")
+
+mouse = input("Input experiment mouse ID. (e.g., DATM1)")
+exp_day = input("Input experiment day (e.g., day_1): ")
+
+date = datetime.now().strftime("%Y%m%d")
+exp_day = f"{exp_day}_{date}"
+
+output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward") / exp_day / mouse
 ensure_directory_exists(output_dir)
 
 _REWARD_VOLUME = np.float64(10)  # 10uL
@@ -21,7 +31,7 @@ def run_experiment() -> None:
     if not console.enabled:
         console.enable()
 
-    data_logger = DataLogger(output_directory=output_dir, instance_name="final_test")
+    data_logger = DataLogger(output_directory=output_dir, instance_name="linear_track")
     mc = AMCInterface(data_logger=data_logger)
     vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
     visualizer = BehaviorVisualizer()
@@ -34,9 +44,11 @@ def run_experiment() -> None:
         mc.start()
         mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
         visualizer.open()  # Open the visualizer window
+
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
         mc.analog_input.check_state()
+
         console.echo("Experiment: started. Press 'q' to stop.", level=LogLevel.SUCCESS)
 
         # Initial valve availability
@@ -68,16 +80,6 @@ def run_experiment() -> None:
                     visualizer.add_right_valve_event()
 
             prev_lick_left, prev_lick_right = lick_left, lick_right
-
-            if keyboard.is_pressed("l"):
-                console.echo("Left side: Water delivered manually")
-                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
-                visualizer.add_left_valve_event()
-
-            if keyboard.is_pressed("r"):
-                console.echo("Right side: Water delivered manually")
-                mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
-                visualizer.add_right_valve_event()
             
             if keyboard.is_pressed("q"):
                 console.echo("Breaking the experiment loop due to the 'q' key press.")
@@ -85,6 +87,7 @@ def run_experiment() -> None:
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
+                mc.analog_input.reset_command_queue()
                 break
 
             timer = PrecisionTimer("ms")

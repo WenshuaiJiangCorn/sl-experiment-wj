@@ -1,11 +1,16 @@
 from pathlib import Path
 
 import numpy as np
+import keyboard
 import polars as pl
 import tempfile
 
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
+from ataraxis_time import PrecisionTimer
+
+from microcontroller import AMCInterface
+from visualizers import BehaviorVisualizer
 
 from ataraxis_video_system import (VideoSystem, 
                                    VideoEncoders, 
@@ -162,15 +167,180 @@ class VideoSystems:
         )
 
 
-class LinearTrackExperimentBindings:
-    """Binding class for managing the linear track experiment in the Yapici lab.
-    Arags:
-        data_logger (DataLogger): DataLogger instance for logging experiment data.
-        output_directory (Path): Directory where experiment data and logs will be saved.
+class LinearTrackFunctions:
+    """Manages toggle, calibration and training logic of YLab linear track experiments.
+
+        Arags:
+            data_logger (DataLogger): DataLogger instance for logging experiment data.
     """
 
     def __init__(self, data_logger: DataLogger | None = None):
+        if not console.enabled:
+            console.enable()
+
         if data_logger is None:
             with tempfile.TemporaryDirectory(delete=False) as temp_dir_path:
                 output_dir = Path(temp_dir_path).joinpath("test_output")
-            data_logger = DataLogger(output_directory=output_dir, instance_name="temp_logger")
+            self.data_logger = DataLogger(output_directory=output_dir, instance_name="temp_logger")
+        else:
+            self.data_logger = data_logger
+
+        self.mc = AMCInterface(data_logger=self.data_logger)
+        self.vs = VideoSystems(data_logger=self.data_logger, output_directory=self.data_logger.output_directory)
+        self.visualizer = BehaviorVisualizer()
+
+        console.echo(self.mc._controller._port)
+        
+        
+    def _check_side(self, valve_side: str):
+        """Check and return the valve object based on the specified side.
+
+        Args:
+            valve_side (str): The side of the valve ("left" or "right").
+            
+        Returns:
+            Valve object corresponding to the specified side.
+        """
+
+        if valve_side == "left":
+            return self.mc.left_valve
+        elif valve_side == "right":
+            return self.mc.right_valve
+        else:
+            console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
+            raise ValueError("Invalid valve side specified.")
+
+
+    def _start(self):
+        """Starts the microcontroller and connects to SharedMemoryArray. Must be called before any operation."""
+        self.data_logger.start()
+        self.mc.start()
+        self.mc.connect_to_smh()
+
+
+    def _stop(self):
+        """Stops the microcontroller and disconnects from SharedMemoryArray. Must be called after any operation."""
+        self.mc.disconnect_to_smh()
+        self.mc.stop()
+        self.data_logger.stop()
+
+
+    def open_valve(self, valve_side: str, duration: int = 1) -> None:
+        """Open a specific valve for a specific duration.
+
+        Args:
+            valve_side (str): The side of the valve to toggle ("left" or "right").
+            duration (int): The desired state of the valve (True for open, False for closed).
+        """
+        valve = self._check_side(valve_side)
+
+        try:
+            self._start()
+
+            timer = PrecisionTimer("s")
+            console.echo(f"Open {valve_side} valve for {duration} seconds.", level=LogLevel.SUCCESS)
+            valve.toggle(state=True)
+            timer.delay(duration, block=True)
+
+        finally:
+            valve.toggle(state=False)
+            self._stop()
+            console.echo("Valve: closed.", level=LogLevel.SUCCESS)
+
+
+    def calibrate_valve(self, valve_side, calibration_pulse_duration) -> None:
+        """Calibrates the valve by sending a pulse of specified duration."""
+
+        valve = self._check_side(valve_side)
+
+        try:
+            self._start()
+
+            console.echo("Calibration starts")
+            valve.calibrate(calibration_pulse_duration)
+
+        finally:
+            valve.toggle(state=False)
+            self._stop()
+            console.echo("Calibration: ended.", level=LogLevel.SUCCESS)
+
+
+    def delivery_test(self, valve_side, volume=np.float64(30)) -> None:
+        """Delivers a specified volume (default 30uL) of fluid through the specified valve to test dispensing."""
+
+        valve = self._check_side(valve_side)
+
+        try:
+            self._start()
+            valve.dispense_volume(volume=volume)
+
+        finally:
+            self._stop()
+            console.echo("Delivery test: ended.", level=LogLevel.SUCCESS)
+
+    
+    def first_day_training(self) -> None:
+        """Executes the first day training protocol for the linear track experiment.
+           Only use right valve and camera, deliver water manually by pressing "r" key.
+        """
+
+        try:
+            self._start()
+            self.vs._right_camera.start() # Start only the right camera
+            self.visualizer.open()  # Open the visualizer window
+            console.echo("First day training started, press 'r' to deliver water, press 'q' to quit.")
+
+            delivery_num = 0
+            while not keyboard.is_pressed("q"):
+                self.visualizer.update()
+
+                if keyboard.is_pressed("r"):
+                    # Deliver 10uL per manual trigger. It is not accurate since 
+                    # calibration data is not from testing chamber, the command of delivering
+                    # 15uL water actually delivers 10uL. 
+                    self.mc.right_valve.dispense_volume(volume=np.float64(15)) 
+                    delivery_num += 1
+                    self.visualizer.add_right_valve_event()
+
+                    console.echo(f"Water delivered manually, total deliveries: {delivery_num}")
+
+                timer = PrecisionTimer("ms")
+                timer.delay(delay=10, block=False)  # 10ms delay to prevent CPU overuse
+        
+        finally:
+            total_volume = self.mc.dispensed_volume() * 2/3 # Convert to actual delivered volume in uL
+            self.vs._right_camera.stop() # Stop only the right camera
+            self.visualizer.close()
+            self._stop()
+            console.echo(f"First day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+            
+            
+    def second_day_training(self) -> None:
+        """Executes the second day training protocol for the linear track experiment.
+           Deliver water every minute for 30 minutes.
+        """
+
+        try:
+            self._start()
+            self.vs._right_camera.start()  # Start right camera
+            console.echo("Second day training started")
+
+            cycle_num = 0
+            timer = PrecisionTimer("s")
+
+            while cycle_num < 30:
+                # Deliver 10uL per manual trigger. It is not accurate since 
+                # calibration data is not from testing chamber, the command of delivering
+                # 15uL water actually delivers 10uL. 
+                self.mc.right_valve.dispense_volume(volume=np.float64(15))
+                console.echo(f"Cycle {cycle_num + 1}: Delivered water through the right valve.")
+
+                timer.delay(delay=45, block=False)  # 45s delay
+                cycle_num += 1
+
+        finally:
+            total_volume = self.mc.dispensed_volume() * 2/3 # Convert to actual delivered volume in uL
+            self.vs._right_camera.stop()  # Stop right camera
+            self.visualizer.close()
+            self._stop()
+            console.echo(f"Second day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
