@@ -82,8 +82,8 @@ _LICK_POLLING_DELAY = np.uint32(1000)
 
 # Analog module calibration parameters, imitates the lick module parameters
 # In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
-# It is set really low to capture all analog signals.
-_ANALOG_SIGNAL_THRESHOLD = np.uint16(30)
+# Here it is set really low to capture all analog signals, since the noise of photometry signals is low.
+_ANALOG_SIGNAL_THRESHOLD = np.uint16(20)
 
 # The number of analog pin readouts to average into the final input value. Larger values produce smoother data, but
 # introduce detection latency. On Teensy controllers, the value listed here is multiplied by 4 (e.g. averaging pool of
@@ -93,7 +93,7 @@ _ANALOG_AVERAGING_POOL = np.uint8(2)
 # The number of microseconds to delay between polling (checking) the analog input. A value of 1000 means 1 ms, which
 # gives a polling rate of ~1000 HZ.
 # The doric system gives 60Hz sampling rate, so this should roughly match it to reduce file size, 
-# here we set it to 100Hz 
+# here we set it to 100Hz sampling rate.
 _ANALOG_POLLING_DELAY = np.uint32(10000)
 
 
@@ -671,6 +671,20 @@ class AMCInterface:
         """Disconnects from SharedMemoryArray for all modules. This function needs to be called before stop()."""
         for module in self.module_interfaces:
             module.terminate_remote_assets()
+
+    def dispensed_volume(self) -> np.float64:
+        """Returns the total volume of fluid, in microliters, delivered by the two valves during the current
+        runtime.
+
+        Returns:
+            The total volume of fluid, in microliters, delivered by the specified valve during the current runtime.
+        """
+        
+        left_volume = self.left_valve.dispensed_volume
+        right_volume = self.right_valve.dispensed_volume
+        total_volume = left_volume + right_volume
+
+        return total_volume
 
     @property
     def controller_id(self) -> int:

@@ -92,6 +92,7 @@ def run_experiment() -> None:
 
     finally:
         vs.stop()
+        total_volume = mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
@@ -118,6 +119,8 @@ def run_experiment() -> None:
         # Extract and save video frame timestamps
         vs.extract_video_time_stamps(output_directory=processed_dir)
 
+        # Summarize total dispensed volume
+        console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
 if __name__ == "__main__":
     run_experiment()

@@ -36,7 +36,7 @@ class VideoSystems:
             frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.FAST,
+            encoder_speed_preset=EncoderSpeedPresets.FASTER,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -52,7 +52,7 @@ class VideoSystems:
             frame_rate=30,  # Uses 30 FPS for acquisition
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.MEDIUM,
+            encoder_speed_preset=EncoderSpeedPresets.SLOW,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -67,7 +67,7 @@ class VideoSystems:
             frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.FAST,
+            encoder_speed_preset=EncoderSpeedPresets.FASTER,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
