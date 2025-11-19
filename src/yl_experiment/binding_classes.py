@@ -265,14 +265,21 @@ class LinearTrackFunctions:
             console.echo("Calibration: ended.", level=LogLevel.SUCCESS)
 
 
-    def delivery_test(self, valve_side, volume=np.float64(30)) -> None:
-        """Delivers a specified volume (default 30uL) of fluid through the specified valve to test dispensing."""
+    def delivery_test(self, valve_side) -> None:
+        """Delivers a specified volume (default 15uL) of fluid 40 times (same amount as second day testing) 
+           through the specified valve to test dispensing."""
 
         valve = self._check_side(valve_side)
+        timer = PrecisionTimer("s")
 
         try:
             self._start()
-            valve.dispense_volume(volume=volume)
+            console.echo("Delivery test starts")
+            for n in range(40):
+                valve.dispense_volume(volume=np.float64(15))
+                if n//10 % 1:
+                    console.echo(f"{n + 1} deliveries")
+                timer.delay(3)
 
         finally:
             self._stop()
@@ -284,13 +291,14 @@ class LinearTrackFunctions:
            Only use right valve and camera, deliver water manually by pressing "r" key.
         """
 
+        delivery_num = 0
+
         try:
             self._start()
             self.vs._right_camera.start() # Start only the right camera
             self.visualizer.open()  # Open the visualizer window
             console.echo("First day training started, press 'r' to deliver water, press 'q' to quit.")
 
-            delivery_num = 0
             while not keyboard.is_pressed("q"):
                 self.visualizer.update()
 
@@ -305,10 +313,10 @@ class LinearTrackFunctions:
                     console.echo(f"Water delivered manually, total deliveries: {delivery_num}")
 
                 timer = PrecisionTimer("ms")
-                timer.delay(delay=10, block=False)  # 10ms delay to prevent CPU overuse
+                timer.delay(delay=30, block=False)  # 10ms delay to prevent CPU overuse
         
         finally:
-            total_volume = self.mc.dispensed_volume() * 2/3 # Convert to actual delivered volume in uL
+            total_volume = delivery_num * 11 # Convert to actual delivered volume in uL
             self.vs._right_camera.stop() # Stop only the right camera
             self.visualizer.close()
             self._stop()
@@ -320,26 +328,30 @@ class LinearTrackFunctions:
            Deliver water every minute for 30 minutes.
         """
 
+        cycle_num = 0
+
         try:
             self._start()
             self.vs._right_camera.start()  # Start right camera
             console.echo("Second day training started")
 
-            cycle_num = 0
+            
             timer = PrecisionTimer("s")
 
-            while cycle_num < 30:
+            while cycle_num < 40:
+                # 45s delay
+                timer.delay(delay=45, block=False)
+
                 # Deliver 10uL per manual trigger. It is not accurate since 
                 # calibration data is not from testing chamber, the command of delivering
                 # 15uL water actually delivers 10uL. 
                 self.mc.right_valve.dispense_volume(volume=np.float64(15))
                 console.echo(f"Cycle {cycle_num + 1}: Delivered water through the right valve.")
 
-                timer.delay(delay=45, block=False)  # 45s delay
                 cycle_num += 1
 
         finally:
-            total_volume = self.mc.dispensed_volume() * 2/3 # Convert to actual delivered volume in uL
+            total_volume = cycle_num * 11 # Convert to actual delivered volume in uL
             self.vs._right_camera.stop()  # Stop right camera
             self.visualizer.close()
             self._stop()
