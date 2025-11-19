@@ -30,5 +30,9 @@ def complete_reset():
 
 # Run this first, then run your test in a fresh Python session
 if __name__ == "__main__":
-    complete_reset()
+    mouse = input("Input experiment mouse ID (e.g., DATM1): ")
+    exp_day = input("Input experiment day (e.g., day_1): ")
 
+    date = datetime.now().strftime("%Y%m%d")
+    exp_day = f"{exp_day}_{date}"
+    print(exp_day)

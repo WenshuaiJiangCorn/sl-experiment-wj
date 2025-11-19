@@ -13,16 +13,6 @@ from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-
-mouse = input("Input experiment mouse ID. (e.g., DATM1)")
-exp_day = input("Input experiment day (e.g., day_1): ")
-
-date = datetime.now().strftime("%Y%m%d")
-exp_day = f"{exp_day}_{date}"
-
-output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward") / exp_day / mouse
-ensure_directory_exists(output_dir)
-
 _REWARD_VOLUME = np.float64(10)  # 10uL
 
 
@@ -126,4 +116,14 @@ def run_experiment() -> None:
         console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
 if __name__ == "__main__":
+    
+    mouse = input("Input experiment mouse ID (e.g., DATM1): ")
+    exp_day = input("Input experiment day (e.g., day_1): ")
+
+    date = datetime.now().strftime("%Y%m%d")
+    exp_day = f"{exp_day}_{date}"
+
+    output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward") / exp_day / mouse
+    ensure_directory_exists(output_dir)
+    
     run_experiment()
