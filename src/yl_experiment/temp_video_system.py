@@ -98,6 +98,7 @@ if __name__ == "__main__":
     left_camera.start_frame_saving()
     top_camera.start_frame_saving()
     right_camera.start_frame_saving()
+    console.echo("Saving started, press 'q' to quit.")
 
     # timer.delay(delay=5, block=False)  # Records frames for 60 seconds, generating ~1800 frames
     while True:
