@@ -63,7 +63,7 @@ def run_experiment() -> None:
         _once = False
 
         console.echo("Experiment starts. Press 'q' to stop the experiment.", level=LogLevel.SUCCESS)
-        console.echo("10 minutes of pre-task acclimation period starts.")
+        console.echo("10 minutes of pre-task acclimation period starts. Press 'p' to manually proceed")
         while True:
             cycle_timer.delay(delay=10)  # 10ms delay to prevent CPU overuse
 
@@ -71,10 +71,10 @@ def run_experiment() -> None:
             lick_left = mc.left_lick_sensor.lick_count
             lick_right = mc.right_lick_sensor.lick_count
 
-            # Check if acclimation period has passed
+            # Check if acclimation period has passed, or 'p' has been pressed to proceed
             # If it has, activate valves
             if not _once:
-                if acclimation_timer.elapsed >= 600:
+                if acclimation_timer.elapsed >= 600 or keyboard.is_pressed("p"):
                     valve_left_active = True
                     valve_right_active = True
                     _once = True
