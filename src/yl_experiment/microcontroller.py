@@ -61,13 +61,13 @@ _LICK_SIGNAL_THRESHOLD = np.uint16(200)
 # In 12-bit ADC units. The level for classifying a sensor activation event as a lick. Any sensor-reported value above
 # this threshold is considered a lick
 # Initial value: 1000
-_LICK_DETECTION_THRESHOLD = np.uint16(800)
+_LICK_DETECTION_THRESHOLD = np.uint16(600)
 
 # In 12-bit ADC units. The minimum difference between two consecutive sensor readouts for the new readout to be
 # reported to the PC. This ensures that the PC is only informed about significant voltage changes that usually
 # correspond to major event transitions (no touch / touch / lick).
 # Initial value: 180
-_LICK_DELTA_THRESHOLD = np.uint16(150)
+_LICK_DELTA_THRESHOLD = np.uint16(100)
 
 # The number of analog pin readouts to average into the final sensor value. Larger values produce smoother data, but
 # introduce detection latency. On Teensy controllers, the val=ue listed here is multiplied by 4 (e.g. averaging pool of
@@ -94,7 +94,7 @@ _ANALOG_AVERAGING_POOL = np.uint8(2)
 # gives a polling rate of ~1000 HZ.
 # The doric system gives 60Hz sampling rate, so this should roughly match it to reduce file size, 
 # here we set it to 100Hz sampling rate.
-_ANALOG_POLLING_DELAY = np.uint32(10000)
+_ANALOG_POLLING_DELAY = np.uint32(16600)
 
 
 class ModuleTypeCodes(IntEnum):

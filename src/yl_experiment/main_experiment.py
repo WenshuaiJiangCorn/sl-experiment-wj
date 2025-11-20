@@ -48,6 +48,7 @@ def run_experiment() -> None:
 
         # Initialize the timers
         acclimation_timer = PrecisionTimer('s')
+        acclimation_timer.reset()
         cycle_timer = PrecisionTimer("ms")
         
         # During acclimation period, the valves are closed
@@ -65,7 +66,7 @@ def run_experiment() -> None:
         console.echo("Experiment starts. Press 'q' to stop the experiment.", level=LogLevel.SUCCESS)
         console.echo("10 minutes of pre-task acclimation period starts. Press 'p' to manually proceed")
         while True:
-            cycle_timer.delay(delay=10)  # 10ms delay to prevent CPU overuse
+            cycle_timer.delay(delay=20)  # 20ms delay to prevent CPU overuse
 
             visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
@@ -79,6 +80,14 @@ def run_experiment() -> None:
                     valve_right_active = True
                     _once = True
                     console.echo("Task opens.", level=LogLevel.SUCCESS)
+
+            if keyboard.is_pressed("e"):
+                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                visualizer.add_left_valve_event()
+
+            if keyboard.is_pressed("r"):
+                mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                visualizer.add_right_valve_event()
 
             if lick_left > prev_lick_left:
                 visualizer.add_left_lick_event()
@@ -113,9 +122,8 @@ def run_experiment() -> None:
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
-        console.echo("Experiment: ended.", level=LogLevel.SUCCESS)
-
         data_logger.stop()  # Data logger needs to be stopped last
+        console.echo("Experiment: ended.", level=LogLevel.SUCCESS)
 
         # Combines all log entries into a single .npz log file for each source.
         assemble_log_archives(

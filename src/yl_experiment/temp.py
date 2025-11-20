@@ -1,6 +1,7 @@
 import time
 import subprocess
 from datetime import datetime
+import keyboard
 
 _CONTROLLER_PORT = "COM4"  # Update this to your controller's port
 
@@ -30,5 +31,9 @@ def complete_reset():
 
 # Run this first, then run your test in a fresh Python session
 if __name__ == "__main__":
-    if not True:
-        print(1)
+    # Add this test before your main loop
+    print("Testing keyboard... Press 't' to confirm")
+    while True:
+        if keyboard.is_pressed('t'):
+            print("Keyboard working!")
+            break
