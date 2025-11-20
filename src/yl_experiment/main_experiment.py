@@ -14,10 +14,16 @@ from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 _REWARD_VOLUME = np.float64(10)  # 10uL
+_EXPERIMENT_DIR = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward")
 
 
 def run_experiment() -> None:
-    """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab."""
+    """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab.
+       The experiment starts with a 10 minutes acclimation period, experimenter should attach fiber
+       and let the animal acclimates to the experiment arena during this period.
+       
+       Task opens after 10 minutes. Press 'q' to terminate the process."""
+
     if not console.enabled:
         console.enable()
 
@@ -34,24 +40,45 @@ def run_experiment() -> None:
         mc.start()
         mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
         visualizer.open()  # Open the visualizer window
-
+        
+        # Start monitoring lickings and photometry analog input before the task opens
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
         mc.analog_input.check_state()
 
-        console.echo("Experiment: started. Press 'q' to stop.", level=LogLevel.SUCCESS)
-
-        # Initial valve availability
-        valve_left_active = True
-        valve_right_active = True
+        # Initialize the timers
+        acclimation_timer = PrecisionTimer('s')
+        cycle_timer = PrecisionTimer("ms")
+        
+        # During acclimation period, the valves are closed
+        valve_left_active = False
+        valve_right_active = False
 
         prev_lick_left = mc.left_lick_sensor.lick_count
         prev_lick_right = mc.right_lick_sensor.lick_count
 
+        # Before experiment tasak starts, wait for 10 minutes for experimenter to attach fiber to 
+        # the mouse and acclimate the animal to the arena
+        # Cut off this period in the data processing if necessary
+        _once = False
+
+        console.echo("Experiment starts. Press 'q' to stop the experiment.", level=LogLevel.SUCCESS)
+        console.echo("10 minutes of pre-task acclimation period starts.")
         while True:
+            cycle_timer.delay(delay=10)  # 10ms delay to prevent CPU overuse
+
             visualizer.update()
             lick_left = mc.left_lick_sensor.lick_count
             lick_right = mc.right_lick_sensor.lick_count
+
+            # Check if acclimation period has passed
+            # If it has, activate valves
+            if not _once:
+                if acclimation_timer.elapsed >= 600:
+                    valve_left_active = True
+                    valve_right_active = True
+                    _once = True
+                    console.echo("Task opens.", level=LogLevel.SUCCESS)
 
             if lick_left > prev_lick_left:
                 visualizer.add_left_lick_event()
@@ -72,7 +99,7 @@ def run_experiment() -> None:
             prev_lick_left, prev_lick_right = lick_left, lick_right
             
             if keyboard.is_pressed("q"):
-                console.echo("Breaking the experiment loop due to the 'q' key press.")
+                console.echo("Stopping the experiment due to the 'q' key press.")
 
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
@@ -80,12 +107,9 @@ def run_experiment() -> None:
                 mc.analog_input.reset_command_queue()
                 break
 
-            timer = PrecisionTimer("ms")
-            timer.delay(delay=20, block=False)  # 10ms delay to prevent CPU overuse
-
     finally:
-        vs.stop()
         total_volume = mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
+        vs.stop()
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
@@ -115,15 +139,19 @@ def run_experiment() -> None:
         # Summarize total dispensed volume
         console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
+
+
 if __name__ == "__main__":
-    
+    # Configure the mouse and experiment info
     mouse = input("Input experiment mouse ID (e.g., DATM1): ")
     exp_day = input("Input experiment day (e.g., day_1): ")
 
     date = datetime.now().strftime("%Y%m%d")
     exp_day = f"{exp_day}_{date}"
 
-    output_dir = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward") / exp_day / mouse
+    # Create output directory
+    output_dir = _EXPERIMENT_DIR / exp_day / mouse
     ensure_directory_exists(output_dir)
     
+    # Run experiment
     run_experiment()
