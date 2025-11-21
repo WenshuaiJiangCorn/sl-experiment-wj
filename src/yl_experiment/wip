@@ -1,23 +1,13 @@
 from pathlib import Path
 import polars as pl
+import numpy as np
+import matplotlib.pyplot as plt
 
-target = Path(r"C:\Users\Changwoo\Dropbox\Research_projects\dopamine\mazes\linear_track\lickometer_test\test_output\processed\analog_signal.feather")
-t = Path(r"C:\Users\Changwoo\Desktop\time_0000.csv")
-v = Path(r"C:\Users\Changwoo\Desktop\value.csv")
 
-df_t = pl.read_csv(t)
-df_v = pl.read_csv(v)
+target = Path(r"C:\Users\wj76\Dropbox\Research_projects\dopamine\mazes\linear_track\water_reward\day_1_20251120\DATF4\processed\left_lick_sensor.feather")
 
-dt = (df_t.row(-1)[0] - df_t.row(1)[0])
-num_samples = df_v.shape[0]
-fps0 = num_samples / dt
+df = pl.read_ipc(target)
+print(df.columns)
+v = df.filter(pl.col("lick_state") == 1).to_numpy()
 
-print(f"Doric Duration: {dt:.2f} seconds, Number of samples: {num_samples}, Frame rate: {fps0:.2f} Hz")
-
-data = pl.read_ipc(target)
-start, end = data[0,0], data[-1,0]
-
-duration = (end - start) * 1e-6  # in seconds
-num_samples = data.shape[0]
-fps = num_samples / duration
-print(f"AtxAnalog Duration: {duration:.2f} seconds, Number of samples: {num_samples}, Frame rate: {fps:.2f} Hz")
+print(len(v))
