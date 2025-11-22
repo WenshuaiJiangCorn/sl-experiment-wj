@@ -19,6 +19,10 @@ from ataraxis_video_system import (VideoSystem,
                                    extract_logged_camera_timestamps)
 
 
+# Deliver 15uL of water based on linear track calibration data
+# The actual delivery amount in the training chamber it is ~10uL
+_TRAINING_WATER = np.float64(15) 
+
 class VideoSystems:
     """Container class for managing 3 VideoSystem instances.
     Arags:
@@ -230,7 +234,7 @@ class LinearTrackFunctions:
 
         Args:
             valve_side (str): The side of the valve to toggle ("left" or "right").
-            duration (int): The desired state of the valve (True for open, False for closed).
+            duration (int): The duration of valve opening in seconds.
         """
         valve = self._check_side(valve_side)
 
@@ -276,7 +280,7 @@ class LinearTrackFunctions:
             self._start()
             console.echo("Delivery test starts")
             for n in range(40):
-                valve.dispense_volume(volume=np.float64(15))
+                valve.dispense_volume(volume=_TRAINING_WATER)
                 if n//10 % 1:
                     console.echo(f"{n + 1} deliveries")
                 timer.delay(3)
@@ -287,11 +291,14 @@ class LinearTrackFunctions:
 
     
     def first_day_training(self) -> None:
-        """Executes the first day training protocol for the linear track experiment.
-           Only use right valve and camera, deliver water manually by pressing "r" key.
+        """
+        Executes the first day training protocol for the linear track experiment.
+        Water delivery upon lickings without timeout. Press 'r' to amnually deliver reward.
+        Only use right valve and camera.
         """
 
         delivery_num = 0
+        timer = PrecisionTimer("ms")
 
         try:
             self._start()
@@ -299,22 +306,33 @@ class LinearTrackFunctions:
             self.visualizer.open()  # Open the visualizer window
             console.echo("First day training started, press 'r' to deliver water, press 'q' to quit.")
 
-            while not keyboard.is_pressed("q"):
+            prev_lick_right = self.mc.right_lick_sensor.lick_count
+
+            while True:
+                timer.delay(delay=30, block=False)  # 30ms delay
                 self.visualizer.update()
 
-                if keyboard.is_pressed("r"):
-                    # Deliver 10uL per manual trigger. It is not accurate since 
-                    # calibration data is not from testing chamber, the command of delivering
-                    # 15uL water actually delivers 10uL. 
-                    self.mc.right_valve.dispense_volume(volume=np.float64(15)) 
-                    delivery_num += 1
+                lick_right = self.mc.right_lick_sensor.lick_count
+
+                if lick_right > prev_lick_right:
+                    self.visualizer.add_right_lick_event()
+                    self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                     self.visualizer.add_right_valve_event()
+                prev_lick_right = lick_right
 
-                    console.echo(f"Water delivered manually, total deliveries: {delivery_num}")
+                # Manually deliver water
+                if keyboard.is_pressed("r"):
+                    self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
+                    self.visualizer.add_right_valve_event()
+                
+                if keyboard.is_pressed("q"):
+                    console.echo("Stopping the experiment due to the 'q' key press.")
 
-                timer = PrecisionTimer("ms")
-                timer.delay(delay=30, block=False)  # 10ms delay to prevent CPU overuse
-        
+                    # Stops monitoring lick sensors before entering the termination clause
+                    self.mc.right_lick_sensor.reset_command_queue()
+
+                    break
+
         finally:
             total_volume = delivery_num * 11 # Convert to actual delivered volume in uL
             self.vs._right_camera.stop() # Stop only the right camera
@@ -324,35 +342,61 @@ class LinearTrackFunctions:
             
             
     def second_day_training(self) -> None:
-        """Executes the second day training protocol for the linear track experiment.
-           Deliver water every minute for 30 minutes.
+        """
+        Executes the second day training protocol for the linear track experiment.
+        Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
+        Only use right valve and camera.
         """
 
-        cycle_num = 0
+        delivery_num = 0
+        cycle_timer = PrecisionTimer("ms")
+        time_out_timer = PrecisionTimer("s")
+        time_out_timer.reset()
 
         try:
             self._start()
-            self.vs._right_camera.start()  # Start right camera
-            console.echo("Second day training started")
+            self.vs._right_camera.start() # Start only the right camera
+            self.visualizer.open()  # Open the visualizer window
+            console.echo("Second day training started, press 'r' to deliver water, press 'q' to quit.")
 
-            
-            timer = PrecisionTimer("s")
+            valve_right_active = True
+            prev_lick_right = self.mc.right_lick_sensor.lick_count
 
-            while cycle_num < 40:
-                # 45s delay
-                timer.delay(delay=45, block=False)
+            while True:
+                cycle_timer.delay(delay=30, block=False)  # 30ms delay
+                self.visualizer.update()
 
-                # Deliver 10uL per manual trigger. It is not accurate since 
-                # calibration data is not from testing chamber, the command of delivering
-                # 15uL water actually delivers 10uL. 
-                self.mc.right_valve.dispense_volume(volume=np.float64(15))
-                console.echo(f"Cycle {cycle_num + 1}: Delivered water through the right valve.")
+                # Condition to enable the valve
+                if time_out_timer.elapsed >= 10:
+                    valve_right_active = True
 
-                cycle_num += 1
+                lick_right = self.mc.right_lick_sensor.lick_count
+                if lick_right > prev_lick_right:
+                    self.visualizer.add_right_lick_event()
+
+                    if valve_right_active:
+                        self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
+                        self.visualizer.add_right_valve_event()
+                        time_out_timer.reset()
+
+                prev_lick_right = lick_right
+
+                # Manually deliver water
+                if keyboard.is_pressed("r"):
+                    self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
+                    self.visualizer.add_right_valve_event()
+                
+                if keyboard.is_pressed("q"):
+                    console.echo("Stopping the experiment due to the 'q' key press.")
+
+                    # Stops monitoring lick sensors before entering the termination clause
+                    self.mc.right_lick_sensor.reset_command_queue()
+                    
+                    break
 
         finally:
-            total_volume = cycle_num * 11 # Convert to actual delivered volume in uL
-            self.vs._right_camera.stop()  # Stop right camera
+            total_volume = delivery_num * 11 # Convert to actual delivered volume in uL
+            self.vs._right_camera.stop() # Stop only the right camera
             self.visualizer.close()
             self._stop()
             console.echo(f"Second day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
