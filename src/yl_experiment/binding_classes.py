@@ -360,6 +360,7 @@ class LinearTrackFunctions:
             self._start()
             self.vs._right_camera.start() # Start only the right camera
             self.visualizer.open()  # Open the visualizer window
+            self.mc.right_lick_sensor.check_state()
             console.echo("Second day training started, press 'r' to deliver water, press 'q' to quit.")
 
             valve_right_active = True
