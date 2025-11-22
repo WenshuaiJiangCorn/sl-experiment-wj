@@ -304,6 +304,7 @@ class LinearTrackFunctions:
             self._start()
             self.vs._right_camera.start() # Start only the right camera
             self.visualizer.open()  # Open the visualizer window
+            self.mc.right_lick_sensor.check_state()
             console.echo("First day training started, press 'r' to deliver water, press 'q' to quit.")
 
             prev_lick_right = self.mc.right_lick_sensor.lick_count
@@ -318,12 +319,14 @@ class LinearTrackFunctions:
                     self.visualizer.add_right_lick_event()
                     self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                     self.visualizer.add_right_valve_event()
+                    delivery_num += 1
                 prev_lick_right = lick_right
 
                 # Manually deliver water
                 if keyboard.is_pressed("r"):
                     self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                     self.visualizer.add_right_valve_event()
+                    delivery_num += 1
                 
                 if keyboard.is_pressed("q"):
                     console.echo("Stopping the experiment due to the 'q' key press.")
@@ -377,6 +380,7 @@ class LinearTrackFunctions:
                     if valve_right_active:
                         self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                         self.visualizer.add_right_valve_event()
+                        delivery_num += 1
                         time_out_timer.reset()
 
                 prev_lick_right = lick_right
@@ -385,6 +389,7 @@ class LinearTrackFunctions:
                 if keyboard.is_pressed("r"):
                     self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                     self.visualizer.add_right_valve_event()
+                    delivery_num += 1
                 
                 if keyboard.is_pressed("q"):
                     console.echo("Stopping the experiment due to the 'q' key press.")

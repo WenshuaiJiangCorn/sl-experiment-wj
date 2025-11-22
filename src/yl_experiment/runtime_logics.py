@@ -12,7 +12,7 @@ if __name__ == "__main__":
     #exp.calibrate_valve('left', _CALIBRATION_PULSE_DURATION)
     #exp.calibrate_valve("right", _CALIBRATION_PULSE_DURATION)
 
-    #exp.first_day_training()
+    exp.first_day_training()
     #exp.second_day_training()
 
 
