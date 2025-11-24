@@ -295,10 +295,9 @@ class LinearTrackFunctions:
         Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
         Only use right valve and camera.
         """
-
         
         cycle_timer = PrecisionTimer("ms")
-        time_out_timer = PrecisionTimer("s")
+        delivery_timer = PrecisionTimer("s")
 
         if training_day == 'day1':
             activate_interval = 1
@@ -307,7 +306,7 @@ class LinearTrackFunctions:
         else:
             raise ValueError("Training day protocol need to be either day1 or day2")
 
-        time_out_timer.reset()
+        delivery_timer.reset()
 
         delivery_num = 0
 
@@ -326,7 +325,7 @@ class LinearTrackFunctions:
                 self.visualizer.update()
 
                 # Condition to enable the valve
-                if time_out_timer.elapsed >= activate_interval:
+                if delivery_timer.elapsed >= activate_interval:
                     valve_right_active = True
 
                 lick_right = self.mc.right_lick_sensor.lick_count
@@ -338,7 +337,7 @@ class LinearTrackFunctions:
                         self.visualizer.add_right_valve_event()
                         delivery_num += 1
                         valve_right_active = False
-                        time_out_timer.reset()
+                        delivery_timer.reset()
 
                 prev_lick_right = lick_right
 
