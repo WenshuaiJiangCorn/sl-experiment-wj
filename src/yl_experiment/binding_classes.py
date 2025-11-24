@@ -289,72 +289,27 @@ class LinearTrackFunctions:
             self._stop()
             console.echo("Delivery test: ended.", level=LogLevel.SUCCESS)
 
-    
-    def first_day_training(self) -> None:
+    def _training(self, training_day) -> None:
         """
-        Executes the first day training protocol for the linear track experiment.
-        Water delivery upon lickings without timeout. Press 'r' to amnually deliver reward.
-        Only use right valve and camera.
-        """
-
-        delivery_num = 0
-        timer = PrecisionTimer("ms")
-
-        try:
-            self._start()
-            self.vs._right_camera.start() # Start only the right camera
-            self.visualizer.open()  # Open the visualizer window
-            self.mc.right_lick_sensor.check_state()
-            console.echo("First day training started, press 'r' to deliver water, press 'q' to quit.")
-
-            prev_lick_right = self.mc.right_lick_sensor.lick_count
-
-            while True:
-                timer.delay(delay=30, block=False)  # 30ms delay
-                self.visualizer.update()
-
-                lick_right = self.mc.right_lick_sensor.lick_count
-
-                if lick_right > prev_lick_right:
-                    self.visualizer.add_right_lick_event()
-                    self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
-                    self.visualizer.add_right_valve_event()
-                    delivery_num += 1
-                prev_lick_right = lick_right
-
-                # Manually deliver water
-                if keyboard.is_pressed("r"):
-                    self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
-                    self.visualizer.add_right_valve_event()
-                    delivery_num += 1
-                
-                if keyboard.is_pressed("q"):
-                    console.echo("Stopping the experiment due to the 'q' key press.")
-
-                    # Stops monitoring lick sensors before entering the termination clause
-                    self.mc.right_lick_sensor.reset_command_queue()
-
-                    break
-
-        finally:
-            total_volume = delivery_num * 11 # Convert to actual delivered volume in uL
-            self.vs._right_camera.stop() # Stop only the right camera
-            self.visualizer.close()
-            self._stop()
-            console.echo(f"First day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
-            
-            
-    def second_day_training(self) -> None:
-        """
-        Executes the second day training protocol for the linear track experiment.
+        Executes either first day or second day training protocol for the linear track experiment.
         Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
         Only use right valve and camera.
         """
 
-        delivery_num = 0
+        
         cycle_timer = PrecisionTimer("ms")
         time_out_timer = PrecisionTimer("s")
+
+        if training_day == 'day1':
+            activate_interval = 1
+        elif training_day == 'day2':
+            activate_interval = 10
+        else:
+            raise ValueError("Training day protocol need to be either day1 or day2")
+
         time_out_timer.reset()
+
+        delivery_num = 0
 
         try:
             self._start()
@@ -371,7 +326,7 @@ class LinearTrackFunctions:
                 self.visualizer.update()
 
                 # Condition to enable the valve
-                if time_out_timer.elapsed >= 10:
+                if time_out_timer.elapsed >= activate_interval:
                     valve_right_active = True
 
                 lick_right = self.mc.right_lick_sensor.lick_count
@@ -382,6 +337,7 @@ class LinearTrackFunctions:
                         self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                         self.visualizer.add_right_valve_event()
                         delivery_num += 1
+                        valve_right_active = False
                         time_out_timer.reset()
 
                 prev_lick_right = lick_right
@@ -406,3 +362,22 @@ class LinearTrackFunctions:
             self.visualizer.close()
             self._stop()
             console.echo(f"Second day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+
+
+    def first_day_training(self) -> None:
+        """
+        Executes the first day training protocol for the linear track experiment.
+        Water delivery upon lickings without timeout. Press 'r' to amnually deliver reward.
+        Only use right valve and camera.
+        """
+        self._training(training_day = 'day1')
+            
+            
+    def second_day_training(self) -> None:
+        """
+        Executes the second day training protocol for the linear track experiment.
+        Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
+        Only use right valve and camera.
+        """
+
+        self._training(training_day = 'day2')
