@@ -48,8 +48,8 @@ def run_experiment() -> None:
 
         # Initialize the timers
         acclimation_timer = PrecisionTimer('s')
-        acclimation_timer.reset()
         cycle_timer = PrecisionTimer("ms")
+        acclimation_timer.reset()
         
         # During acclimation period, the valves are closed
         valve_left_active = False
@@ -58,13 +58,13 @@ def run_experiment() -> None:
         prev_lick_left = mc.left_lick_sensor.lick_count
         prev_lick_right = mc.right_lick_sensor.lick_count
 
-        # Before experiment tasak starts, wait for 10 minutes for experimenter to attach fiber to 
+        # Before experiment tasak starts, wait for 8 minutes for experimenter to attach fiber to 
         # the mouse and acclimate the animal to the arena
         # Cut off this period in the data processing if necessary
         _once = False
 
         console.echo("Experiment starts. Press 'q' to stop the experiment.", level=LogLevel.SUCCESS)
-        console.echo("10 minutes of pre-task acclimation period starts. Press 'p' to manually proceed")
+        console.echo("8 minutes of pre-task acclimation period starts. Press 'p' to manually proceed")
         while True:
             cycle_timer.delay(delay=20)  # 20ms delay to prevent CPU overuse
 
@@ -75,7 +75,7 @@ def run_experiment() -> None:
             # Check if acclimation period has passed, or 'p' has been pressed to proceed
             # If it has, activate valves
             if not _once:
-                if acclimation_timer.elapsed >= 600 or keyboard.is_pressed("p"):
+                if acclimation_timer.elapsed >= 480 or keyboard.is_pressed("p"):
                     valve_left_active = True
                     valve_right_active = True
                     _once = True
