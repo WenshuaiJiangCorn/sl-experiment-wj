@@ -157,7 +157,7 @@ if __name__ == "__main__":
     exp_day = f"{exp_day}_{date}"
 
     # Create output directory
-    output_dir = _EXPERIMENT_DIR / exp_day / mouse
+    output_dir = _EXPERIMENT_DIR / mouse / exp_day
     ensure_directory_exists(output_dir)
     
     # Run experiment
