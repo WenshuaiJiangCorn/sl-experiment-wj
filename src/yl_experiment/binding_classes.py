@@ -22,6 +22,7 @@ from ataraxis_video_system import (VideoSystem,
 # Deliver 15uL of water based on linear track calibration data
 # The actual delivery amount in the training chamber it is ~10uL
 _TRAINING_WATER = np.float64(15) 
+_TESTING_WATER = np.float64(10) 
 
 class VideoSystems:
     """Container class for managing 3 VideoSystem instances.
@@ -380,3 +381,58 @@ class LinearTrackFunctions:
         """
 
         self._training(training_day = 'day2')
+
+
+    def test_noise(self) -> None:
+        """Test if licks sensor wrongly detect lickings when valve opens."""
+
+        try:
+            cycle_timer = PrecisionTimer("ms")
+            timeout_timer = PrecisionTimer("s") # Temporary solution
+            self._start()
+            self.visualizer.open()  # Open the visualizer window
+            self.mc.left_lick_sensor.check_state()
+            self.mc.right_lick_sensor.check_state()
+            console.echo("Second day training started, press 'r' to deliver water, press 'q' to quit.")
+
+            prev_lick_left = self.mc.left_lick_sensor.lick_count
+            prev_lick_right = self.mc.right_lick_sensor.lick_count
+
+            while True:
+                cycle_timer.delay(delay=20)  # 20ms delay to prevent CPU overuse
+                self.visualizer.update()
+
+                lick_left = self.mc.left_lick_sensor.lick_count
+                lick_right = self.mc.right_lick_sensor.lick_count
+
+                if keyboard.is_pressed("e"):
+                    self.mc.left_valve.dispense_volume(volume=_TESTING_WATER)
+                    self.visualizer.add_left_valve_event()
+
+                if keyboard.is_pressed("r"):
+                    self.mc.right_valve.dispense_volume(volume=_TESTING_WATER)
+                    self.visualizer.add_right_valve_event()
+    
+                if lick_left > prev_lick_left:
+                    self.visualizer.add_left_lick_event()
+
+                if lick_right > prev_lick_right:
+                    self.visualizer.add_right_lick_event()
+
+                prev_lick_left, prev_lick_right = lick_left, lick_right
+                
+                if keyboard.is_pressed("q"):
+                    console.echo("Stopping the experiment due to the 'q' key press.")
+
+                    # Stops monitoring lick sensors before entering the termination clause
+                    self.mc.left_lick_sensor.reset_command_queue()
+                    self.mc.right_lick_sensor.reset_command_queue()
+                    break
+
+        finally:
+            total_volume = self.mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
+            console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+
+            self.visualizer.close()
+            self._stop()
+            console.echo("Test: ended.", level=LogLevel.SUCCESS)

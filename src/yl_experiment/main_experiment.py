@@ -49,6 +49,7 @@ def run_experiment() -> None:
         # Initialize the timers
         acclimation_timer = PrecisionTimer('s')
         cycle_timer = PrecisionTimer("ms")
+
         acclimation_timer.reset()
         
         # During acclimation period, the valves are closed
@@ -69,6 +70,7 @@ def run_experiment() -> None:
             cycle_timer.delay(delay=20)  # 20ms delay to prevent CPU overuse
 
             visualizer.update()
+
             lick_left = mc.left_lick_sensor.lick_count
             lick_right = mc.right_lick_sensor.lick_count
 
@@ -93,18 +95,20 @@ def run_experiment() -> None:
                 visualizer.add_left_lick_event()
                 if valve_left_active:
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    visualizer.add_left_valve_event()
+                    
                     valve_left_active = False
                     valve_right_active = True
-                    visualizer.add_left_valve_event()
 
             if lick_right > prev_lick_right:
                 visualizer.add_right_lick_event()
                 if valve_right_active:
                     mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
-                    valve_left_active = True
-                    valve_right_active = False
                     visualizer.add_right_valve_event()
 
+                    valve_left_active = True
+                    valve_right_active = False
+                    
             prev_lick_left, prev_lick_right = lick_left, lick_right
             
             if keyboard.is_pressed("q"):
