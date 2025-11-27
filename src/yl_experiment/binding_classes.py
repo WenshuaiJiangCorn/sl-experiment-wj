@@ -361,7 +361,7 @@ class LinearTrackFunctions:
             self.vs._right_camera.stop() # Stop only the right camera
             self.visualizer.close()
             self._stop()
-            console.echo(f"Second day training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+            console.echo(f"Training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
 
     def first_day_training(self) -> None:
