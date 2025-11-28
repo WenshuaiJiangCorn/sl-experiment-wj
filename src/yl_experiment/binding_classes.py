@@ -14,6 +14,7 @@ from visualizers import BehaviorVisualizer
 
 from ataraxis_video_system import (VideoSystem, 
                                    VideoEncoders, 
+                                   OutputPixelFormats,
                                    CameraInterfaces, 
                                    EncoderSpeedPresets, 
                                    extract_logged_camera_timestamps)
@@ -42,11 +43,12 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=0,  # Uses the default system webcam
             display_frame_rate=15,  # Displays the acquired data at a rate of 15 frames per second
-            frame_width=640,
-            frame_height=360,
+            frame_width=352,
+            frame_height=288,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,
+            output_pixel_format = OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -57,12 +59,13 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=1,  # Uses the default system webcam
             display_frame_rate=15,
-            frame_width=1280,
+            frame_width=864,
             frame_height=720,
             frame_rate=30,  # Uses 30 FPS for acquisition
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.SLOW,
+            output_pixel_format = OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -73,11 +76,12 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=2,  # Uses the default system webcam
             display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
-            frame_width=640,
-            frame_height=360,
+            frame_width=352,
+            frame_height=288,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,
+            output_pixel_format = OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
