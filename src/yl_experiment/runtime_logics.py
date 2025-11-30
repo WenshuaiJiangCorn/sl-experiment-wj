@@ -6,8 +6,8 @@ if __name__ == "__main__":
 
     exp = LinearTrackFunctions()
 
-    #exp.open_valve(valve_side='left')
-    exp.open_valve(valve_side='right')
+    exp.open_valve(valve_side='left')
+    #exp.open_valve(valve_side='right')
     
     #exp.calibrate_valve('left', _CALIBRATION_PULSE_DURATION)
     #exp.calibrate_valve("right", _CALIBRATION_PULSE_DURATION)

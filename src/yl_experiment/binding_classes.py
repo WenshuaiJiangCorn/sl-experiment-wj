@@ -43,8 +43,8 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=0,  # Uses the default system webcam
             display_frame_rate=15,  # Displays the acquired data at a rate of 15 frames per second
-            frame_width=176,
-            frame_height=144,
+            frame_width=640,
+            frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,
@@ -76,8 +76,8 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=2,  # Uses the default system webcam
             display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
-            frame_width=176,
-            frame_height=144,
+            frame_width=640,
+            frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,

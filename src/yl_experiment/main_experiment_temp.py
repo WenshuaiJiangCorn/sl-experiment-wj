@@ -90,7 +90,7 @@ def run_experiment() -> None:
                     console.echo("Task opens.", level=LogLevel.SUCCESS)
                 
             # Check if valve delay period has ended
-            if valve_delay_active and valve_delay_timer.elapsed >= 300:
+            if valve_delay_active and valve_delay_timer.elapsed >= 500:
                 # Reactivate the opposite valve after 1 second delay
                 if valve_triggered_side == "left":
                     valve_right_active = True
