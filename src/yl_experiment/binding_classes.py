@@ -59,7 +59,7 @@ class VideoSystems:
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=1,  # Uses the default system webcam
             display_frame_rate=15,
-            frame_width=864,
+            frame_width=1280,
             frame_height=720,
             frame_rate=30,  # Uses 30 FPS for acquisition
             color=False,  # Acquires images in MONOCHROME mode

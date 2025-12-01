@@ -57,7 +57,7 @@ if __name__ == "__main__":
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=1,  # Uses the default system webcam
         display_frame_rate=15,
-        frame_width=864,
+        frame_width=1280,
         frame_height=720,  # Displays the acquired data at a rate of 15 frames per second
         frame_rate=30,
         color=False,  # Acquires images in MONOCHROME mode
