@@ -42,8 +42,8 @@ if __name__ == "__main__":
         camera_index=0,  # Uses the default system webcam
         display_frame_rate=15,
         frame_rate=30,
-        frame_width=640,
-        frame_height=360,
+        frame_width=352,
+        frame_height=240,
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
         encoder_speed_preset=EncoderSpeedPresets.FAST,
@@ -73,8 +73,8 @@ if __name__ == "__main__":
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=2,  # Uses the default system webcam
         display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
-        frame_width=640,
-        frame_height=360,
+        frame_width=352,
+        frame_height=240,
         frame_rate=30,
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
