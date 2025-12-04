@@ -83,7 +83,7 @@ _LICK_POLLING_DELAY = np.uint32(1000)
 # Analog module calibration parameters, imitates the lick module parameters
 # In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
 # Here it is set really low to capture all analog signals, since the noise of photometry signals is low.
-_ANALOG_SIGNAL_THRESHOLD = np.uint16(20)
+_ANALOG_SIGNAL_THRESHOLD = np.uint16(0)
 
 # The number of analog pin readouts to average into the final input value. Larger values produce smoother data, but
 # introduce detection latency. On Teensy controllers, the value listed here is multiplied by 4 (e.g. averaging pool of
