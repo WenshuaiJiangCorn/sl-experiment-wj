@@ -19,10 +19,11 @@ _EXPERIMENT_DIR = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamin
 
 def run_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab.
-       The experiment starts with a 10 minutes acclimation period, experimenter should attach fiber
-       and let the animal acclimates to the experiment arena during this period.
-       
-       Task opens after 10 minutes. Press 'q' to terminate the process."""
+       The experiment starts with a 8 minutes acclimation period, experimenter should attach fiber
+       and let the animal acclimates to the experiment arena during this period. 
+
+       At the end of experiment, close the task by pressing 'p', which starts a 5 minutes countdown to
+       terminate the experiment. The experiment can also be manually terminated by pressing 'q'."""
 
     if not console.enabled:
         console.enable()
@@ -88,7 +89,12 @@ def run_experiment() -> None:
                     valve_right_active = True
                     _once = True
                     console.echo("Task opens.", level=LogLevel.SUCCESS)
-                
+            else:
+                if keyboard.is_pressed("p"):
+                    valve_left_active = False
+                    valve_right_active = False
+                    console.echo("Task closes.", level=LogLevel.SUCCESS)
+
             # Check if valve delay period has ended
             if valve_delay_active and valve_delay_timer.elapsed >= 500:
                 # Reactivate the opposite valve after 1 second delay
