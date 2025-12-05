@@ -150,14 +150,14 @@ def run_experiment() -> None:
 
     finally:
         total_volume = mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
-        console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
-
+        
         vs.stop()
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
         data_logger.stop()  # Data logger needs to be stopped last
         console.echo("Experiment: ended.", level=LogLevel.SUCCESS)
+        console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
         # Combines all log entries into a single .npz log file for each source.
         assemble_log_archives(
