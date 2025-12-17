@@ -3,15 +3,15 @@ from pathlib import Path
 import numpy as np
 import keyboard
 from ataraxis_time import PrecisionTimer
+from ataraxis_video_system import (
+    VideoSystem,
+    VideoEncoders,
+    CameraInterfaces,
+    EncoderSpeedPresets,
+    extract_logged_camera_timestamps,
+)
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger, assemble_log_archives
-
-from ataraxis_video_system import (VideoSystem, 
-                                   VideoEncoders, 
-                                   CameraInterfaces, 
-                                   EncoderSpeedPresets, 
-                                   extract_logged_camera_timestamps)
-
 
 # Since the VideoSystem and DataLogger classes use multiprocessing under-the-hood, the runtime must be protected by the
 # __main__ guard.
@@ -22,7 +22,9 @@ if __name__ == "__main__":
     # Specifies the directory where to save the acquired video frames and timestamps.
     # tempdir = tempfile.TemporaryDirectory()  # Creates a temporary directory for illustration purposes
     # output_directory = Path(tempdir.name)
-    output_directory = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test").joinpath("test_output")
+    output_directory = Path(
+        "C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test"
+    ).joinpath("test_output")
 
     # The DataLogger is used to save frame acquisition timestamps to disk as uncompressed .npy files.
     logger = DataLogger(output_directory=output_directory, instance_name="webcam")

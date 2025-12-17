@@ -1,11 +1,11 @@
 """This module provides the executable script used to run test experiments with only left valve in the Yapici lab."""
 
 # WJ: Run this script to start the test
-import numpy as np
 import time
 from pathlib import Path
 import tempfile
 
+import numpy as np
 import keyboard
 from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console

@@ -211,14 +211,14 @@ class BehaviorVisualizer:
         # Lick axis
         self._left_lick_axis.set_title("Left Lick Sensor State", fontdict=_fontdict_title)
         self._left_lick_axis.set_ylim(-0.05, 1.05)
-        #self._left_lick_axis.set_ylabel("Left Lick State", fontdict=_fontdict_axis_label)
+        # self._left_lick_axis.set_ylabel("Left Lick State", fontdict=_fontdict_axis_label)
         self._left_lick_axis.set_xlabel("")
         self._left_lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
         self._left_lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
 
         self._right_lick_axis.set_title("Right Lick Sensor State", fontdict=_fontdict_title)
         self._right_lick_axis.set_ylim(-0.05, 1.05)
-        #self._right_lick_axis.set_ylabel("Right Lick State", fontdict=_fontdict_axis_label)
+        # self._right_lick_axis.set_ylabel("Right Lick State", fontdict=_fontdict_axis_label)
         self._right_lick_axis.set_xlabel("")
         self._right_lick_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
         self._right_lick_axis.yaxis.set_major_formatter(FixedFormatter(["No Lick", "Lick"]))
@@ -226,14 +226,14 @@ class BehaviorVisualizer:
         # Valve axis
         self._left_valve_axis.set_title("Left Reward Valve State", fontdict=_fontdict_title)
         self._left_valve_axis.set_ylim(-0.05, 1.05)
-        #self._left_valve_axis.set_ylabel("Left Valve State", fontdict=_fontdict_axis_label)
+        # self._left_valve_axis.set_ylabel("Left Valve State", fontdict=_fontdict_axis_label)
         self._left_valve_axis.set_xlabel("")
         self._left_valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
         self._left_valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))
 
         self._right_valve_axis.set_title("Right Reward Valve State", fontdict=_fontdict_title)
         self._right_valve_axis.set_ylim(-0.05, 1.05)
-        #self._right_valve_axis.set_ylabel("Right Valve State", fontdict=_fontdict_axis_label)
+        # self._right_valve_axis.set_ylabel("Right Valve State", fontdict=_fontdict_axis_label)
         self._right_valve_axis.set_xlabel("")
         self._right_valve_axis.yaxis.set_major_locator(FixedLocator([0, 1]))
         self._right_valve_axis.yaxis.set_major_formatter(FixedFormatter(["Closed", "Open"]))

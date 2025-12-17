@@ -92,7 +92,7 @@ _ANALOG_AVERAGING_POOL = np.uint8(2)
 
 # The number of microseconds to delay between polling (checking) the analog input. A value of 1000 means 1 ms, which
 # gives a polling rate of ~1000 HZ.
-# The doric system gives 60Hz sampling rate, so this should roughly match it to reduce file size, 
+# The doric system gives 60Hz sampling rate, so this should roughly match it to reduce file size,
 # here we set it to 100Hz sampling rate.
 _ANALOG_POLLING_DELAY = np.uint32(16600)
 
@@ -679,7 +679,6 @@ class AMCInterface:
         Returns:
             The total volume of fluid, in microliters, delivered by the specified valve during the current runtime.
         """
-        
         left_volume = self.left_valve.dispensed_volume
         right_volume = self.right_valve.dispensed_volume
         total_volume = left_volume + right_volume

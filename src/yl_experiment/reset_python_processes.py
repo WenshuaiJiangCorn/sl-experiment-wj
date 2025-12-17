@@ -1,7 +1,5 @@
 import time
 import subprocess
-from datetime import datetime
-import keyboard
 
 _CONTROLLER_PORT = "COM3"  # Update this to your controller's port
 

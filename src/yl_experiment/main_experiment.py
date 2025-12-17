@@ -1,15 +1,13 @@
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import keyboard
-from datetime import datetime
-
-from binding_classes import VideoSystems
 from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
+from binding_classes import VideoSystems
 from data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
-
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
@@ -19,11 +17,11 @@ _EXPERIMENT_DIR = Path("C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamin
 
 def run_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab.
-       The experiment starts with a 10 minutes acclimation period, experimenter should attach fiber
-       and let the animal acclimates to the experiment arena during this period.
-       
-       Task opens after 10 minutes. Press 'q' to terminate the process."""
+    The experiment starts with a 10 minutes acclimation period, experimenter should attach fiber
+    and let the animal acclimates to the experiment arena during this period.
 
+    Task opens after 10 minutes. Press 'q' to terminate the process.
+    """
     if not console.enabled:
         console.enable()
 
@@ -40,18 +38,18 @@ def run_experiment() -> None:
         mc.start()
         mc.connect_to_smh()  # Establishes connections to SharedMemoryArray for all modules
         visualizer.open()  # Open the visualizer window
-        
+
         # Start monitoring lickings and photometry analog input before the task opens
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
         mc.analog_input.check_state()
 
         # Initialize the timers
-        acclimation_timer = PrecisionTimer('s')
+        acclimation_timer = PrecisionTimer("s")
         cycle_timer = PrecisionTimer("ms")
 
         acclimation_timer.reset()
-        
+
         # During acclimation period, the valves are closed
         valve_left_active = False
         valve_right_active = False
@@ -59,7 +57,7 @@ def run_experiment() -> None:
         prev_lick_left = mc.left_lick_sensor.lick_count
         prev_lick_right = mc.right_lick_sensor.lick_count
 
-        # Before experiment tasak starts, wait for 8 minutes for experimenter to attach fiber to 
+        # Before experiment tasak starts, wait for 8 minutes for experimenter to attach fiber to
         # the mouse and acclimate the animal to the arena
         # Cut off this period in the data processing if necessary
         _once = False
@@ -96,7 +94,7 @@ def run_experiment() -> None:
                 if valve_left_active:
                     mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
                     visualizer.add_left_valve_event()
-                    
+
                     valve_left_active = False
                     valve_right_active = True
 
@@ -108,9 +106,9 @@ def run_experiment() -> None:
 
                     valve_left_active = True
                     valve_right_active = False
-                    
+
             prev_lick_left, prev_lick_right = lick_left, lick_right
-            
+
             if keyboard.is_pressed("q"):
                 console.echo("Stopping the experiment due to the 'q' key press.")
 
@@ -121,7 +119,7 @@ def run_experiment() -> None:
                 break
 
     finally:
-        total_volume = mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
+        total_volume = mc.dispensed_volume()  # Store total dispensed volume before stopping the microcontroller
         console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
         vs.stop()
@@ -151,7 +149,6 @@ def run_experiment() -> None:
         vs.extract_video_time_stamps(output_directory=processed_dir)
 
 
-
 if __name__ == "__main__":
     # Configure the mouse and experiment info
     mouse = input("Input experiment mouse ID (e.g., DATM1): ")
@@ -163,6 +160,6 @@ if __name__ == "__main__":
     # Create output directory
     output_dir = _EXPERIMENT_DIR / mouse / exp_day
     ensure_directory_exists(output_dir)
-    
+
     # Run experiment
     run_experiment()

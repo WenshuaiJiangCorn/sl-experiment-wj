@@ -1,29 +1,28 @@
 from pathlib import Path
-
-import numpy as np
-import keyboard
-import polars as pl
 import tempfile
 
+import numpy as np
+import polars as pl
+import keyboard
+from visualizers import BehaviorVisualizer
+from ataraxis_time import PrecisionTimer
+from microcontroller import AMCInterface
+from ataraxis_video_system import (
+    VideoSystem,
+    VideoEncoders,
+    CameraInterfaces,
+    OutputPixelFormats,
+    EncoderSpeedPresets,
+    extract_logged_camera_timestamps,
+)
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import DataLogger
-from ataraxis_time import PrecisionTimer
-
-from microcontroller import AMCInterface
-from visualizers import BehaviorVisualizer
-
-from ataraxis_video_system import (VideoSystem, 
-                                   VideoEncoders, 
-                                   OutputPixelFormats,
-                                   CameraInterfaces, 
-                                   EncoderSpeedPresets, 
-                                   extract_logged_camera_timestamps)
-
 
 # Deliver 15uL of water based on linear track calibration data
 # The actual delivery amount in the training chamber it is ~10uL
-_TRAINING_WATER = np.float64(15) 
-_TESTING_WATER = np.float64(10) 
+_TRAINING_WATER = np.float64(15)
+_TESTING_WATER = np.float64(10)
+
 
 class VideoSystems:
     """Container class for managing 3 VideoSystem instances.
@@ -48,7 +47,7 @@ class VideoSystems:
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,
-            output_pixel_format = OutputPixelFormats.YUV420,
+            output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -65,7 +64,7 @@ class VideoSystems:
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.SLOW,
-            output_pixel_format = OutputPixelFormats.YUV420,
+            output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -81,7 +80,7 @@ class VideoSystems:
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.FASTER,
-            output_pixel_format = OutputPixelFormats.YUV420,
+            output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
@@ -179,8 +178,8 @@ class VideoSystems:
 class LinearTrackFunctions:
     """Manages toggle, calibration and training logic of YLab linear track experiments.
 
-        Arags:
-            data_logger (DataLogger): DataLogger instance for logging experiment data.
+    Arags:
+        data_logger (DataLogger): DataLogger instance for logging experiment data.
     """
 
     def __init__(self, data_logger: DataLogger | None = None):
@@ -199,26 +198,22 @@ class LinearTrackFunctions:
         self.visualizer = BehaviorVisualizer()
 
         console.echo(self.mc._controller._port)
-        
-        
+
     def _check_side(self, valve_side: str):
         """Check and return the valve object based on the specified side.
 
         Args:
             valve_side (str): The side of the valve ("left" or "right").
-            
+
         Returns:
             Valve object corresponding to the specified side.
         """
-
         if valve_side == "left":
             return self.mc.left_valve
-        elif valve_side == "right":
+        if valve_side == "right":
             return self.mc.right_valve
-        else:
-            console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
-            raise ValueError("Invalid valve side specified.")
-
+        console.echo("Invalid valve side specified.", level=LogLevel.ERROR)
+        raise ValueError("Invalid valve side specified.")
 
     def _start(self):
         """Starts the microcontroller and connects to SharedMemoryArray. Must be called before any operation."""
@@ -226,13 +221,11 @@ class LinearTrackFunctions:
         self.mc.start()
         self.mc.connect_to_smh()
 
-
     def _stop(self):
         """Stops the microcontroller and disconnects from SharedMemoryArray. Must be called after any operation."""
         self.mc.disconnect_to_smh()
         self.mc.stop()
         self.data_logger.stop()
-
 
     def open_valve(self, valve_side: str, duration: int = 1) -> None:
         """Open a specific valve for a specific duration.
@@ -256,10 +249,8 @@ class LinearTrackFunctions:
             self._stop()
             console.echo("Valve: closed.", level=LogLevel.SUCCESS)
 
-
     def calibrate_valve(self, valve_side, calibration_pulse_duration) -> None:
         """Calibrates the valve by sending a pulse of specified duration."""
-
         valve = self._check_side(valve_side)
 
         try:
@@ -273,11 +264,10 @@ class LinearTrackFunctions:
             self._stop()
             console.echo("Calibration: ended.", level=LogLevel.SUCCESS)
 
-
     def delivery_test(self, valve_side) -> None:
-        """Delivers a specified volume (default 15uL) of fluid 40 times (same amount as second day testing) 
-           through the specified valve to test dispensing."""
-
+        """Delivers a specified volume (default 15uL) of fluid 40 times (same amount as second day testing)
+        through the specified valve to test dispensing.
+        """
         valve = self._check_side(valve_side)
         timer = PrecisionTimer("s")
 
@@ -286,7 +276,7 @@ class LinearTrackFunctions:
             console.echo("Delivery test starts")
             for n in range(40):
                 valve.dispense_volume(volume=_TRAINING_WATER)
-                if n//10 % 1:
+                if n // 10 % 1:
                     console.echo(f"{n + 1} deliveries")
                 timer.delay(3)
 
@@ -295,18 +285,16 @@ class LinearTrackFunctions:
             console.echo("Delivery test: ended.", level=LogLevel.SUCCESS)
 
     def _training(self, training_day) -> None:
-        """
-        Executes either first day or second day training protocol for the linear track experiment.
+        """Executes either first day or second day training protocol for the linear track experiment.
         Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
         Only use right valve and camera.
         """
-        
         cycle_timer = PrecisionTimer("ms")
         delivery_timer = PrecisionTimer("s")
 
-        if training_day == 'day1':
+        if training_day == "day1":
             activate_interval = 1
-        elif training_day == 'day2':
+        elif training_day == "day2":
             activate_interval = 10
         else:
             raise ValueError("Training day protocol need to be either day1 or day2")
@@ -317,7 +305,7 @@ class LinearTrackFunctions:
 
         try:
             self._start()
-            self.vs._right_camera.start() # Start only the right camera
+            self.vs._right_camera.start()  # Start only the right camera
             self.visualizer.open()  # Open the visualizer window
             self.mc.right_lick_sensor.check_state()
             console.echo("Second day training started, press 'r' to deliver water, press 'q' to quit.")
@@ -351,48 +339,41 @@ class LinearTrackFunctions:
                     self.mc.right_valve.dispense_volume(volume=_TRAINING_WATER)
                     self.visualizer.add_right_valve_event()
                     delivery_num += 1
-                
+
                 if keyboard.is_pressed("q"):
                     console.echo("Stopping the experiment due to the 'q' key press.")
 
                     # Stops monitoring lick sensors before entering the termination clause
                     self.mc.right_lick_sensor.reset_command_queue()
-                    
+
                     break
 
         finally:
-            total_volume = delivery_num * 11 # Convert to actual delivered volume in uL
-            self.vs._right_camera.stop() # Stop only the right camera
+            total_volume = delivery_num * 11  # Convert to actual delivered volume in uL
+            self.vs._right_camera.stop()  # Stop only the right camera
             self.visualizer.close()
             self._stop()
             console.echo(f"Training: ended. Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
-
     def first_day_training(self) -> None:
-        """
-        Executes the first day training protocol for the linear track experiment.
+        """Executes the first day training protocol for the linear track experiment.
         Water delivery upon lickings without timeout. Press 'r' to amnually deliver reward.
         Only use right valve and camera.
         """
-        self._training(training_day = 'day1')
-            
-            
+        self._training(training_day="day1")
+
     def second_day_training(self) -> None:
-        """
-        Executes the second day training protocol for the linear track experiment.
+        """Executes the second day training protocol for the linear track experiment.
         Water delivery upon lickings with 10 seconds time out. Press 'r' to amnually deliver reward.
         Only use right valve and camera.
         """
-
-        self._training(training_day = 'day2')
-
+        self._training(training_day="day2")
 
     def test_noise(self) -> None:
         """Test if licks sensor wrongly detect lickings when valve opens."""
-
         try:
             cycle_timer = PrecisionTimer("ms")
-            timeout_timer = PrecisionTimer("s") # Temporary solution
+            timeout_timer = PrecisionTimer("s")  # Temporary solution
             self._start()
             self.visualizer.open()  # Open the visualizer window
             self.mc.left_lick_sensor.check_state()
@@ -416,7 +397,7 @@ class LinearTrackFunctions:
                 if keyboard.is_pressed("r"):
                     self.mc.right_valve.dispense_volume(volume=_TESTING_WATER)
                     self.visualizer.add_right_valve_event()
-    
+
                 if lick_left > prev_lick_left:
                     self.visualizer.add_left_lick_event()
 
@@ -424,7 +405,7 @@ class LinearTrackFunctions:
                     self.visualizer.add_right_lick_event()
 
                 prev_lick_left, prev_lick_right = lick_left, lick_right
-                
+
                 if keyboard.is_pressed("q"):
                     console.echo("Stopping the experiment due to the 'q' key press.")
 
@@ -434,7 +415,9 @@ class LinearTrackFunctions:
                     break
 
         finally:
-            total_volume = self.mc.dispensed_volume() # Store total dispensed volume before stopping the microcontroller
+            total_volume = (
+                self.mc.dispensed_volume()
+            )  # Store total dispensed volume before stopping the microcontroller
             console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
             self.visualizer.close()
