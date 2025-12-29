@@ -290,23 +290,23 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
 
     # Parses the extracted data for each module and saves the output as .feather files in the requested directory:
 
-    # Right Valve
-    _parse_valve_data(
-        extracted_module_data=data[0],
-        output_file=output_directory / "right_valve_data.feather",
-        scale_coefficient=microcontroller.right_valve.scale_coefficient,
-        nonlinearity_exponent=microcontroller.right_valve.nonlinearity_exponent,
-    )
-
     # Left Valve
     _parse_valve_data(
-        extracted_module_data=data[1],
+        extracted_module_data=data[0],
         output_file=output_directory / "left_valve_data.feather",
         scale_coefficient=microcontroller.left_valve.scale_coefficient,
         nonlinearity_exponent=microcontroller.left_valve.nonlinearity_exponent,
     )
 
-    # Right Lick Sensor
+    # Right Valve
+    _parse_valve_data(
+        extracted_module_data=data[1],
+        output_file=output_directory / "right_valve_data.feather",
+        scale_coefficient=microcontroller.right_valve.scale_coefficient,
+        nonlinearity_exponent=microcontroller.right_valve.nonlinearity_exponent,
+    )
+
+    # Left Lick Sensor
     _parse_lick_data(
         extracted_module_data=data[2],
         output_file=output_directory / "left_lick_sensor.feather",
