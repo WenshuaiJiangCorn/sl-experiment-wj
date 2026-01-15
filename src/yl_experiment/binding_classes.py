@@ -51,12 +51,28 @@ class VideoSystems:
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
 
-        self._top_camera = VideoSystem(
+        self._right_camera = VideoSystem(
             system_id=np.uint8(102),
             data_logger=data_logger,
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=1,  # Uses the default system webcam
+            display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
+            frame_width=640,
+            frame_height=360,
+            color=False,  # Acquires images in MONOCHROME mode
+            video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
+            encoder_speed_preset=EncoderSpeedPresets.FASTER,
+            output_pixel_format=OutputPixelFormats.YUV420,
+            quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
+        )
+
+        self._top_camera = VideoSystem(
+            system_id=np.uint8(103),
+            data_logger=data_logger,
+            output_directory=output_directory,
+            camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
+            camera_index=2,  # Uses the default system webcam
             display_frame_rate=15,
             frame_width=1280,
             frame_height=720,
@@ -64,22 +80,6 @@ class VideoSystems:
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
             encoder_speed_preset=EncoderSpeedPresets.SLOW,
-            output_pixel_format=OutputPixelFormats.YUV420,
-            quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
-        )
-
-        self._right_camera = VideoSystem(
-            system_id=np.uint8(103),
-            data_logger=data_logger,
-            output_directory=output_directory,
-            camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
-            camera_index=2,  # Uses the default system webcam
-            display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
-            frame_width=640,
-            frame_height=360,
-            color=False,  # Acquires images in MONOCHROME mode
-            video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.FASTER,
             output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
@@ -149,7 +149,7 @@ class VideoSystems:
         """
         console.echo("Extracting frame acquisition timestamps from the assembled log archive...")
         fps_top = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("103_log.npz"),
             output_file=output_directory / "top_camera_timestamps.feather",
         )
 
@@ -159,7 +159,7 @@ class VideoSystems:
         )
 
         fps_right = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("103_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
             output_file=output_directory / "right_camera_timestamps.feather",
         )
 
@@ -308,13 +308,13 @@ class LinearTrackFunctions:
             self.vs._right_camera.start()  # Start only the right camera
             self.visualizer.open()  # Open the visualizer window
             self.mc.right_lick_sensor.check_state()
-            console.echo("Second day training started, press 'r' to deliver water, press 'q' to quit.")
+            console.echo("Training started, press 'r' to deliver water, press 'q' to quit.")
 
             valve_right_active = True
             prev_lick_right = self.mc.right_lick_sensor.lick_count
 
             while True:
-                cycle_timer.delay(delay=30, block=False)  # 30ms delay
+                cycle_timer.delay(delay=20, block=False)  # 20ms delay
                 self.visualizer.update()
 
                 # Condition to enable the valve

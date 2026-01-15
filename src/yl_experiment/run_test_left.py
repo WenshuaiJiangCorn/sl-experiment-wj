@@ -65,7 +65,7 @@ def run_test() -> None:
 
             # check if 3 seconds passed since deactivation
             if not valve_left_active and valve_left_deactivated_time is not None:
-                if time.time() - valve_left_deactivated_time >= 2:
+                if time.time() - valve_left_deactivated_time >= 1:
                     valve_left_active = True
                     valve_left_deactivated_time = None  # reset timer
 

@@ -61,7 +61,7 @@ _LICK_SIGNAL_THRESHOLD = np.uint16(200)
 # In 12-bit ADC units. The level for classifying a sensor activation event as a lick. Any sensor-reported value above
 # this threshold is considered a lick
 # Initial value: 1000
-_LICK_DETECTION_THRESHOLD = np.uint16(800)
+_LICK_DETECTION_THRESHOLD = np.uint16(600)
 
 # In 12-bit ADC units. The minimum difference between two consecutive sensor readouts for the new readout to be
 # reported to the PC. This ensures that the PC is only informed about significant voltage changes that usually

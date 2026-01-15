@@ -23,7 +23,7 @@ if __name__ == "__main__":
     # tempdir = tempfile.TemporaryDirectory()  # Creates a temporary directory for illustration purposes
     # output_directory = Path(tempdir.name)
     output_directory = Path(
-        "C:\\Users\\Changwoo\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test"
+        "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test"
     ).joinpath("test_output")
 
     # The DataLogger is used to save frame acquisition timestamps to disk as uncompressed .npy files.
@@ -52,28 +52,12 @@ if __name__ == "__main__":
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
     )
 
-    top_camera = VideoSystem(
+    right_camera = VideoSystem(
         system_id=np.uint8(102),
         data_logger=logger,
         output_directory=output_directory,
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=1,  # Uses the default system webcam
-        display_frame_rate=15,
-        frame_width=1280,
-        frame_height=720,  # Displays the acquired data at a rate of 15 frames per second
-        frame_rate=30,
-        color=False,  # Acquires images in MONOCHROME mode
-        video_encoder=VideoEncoders.H264,
-        encoder_speed_preset=EncoderSpeedPresets.MEDIUM,  # Uses H264 CPU video encoder.
-        quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
-    )
-
-    right_camera = VideoSystem(
-        system_id=np.uint8(103),
-        data_logger=logger,
-        output_directory=output_directory,
-        camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
-        camera_index=2,  # Uses the default system webcam
         display_frame_rate=15,  # Displays the acquired data at a rate of 30 frames per second
         frame_width=640,
         frame_height=360,
@@ -81,6 +65,22 @@ if __name__ == "__main__":
         color=False,  # Acquires images in MONOCHROME mode
         video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
         encoder_speed_preset=EncoderSpeedPresets.FAST,
+        quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
+    )
+
+    top_camera = VideoSystem(
+        system_id=np.uint8(103),
+        data_logger=logger,
+        output_directory=output_directory,
+        camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
+        camera_index=2,  # Uses the default system webcam
+        display_frame_rate=15,
+        frame_width=1280,
+        frame_height=720,  # Displays the acquired data at a rate of 15 frames per second
+        frame_rate=30,
+        color=False,  # Acquires images in MONOCHROME mode
+        video_encoder=VideoEncoders.H264,
+        encoder_speed_preset=EncoderSpeedPresets.MEDIUM,  # Uses H264 CPU video encoder.
         quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
     )
 
@@ -117,12 +117,12 @@ if __name__ == "__main__":
     # video file.
 
     # Stops the VideoSystem runtime and releases all resources
-    console.echo("Stopping camera 1")
+    console.echo("Stopping left camera")
     left_camera.stop()
-    console.echo("Stopping camera 2")
-    top_camera.stop()
-    console.echo("Stopping camera 3")
+    console.echo("Stopping right camera")
     right_camera.stop()
+    console.echo("Stopping top camera")
+    top_camera.stop()
     console.echo("VideoSystem: Stopped", level=LogLevel.SUCCESS)
 
     # Stops the DataLogger and assembles all logged data into a single .npz archive file. This step is required to be
@@ -135,20 +135,20 @@ if __name__ == "__main__":
     # Extracts the list of frame timestamps from the assembled log archive generated above. This returns a list of
     # timestamps. Each is given in microseconds elapsed since the UTC epoch onset.
     console.echo("Extracting frame acquisition timestamps from the assembled log archive...")
-    timestamps1 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("101_log.npz"))
-    timestamps2 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("102_log.npz"))
-    timestamps3 = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("103_log.npz"))
+    left_timestamps = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("101_log.npz"))
+    right_timestamps = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("102_log.npz"))
+    top_timestamps = extract_logged_camera_timestamps(log_path=logger.output_directory.joinpath("103_log.npz"))
 
     # Computes and prints the frame rate of the camera based on the extracted frame timestamp data.
-    timestamp_array1 = np.array(timestamps1, dtype=np.uint64)
+    timestamp_array1 = np.array(left_timestamps, dtype=np.uint64)
     time_diffs1 = np.diff(timestamp_array1)
     fps1 = 1 / (np.mean(time_diffs1) / 1e6)
 
-    timestamp_array2 = np.array(timestamps2, dtype=np.uint64)
+    timestamp_array2 = np.array(right_timestamps, dtype=np.uint64)
     time_diffs2 = np.diff(timestamp_array2)
     fps2 = 1 / (np.mean(time_diffs2) / 1e6)
 
-    timestamp_array3 = np.array(timestamps3, dtype=np.uint64)
+    timestamp_array3 = np.array(top_timestamps, dtype=np.uint64)
     time_diffs3 = np.diff(timestamp_array3)
     fps3 = 1 / (np.mean(time_diffs3) / 1e6)
 
