@@ -28,7 +28,7 @@ _FIVE_MICROLITERS = np.float64(5)
 
 # Microcontroller parameters
 _CONTROLLED_ID = np.uint8(111)
-_CONTROLLER_PORT = "COM3"
+_CONTROLLER_PORT = "COM4"
 _CONTROLLER_BUFFER_SIZE = 8192
 _CONTROLLER_BAUDRATE = 115200
 _CONTROLLER_KEEPALIVE_INTERVAL = 1000
@@ -40,17 +40,17 @@ _VALVE_CALIBRAZTION_COUNT = np.uint16(200)  # The of calibration pulses to use a
 # Maps right valve pulse durations in microseconds to the corresponding dispensed volume of fluid in microliters.
 _RIGHT_VALVE_CALIBRATION_DATA = (
     (15000, 1.20),  # 15 ms dispenses 1.20 uL of fluid.
-    (30000, 3.90),
-    (45000, 7.55),
-    (60000, 11.50),
+    (30000, 3.75),
+    (45000, 7.40),
+    (60000, 11.55),
 )
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
     (15000, 1.10),
-    (30000, 3.70),
-    (45000, 7.30),
-    (60000, 11.15),
+    (30000, 3.80),
+    (45000, 7.70),
+    (60000, 11.75),
 )
 
 # Lick module calibration parameters

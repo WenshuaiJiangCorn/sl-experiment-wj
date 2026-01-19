@@ -11,7 +11,7 @@ from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-_REWARD_VOLUME = np.float64(15)  # 15uL
+_REWARD_VOLUME = np.float64(10)  # 15uL
 _EXPERIMENT_DIR = Path("C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\0.1M_scrose_reward\\2026Jan_DAT")
 
 

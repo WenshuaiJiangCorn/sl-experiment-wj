@@ -2,7 +2,7 @@ import numpy as np
 from binding_classes import LinearTrackFunctions
 
 if __name__ == "__main__":
-    _CALIBRATION_PULSE_DURATION = np.uint32(30000)
+    _CALIBRATION_PULSE_DURATION = np.uint32(60000)
 
     exp = LinearTrackFunctions()
 
