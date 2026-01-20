@@ -56,18 +56,18 @@ _LEFT_VALVE_CALIBRATION_DATA = (
 # Lick module calibration parameters
 # In 12-bit ADC units. Signals below this threshold are treated as noise and pulled to 0 (no signal) level.
 # Initial value: 500
-_LICK_SIGNAL_THRESHOLD = np.uint16(200)
+_LICK_SIGNAL_THRESHOLD = np.uint16(350)
 
 # In 12-bit ADC units. The level for classifying a sensor activation event as a lick. Any sensor-reported value above
 # this threshold is considered a lick
 # Initial value: 1000
-_LICK_DETECTION_THRESHOLD = np.uint16(600)
+_LICK_DETECTION_THRESHOLD = np.uint16(800)
 
 # In 12-bit ADC units. The minimum difference between two consecutive sensor readouts for the new readout to be
 # reported to the PC. This ensures that the PC is only informed about significant voltage changes that usually
 # correspond to major event transitions (no touch / touch / lick).
 # Initial value: 180
-_LICK_DELTA_THRESHOLD = np.uint16(150)
+_LICK_DELTA_THRESHOLD = np.uint16(180)
 
 # The number of analog pin readouts to average into the final sensor value. Larger values produce smoother data, but
 # introduce detection latency. On Teensy controllers, the val=ue listed here is multiplied by 4 (e.g. averaging pool of
