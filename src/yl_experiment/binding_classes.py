@@ -52,7 +52,7 @@ class VideoSystems:
         )
 
         self._right_camera = VideoSystem(
-            system_id=np.uint8(102),
+            system_id=np.uint8(103),
             data_logger=data_logger,
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
@@ -68,7 +68,7 @@ class VideoSystems:
         )
 
         self._top_camera = VideoSystem(
-            system_id=np.uint8(103),
+            system_id=np.uint8(102),
             data_logger=data_logger,
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
