@@ -149,7 +149,7 @@ class VideoSystems:
         """
         console.echo("Extracting frame acquisition timestamps from the assembled log archive...")
         fps_top = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("103_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
             output_file=output_directory / "top_camera_timestamps.feather",
         )
 
@@ -159,7 +159,7 @@ class VideoSystems:
         )
 
         fps_right = self._save_time_stamps(
-            log_path=self._data_logger.output_directory.joinpath("102_log.npz"),
+            log_path=self._data_logger.output_directory.joinpath("103_log.npz"),
             output_file=output_directory / "right_camera_timestamps.feather",
         )
 

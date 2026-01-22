@@ -89,10 +89,6 @@ def run_experiment() -> None:
                     valve_right_active = True
                     _once = True
                     console.echo("Task opens.", level=LogLevel.SUCCESS)
-            elif keyboard.is_pressed("p"):
-                valve_left_active = False
-                valve_right_active = False
-                console.echo("Task closes.", level=LogLevel.SUCCESS)
 
             # Check if valve delay period has ended
             if valve_delay_active and valve_delay_timer.elapsed >= 500:
