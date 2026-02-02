@@ -13,7 +13,7 @@ from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 _REWARD_VOLUME = np.float64(10)  # 10uL
 _EXPERIMENT_DIR = Path(
-    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward\\2026Jan_AgRP\\raw_data"
+    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\0.1M_sucrose_reward\\2026Feb_AgRP\\raw_data"
     )
 
 
