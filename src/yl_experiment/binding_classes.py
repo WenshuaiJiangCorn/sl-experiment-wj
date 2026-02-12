@@ -20,7 +20,7 @@ from ataraxis_data_structures import DataLogger
 
 # Deliver 15uL of water based on linear track calibration data
 # The actual delivery amount in the training chamber it is ~10uL
-_TRAINING_WATER = np.float64(15)
+_TRAINING_WATER = np.float64(10)
 _TESTING_WATER = np.float64(10)
 
 
@@ -46,7 +46,7 @@ class VideoSystems:
             frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.FASTER,
+            encoder_speed_preset=EncoderSpeedPresets.FASTEST,
             output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
@@ -62,7 +62,7 @@ class VideoSystems:
             frame_height=360,
             color=False,  # Acquires images in MONOCHROME mode
             video_encoder=VideoEncoders.H264,  # Uses H264 CPU video encoder.
-            encoder_speed_preset=EncoderSpeedPresets.FASTER,
+            encoder_speed_preset=EncoderSpeedPresets.FASTEST,
             output_pixel_format=OutputPixelFormats.YUV420,
             quantization_parameter=25,  # Increments the default qp parameter to reflect using the H264 encoder.
         )
