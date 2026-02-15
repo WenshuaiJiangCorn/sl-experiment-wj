@@ -39,18 +39,18 @@ _VALVE_CALIBRAZTION_COUNT = np.uint16(200)  # The of calibration pulses to use a
 
 # Maps right valve pulse durations in microseconds to the corresponding dispensed volume of fluid in microliters.
 _RIGHT_VALVE_CALIBRATION_DATA = (
-    (15000, 1.18),  # 15 ms dispenses 1.18 uL of fluid.
-    (30000, 3.72),
-    (45000, 7.21),
-    (60000, 11.44),
+    (15000, 1.01),  # 15 ms dispenses 1.18 uL of fluid.
+    (30000, 3.58),
+    (45000, 6.96),
+    (60000, 10.55),
 )
 
 # Same as above, but for the left valve
 _LEFT_VALVE_CALIBRATION_DATA = (
-    (15000, 0.94),
-    (30000, 3.87),
-    (45000, 7.13),
-    (60000, 10.88),
+    (15000, 1.01),
+    (30000, 3.29),
+    (45000, 6.41),
+    (60000, 9.68),
 )
 
 # Lick module calibration parameters

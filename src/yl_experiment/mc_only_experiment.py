@@ -5,7 +5,6 @@ import numpy as np
 import keyboard
 from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from binding_classes import VideoSystems
 from data_processing import process_microcontroller_log
 from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
@@ -13,14 +12,16 @@ from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 _REWARD_VOLUME = np.float64(10)  # 10uL
 _EXPERIMENT_DIR = Path(
-    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward\\2026Jan_AgRP\\raw_data"
+    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\lickometer_test\\drifting_test"
     )
 
 
-def run_experiment() -> None:
+def run_test_experiment() -> None:
     """Initializes, manages, and terminates an experiment runtime cycle in the Yapici lab.
     The experiment starts with a 8 minutes acclimation period, experimenter should attach fiber
     and let the animal acclimates to the experiment arena during this period.
+
+    No video system is used to lower CPU load, test if photometry drifting can be observed without the video system.
 
     Task opens after 8 minutes. Press 'q' to terminate the process.
     """
@@ -29,12 +30,10 @@ def run_experiment() -> None:
 
     data_logger = DataLogger(output_directory=output_dir, instance_name="linear_track")
     mc = AMCInterface(data_logger=data_logger)
-    vs = VideoSystems(data_logger=data_logger, output_directory=output_dir)
     visualizer = BehaviorVisualizer()
 
     try:
         data_logger.start()  # Has to be done before starting any data-generation processes
-        vs.start()
 
         # Start the microcontroller, execute reward delivery logic
         mc.start()
@@ -124,7 +123,6 @@ def run_experiment() -> None:
         total_volume = mc.dispensed_volume()  # Store total dispensed volume before stopping the microcontroller
         console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
-        vs.stop()
         mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
         mc.stop()
         visualizer.close()
@@ -148,7 +146,6 @@ def run_experiment() -> None:
         process_microcontroller_log(data_logger=data_logger, microcontroller=mc, output_directory=processed_dir)
 
         # Extract and save video frame timestamps
-        vs.extract_video_time_stamps(output_directory=processed_dir)
 
 
 if __name__ == "__main__":
@@ -164,4 +161,4 @@ if __name__ == "__main__":
     ensure_directory_exists(output_dir)
 
     # Run experiment
-    run_experiment()
+    run_test_experiment()
