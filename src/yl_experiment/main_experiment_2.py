@@ -11,9 +11,9 @@ from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
-_REWARD_VOLUME = np.float64(10)  # 10uL
-_EXPERIMENT_DIR = Path(
-    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\0.1M_sucrose_reward\\2026Feb_AgRP\\raw_data"
+REWARD_VOLUME = np.float64(10)  # 10uL
+EXPERIMENT_DIR = Path(
+    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\0.10_percecnt_sucrose\\2026Feb_DAT\\raw_data"
     )
 
 
@@ -101,17 +101,17 @@ def run_experiment() -> None:
                 valve_triggered_side = None
 
             if keyboard.is_pressed("e"):
-                mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                mc.left_valve.dispense_volume(volume=REWARD_VOLUME)
                 visualizer.add_left_valve_event()
 
             if keyboard.is_pressed("r"):
-                mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                mc.right_valve.dispense_volume(volume=REWARD_VOLUME)
                 visualizer.add_right_valve_event()
 
             if lick_left > prev_lick_left:
                 visualizer.add_left_lick_event()
                 if valve_left_active:
-                    mc.left_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    mc.left_valve.dispense_volume(volume=REWARD_VOLUME)
                     visualizer.add_left_valve_event()
 
                     valve_left_active = False
@@ -123,7 +123,7 @@ def run_experiment() -> None:
             if lick_right > prev_lick_right:
                 visualizer.add_right_lick_event()
                 if valve_right_active:
-                    mc.right_valve.dispense_volume(volume=_REWARD_VOLUME)
+                    mc.right_valve.dispense_volume(volume=REWARD_VOLUME)
                     visualizer.add_right_valve_event()
 
                     valve_left_active = False
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     exp_day = f"{exp_day}_{date}"
 
     # Create output directory
-    output_dir = _EXPERIMENT_DIR / mouse / exp_day
+    output_dir = EXPERIMENT_DIR / mouse / exp_day
     ensure_directory_exists(output_dir)
 
     # Run experiment
