@@ -13,7 +13,7 @@ from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 REWARD_VOLUME = np.float64(10)  # 10uL
 EXPERIMENT_DIR = Path(
-    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\10_percecnt_sucrose\\2026Mar_DAT_starved\\raw_data"
+    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\water_reward\\2026Mar_DAT\\raw_data"
     )
 
 
@@ -184,6 +184,15 @@ if __name__ == "__main__":
 
     # Create output directory
     output_dir = EXPERIMENT_DIR / mouse / exp_day
+    if output_dir.exists():
+        console.echo(f"Output directory {output_dir} already exists. Data may be overwritten.", level=LogLevel.WARNING)
+        continuation = input("Do you still want to continue? (y/n): ").lower()
+        if continuation != "y":
+            console.echo("Experiment aborted.", level=LogLevel.INFO)
+            exit()
+        else:
+            console.echo(f"Output directory {output_dir} has been overwritten.", level=LogLevel.INFO)
+
     ensure_directory_exists(output_dir)
 
     # Run experiment
