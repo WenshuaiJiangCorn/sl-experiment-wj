@@ -349,7 +349,7 @@ class LinearTrackFunctions:
                     break
 
         finally:
-            total_volume = delivery_num * 11  # Convert to actual delivered volume in uL
+            total_volume = self.mc.dispensed_volume()  
             self.vs._right_camera.stop()  # Stop only the right camera
             self.visualizer.close()
             self._stop()
