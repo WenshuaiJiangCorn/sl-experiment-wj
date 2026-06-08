@@ -13,7 +13,7 @@ from ataraxis_data_structures import DataLogger, assemble_log_archives
 
 REWARD_VOLUME = np.float64(10)  # 10uL
 EXPERIMENT_DIR = Path(
-    "C:\\Users\\yapici\\Dropbox\\Research_projects\\dopamine\\mazes\\linear_track\\10_percent_sucrose\\2026Mar_DAT_sated\\raw_data"
+    "C:\\Users\\yapici\\Desktop\\lineartrack_data\\ensure\\2026June_DAT_Sated\\raw_data"
     )
 
 
@@ -91,8 +91,8 @@ def run_experiment() -> None:
                     console.echo("Task opens.", level=LogLevel.SUCCESS)
 
             # Check if valve delay period has ended
-            if valve_delay_active and valve_delay_timer.elapsed >= 500:
-                # Reactivate the opposite valve after 1 second delay
+            if valve_delay_active and valve_delay_timer.elapsed >= 1000:
+                # Reactivate the opposite valve after 1000 ms delay
                 if valve_triggered_side == "left":
                     valve_right_active = True
                 elif valve_triggered_side == "right":
@@ -103,11 +103,19 @@ def run_experiment() -> None:
             if keyboard.is_pressed("e"):
                 mc.left_valve.dispense_volume(volume=REWARD_VOLUME)
                 visualizer.add_left_valve_event()
+                valve_triggered_side = "left"
+                valve_left_active = False
+                valve_delay_active = True
+                valve_delay_timer.reset()
 
             if keyboard.is_pressed("r"):
                 mc.right_valve.dispense_volume(volume=REWARD_VOLUME)
                 visualizer.add_right_valve_event()
-
+                valve_triggered_side = "right"
+                valve_right_active = False
+                valve_delay_active = True
+                valve_delay_timer.reset()
+                
             if lick_left > prev_lick_left:
                 visualizer.add_left_lick_event()
                 if valve_left_active:

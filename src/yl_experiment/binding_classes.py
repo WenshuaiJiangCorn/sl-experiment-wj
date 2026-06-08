@@ -265,24 +265,26 @@ class LinearTrackFunctions:
             console.echo("Calibration: ended.", level=LogLevel.SUCCESS)
 
     def delivery_test(self, valve_side) -> None:
-        """Delivers a specified volume (default 15uL) of fluid 40 times (same amount as second day testing)
+        """Delivers a specified volume (default 10uL) of fluid 40 times (same amount as second day testing)
         through the specified valve to test dispensing.
         """
         valve = self._check_side(valve_side)
         timer = PrecisionTimer("s")
+        deliveries = 40
 
         try:
             self._start()
             console.echo("Delivery test starts")
-            for n in range(40):
+            for n in range(deliveries):
                 valve.dispense_volume(volume=_TRAINING_WATER)
                 if n // 10 % 1:
                     console.echo(f"{n + 1} deliveries")
                 timer.delay(3)
 
         finally:
+            total_volume = self.mc.dispensed_volume()  # Store total dispensed volume before stopping the microcontroller
             self._stop()
-            console.echo("Delivery test: ended.", level=LogLevel.SUCCESS)
+            console.echo(f"Delivery test: ended. Amount dispensed: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
 
     def _training(self, training_day) -> None:
         """Executes either first day or second day training protocol for the linear track experiment.
