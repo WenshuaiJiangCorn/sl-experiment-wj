@@ -6,7 +6,7 @@ import polars as pl
 import keyboard
 from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from microcontroller import AMCInterface
+from microcontroller import AMCInterface, _VALVE_CALIBRAZTION_COUNT
 from ataraxis_video_system import (
     VideoSystem,
     VideoEncoders,
@@ -250,14 +250,20 @@ class LinearTrackFunctions:
             console.echo("Valve: closed.", level=LogLevel.SUCCESS)
 
     def calibrate_valve(self, valve_side, calibration_pulse_duration) -> None:
-        """Calibrates the valve by sending a pulse of specified duration."""
+        """Calibrates the valve by sending a pulse of specified duration.
+        Args:
+            valve_side (str): The side of the valve to calibrate ("left" or "right").
+            calibration_pulse_duration (int): The duration of the calibration pulse in microseconds.
+        """
         valve = self._check_side(valve_side)
+        timer = PrecisionTimer("s")
 
         try:
             self._start()
-
             console.echo("Calibration starts")
             valve.calibrate(calibration_pulse_duration)
+            delay_duration = int(_VALVE_CALIBRAZTION_COUNT * (calibration_pulse_duration / 1e6)) + 1  # Total time for all calibration pulses plus a 5 second buffer
+            timer.delay(delay_duration, block=True)  # Wait for the calibration process to complete
 
         finally:
             valve.toggle(state=False)
