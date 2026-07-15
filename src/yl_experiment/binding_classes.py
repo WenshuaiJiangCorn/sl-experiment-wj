@@ -262,12 +262,15 @@ class LinearTrackFunctions:
             self._start()
             console.echo("Calibration starts")
             valve.calibrate(calibration_pulse_duration)
-            delay_duration = int(_VALVE_CALIBRAZTION_COUNT * (calibration_pulse_duration / 1e6)) + 1  # Total time for all calibration pulses plus a 5 second buffer
-            timer.delay(delay_duration, block=True)  # Wait for the calibration process to complete
+
 
         finally:
             valve.toggle(state=False)
             self._stop()
+
+            delay_duration = int(_VALVE_CALIBRAZTION_COUNT * (calibration_pulse_duration / 1e6)) + 1  # Total time for all calibration pulses plus a 5 second buffer
+            timer.delay(delay_duration, block=True)  # Wait for the calibration process to complete
+            
             console.echo("Calibration: ended.", level=LogLevel.SUCCESS)
 
     def delivery_test(self, valve_side) -> None:
