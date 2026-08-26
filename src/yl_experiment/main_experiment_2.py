@@ -3,11 +3,11 @@ from datetime import datetime
 
 import numpy as np
 import keyboard
-from visualizers import BehaviorVisualizer
+from .visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from binding_classes import VideoSystems
-from data_processing import process_microcontroller_log
-from microcontroller import AMCInterface
+from .binding_classes import VideoSystems
+from .data_processing import process_microcontroller_log
+from .microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
@@ -45,7 +45,7 @@ def run_experiment() -> None:
         # Start monitoring lickings and photometry analog input before the task opens
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
-        mc.analog_input.check_state()
+        mc.sine_wave.start_wave()
 
         # Initialize the timers
         acclimation_timer = PrecisionTimer("s")
@@ -148,7 +148,7 @@ def run_experiment() -> None:
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                mc.analog_input.reset_command_queue()
+                mc.sine_wave.stop_wave()
                 break
 
     finally:

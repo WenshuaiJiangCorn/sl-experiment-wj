@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "communication@ataraxis": true,
+    "video@ataraxis": true
+  }
+}

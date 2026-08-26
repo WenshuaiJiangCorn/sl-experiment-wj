@@ -43,7 +43,7 @@ def run_test_experiment() -> None:
         # Start monitoring lickings and photometry analog input before the task opens
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
-        mc.analog_input.check_state()
+        mc.sine_wave.start_wave()
 
         # Initialize the timers
         acclimation_timer = PrecisionTimer("s")
@@ -116,7 +116,7 @@ def run_test_experiment() -> None:
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                mc.analog_input.reset_command_queue()
+                mc.sine_wave.stop_wave()
                 break
 
     finally:

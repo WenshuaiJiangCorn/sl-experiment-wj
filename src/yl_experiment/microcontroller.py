@@ -28,6 +28,7 @@ _FIVE_MICROLITERS = np.float64(5)
 
 # Microcontroller parameters
 _CONTROLLED_ID = np.uint8(111)
+_CONTROLLER_NAME = "Linear Track Controller"
 _CONTROLLER_PORT = "COM3"
 _CONTROLLER_BUFFER_SIZE = 8192
 _CONTROLLER_BAUDRATE = 115200
@@ -96,6 +97,20 @@ _ANALOG_AVERAGING_POOL = np.uint8(2)
 # here we set it to 100Hz sampling rate.
 _ANALOG_POLLING_DELAY = np.uint32(16600)
 
+# Sine module output parameters
+# The number of lookup-table samples used to reconstruct one period of the wave. Higher values produce a smoother
+# wave, at the cost of requiring a proportionally shorter per-sample delay for the same frequency.
+_SINE_DEFAULT_SAMPLE_COUNT = np.uint16(200)
+
+# In 12-bit DAC units (0-4095). The peak deviation from the offset.
+_SINE_DEFAULT_AMPLITUDE = np.uint16(2047)
+
+# In 12-bit DAC units (0-4095). The DAC value that corresponds to the sine wave's zero level.
+_SINE_DEFAULT_OFFSET = np.uint16(2048)
+
+# The frequency, in Hz, of the sine wave output by the SineModule during experiment runtimes.
+_SINE_FREQUENCY = np.float64(5.0)
+
 
 class ModuleTypeCodes(IntEnum):
     """Stores the module type (family) codes used by the hardware modules supported by this library version."""
@@ -103,6 +118,7 @@ class ModuleTypeCodes(IntEnum):
     VALVE_MODULE = 1
     LICK_MODULE = 2
     ANALOG_MODULE = 3
+    SINE_MODULE = 4
 
 
 class _ValveStateCodes(IntEnum):
@@ -119,6 +135,48 @@ class _LickStateCodes(IntEnum):
     VOLTAGE_READOUT_CHANGED = 51
 
 
+class _SineStateCodes(IntEnum):
+    """Stores the message state codes used by the SineModule instances that require online processing at runtime."""
+
+    SAMPLE_SET = 51
+    STOPPED = 52
+
+
+def fit_valve_calibration(
+    valve_calibration_data: tuple[tuple[int | float, int | float], ...],
+) -> tuple[np.float64, np.float64]:
+    """Fits the power-law model that converts valve pulse durations into dispensed fluid volumes.
+
+    Notes:
+        Our calibration data suggests that the valve performs in a non-linear fashion and is better calibrated using
+        the power law, rather than a linear fit.
+
+    Args:
+        valve_calibration_data: A tuple of tuples that contains the data required to map pulse duration to delivered
+            fluid volume. Each sub-tuple should contain the integer that specifies the pulse duration in microseconds
+            and a float that specifies the delivered fluid volume in microliters.
+
+    Returns:
+        The scale coefficient and the nonlinearity exponent of the fitted power-law equation, in that order.
+    """
+    # Extracts pulse durations and fluid volumes into separate arrays
+    pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
+    fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
+
+    def power_law_model(pulse_duration: Any, a: Any, b: Any, /) -> Any:
+        return a * np.power(pulse_duration, b)
+
+    # Fits the power-law model to the input calibration data
+    # noinspection PyTupleAssignmentBalance
+    params, _ = curve_fit(f=power_law_model, xdata=pulse_durations, ydata=fluid_volumes)
+    scale_coefficient, nonlinearity_exponent = params
+
+    return (
+        np.round(a=np.float64(scale_coefficient), decimals=8),
+        np.round(a=np.float64(nonlinearity_exponent), decimals=8),
+    )
+
+
 class ValveInterface(ModuleInterface):
     """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
 
@@ -130,6 +188,8 @@ class ValveInterface(ModuleInterface):
 
     Args:
         module_id: The unique identifier of the hardware module instance managed by this interface.
+        name: The colloquial human-readable name of the hardware module instance managed by this interface. The name is
+            recorded in the microcontroller manifest and is used to identify the module during log processing.
         valve_calibration_data: A tuple of tuples that contains the data required to map pulse duration to delivered
             fluid volume. Each sub-tuple should contain the integer that specifies the pulse duration in microseconds
             and a float that specifies the delivered fluid volume in microliters.
@@ -156,6 +216,7 @@ class ValveInterface(ModuleInterface):
     def __init__(
         self,
         module_id: np.uint8,
+        name: str,
         valve_calibration_data: tuple[tuple[int | float, int | float], ...],
         *,
         debug: bool = False,
@@ -174,26 +235,15 @@ class ValveInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(ModuleTypeCodes.VALVE_MODULE),
             module_id=module_id,
+            name=name,
             data_codes=data_codes,
             error_codes=error_codes,
         )
 
-        # Extracts pulse durations and fluid volumes into separate arrays
-        pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
-        fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
-
-        # Defines the power-law model. Our calibration data suggests that the Valve performs in a non-linear fashion
-        # and is better calibrated using the power law, rather than a linear fit
-        def power_law_model(pulse_duration: Any, a: Any, b: Any, /) -> Any:
-            return a * np.power(pulse_duration, b)
-
-        # Fits the power-law model to the input calibration data and saves the fit parameters and covariance matrix to
-        # class attributes
-        # noinspection PyTupleAssignmentBalance
-        params, _ = curve_fit(f=power_law_model, xdata=pulse_durations, ydata=fluid_volumes)
-        scale_coefficient, nonlinearity_exponent = params
-        self._scale_coefficient: np.float64 = np.round(a=np.float64(scale_coefficient), decimals=8)
-        self._nonlinearity_exponent: np.float64 = np.round(a=np.float64(nonlinearity_exponent), decimals=8)
+        # Fits the power-law model that translates valve pulse durations into dispensed fluid volumes.
+        self._scale_coefficient, self._nonlinearity_exponent = fit_valve_calibration(
+            valve_calibration_data=valve_calibration_data
+        )
 
         # Precreates a shared memory array used to track and share valve state data. Index 0 tracks the total amount of
         # fluid dispensed by the valve during runtime.
@@ -341,6 +391,8 @@ class LickInterface(ModuleInterface):
 
     Args:
         module_id: The unique identifier for the LickModule instance.
+        name: The colloquial human-readable name of the hardware module instance managed by this interface. The name is
+            recorded in the microcontroller manifest and is used to identify the module during log processing.
         debug: A boolean flag that configures the interface to dump certain data received from the microcontroller into
             the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
@@ -355,7 +407,7 @@ class LickInterface(ModuleInterface):
         _once: Ensures that the sensor detection configuration is applied exactly once per instance life cycle.
     """
 
-    def __init__(self, module_id: np.uint8, *, debug: bool = False) -> None:
+    def __init__(self, module_id: np.uint8, name: str, *, debug: bool = False) -> None:
         data_codes: set[np.uint8] = {np.uint8(51)}  # kChanged
         self._debug: bool = debug
 
@@ -363,6 +415,7 @@ class LickInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(ModuleTypeCodes.LICK_MODULE),
             module_id=module_id,
+            name=name,
             data_codes=data_codes,
             error_codes=None,
         )
@@ -474,18 +527,21 @@ class LickInterface(ModuleInterface):
 
 
 class AnalogInterface(ModuleInterface):
-    """Interfaces with AnalogModule instances running on Ataraxis MicroControllers.
+    """Interfaces with AnalogModule instances running on Ataraxis MicroControllers. Stores the input data received from
+    the analog input pin and makes it available to other processes through a SharedMemoryArray.
 
 
     Args:
         module_id: The unique identifier for the AnalogModule instance.
+        name: The colloquial human-readable name of the hardware module instance managed by this interface. The name is
+            recorded in the microcontroller manifest and is used to identify the module during log processing.
 
     Attributes:
         _volt_per_adc_unit: Stores the conversion factor to translate the raw analog values recorded by the 12-bit ADC
             into voltage in Volts.
     """
 
-    def __init__(self, module_id: np.uint8, debug: bool = False) -> None:
+    def __init__(self, module_id: np.uint8, name: str, debug: bool = False) -> None:
         data_codes: set[np.uint8] = {np.uint8(51)}  # kNonZero
         self._debug: bool = debug
 
@@ -493,6 +549,7 @@ class AnalogInterface(ModuleInterface):
         super().__init__(
             module_type=np.uint8(ModuleTypeCodes.ANALOG_MODULE),  # ModuleTypeCodes.ANALOG_MODULE
             module_id=module_id,
+            name=name,
             data_codes=data_codes,
             error_codes=None,
         )
@@ -544,6 +601,87 @@ class AnalogInterface(ModuleInterface):
         self.send_command(command=np.uint8(1), noblock=_BOOL_FALSE, repetition_delay=repetition_delay)
 
 
+class SineInterface(ModuleInterface):
+    """Interfaces with SineModule instances running on Ataraxis MicroControllers.
+
+    SineModule instances output a sine wave analog voltage through an MCP4725 I2C DAC, driven by the microcontroller
+    stepping through a lookup table of precomputed samples. This is used to feed a periodic analog reference signal
+    (e.g. to a Doric photometry console) directly from the microcontroller, without relying on PWM + RC filtering.
+
+    Args:
+        module_id: The unique identifier for the SineModule instance.
+        name: The colloquial human-readable name of the hardware module instance managed by this interface. The name
+            is recorded in the microcontroller manifest and is used to identify the module during log processing.
+        debug: A boolean flag that configures the interface to dump certain data received from the microcontroller
+            into the terminal. This is used during debugging and should be disabled for most runtimes.
+
+    Attributes:
+        _debug: Stores the debug flag.
+    """
+
+    def __init__(self, module_id: np.uint8, name: str, debug: bool = False) -> None:
+        data_codes: set[np.uint8] = {np.uint8(_SineStateCodes.SAMPLE_SET), np.uint8(_SineStateCodes.STOPPED)}
+        self._debug: bool = debug
+
+        super().__init__(
+            module_type=np.uint8(ModuleTypeCodes.SINE_MODULE),
+            module_id=module_id,
+            name=name,
+            data_codes=data_codes,
+            error_codes=None,
+        )
+
+    def initialize_remote_assets(self) -> None:
+        """This interface does not use any remote (cross-process) assets."""
+
+    def terminate_remote_assets(self) -> None:
+        """This interface does not use any remote (cross-process) assets."""
+
+    def process_received_data(self, message: ModuleData | ModuleState) -> None:
+        """Processes incoming data sent by the module to the PC."""
+        if self._debug and message.event == _SineStateCodes.SAMPLE_SET:
+            console.echo(f"Sine DAC signal: {message.data_object}")
+
+    def start_wave(
+        self,
+        frequency: np.float64 = _SINE_FREQUENCY,
+        amplitude: np.uint16 = _SINE_DEFAULT_AMPLITUDE,
+        offset: np.uint16 = _SINE_DEFAULT_OFFSET,
+        sample_count: np.uint16 = _SINE_DEFAULT_SAMPLE_COUNT,
+    ) -> None:
+        """Configures and starts outputting a sine wave at the requested frequency.
+
+        Args:
+            frequency: The desired wave frequency, in Hz. Defaults to the project-wide sine output frequency
+                (currently 5 Hz).
+            amplitude: The peak deviation from offset, in 12-bit DAC units (0-4095).
+            offset: The DAC value that corresponds to the sine wave's zero level, in 12-bit DAC units (0-4095).
+            sample_count: The number of lookup-table samples used to reconstruct one wave period. Higher values
+                produce a smoother wave, at the cost of requiring a proportionally shorter per-sample delay to
+                maintain the same frequency.
+        """
+        if frequency <= 0:
+            message = f"Unable to start the SineModule {self._module_id} wave: frequency must be positive."
+            console.error(message=message, error=ValueError)
+
+        # Configures the wave shape (sample_count, amplitude, offset) before starting the wave.
+        self.send_parameters(parameter_data=(sample_count, amplitude, offset))
+
+        # Computes the per-sample delay, in microseconds, needed to reproduce the requested frequency, given the
+        # number of samples used to represent one period.
+        cycle_delay = np.uint32(round(1_000_000 / (float(frequency) * float(sample_count))))
+
+        # Queues kNextSample as a recurrent command. Each activation advances the module by one lookup-table sample,
+        # so repeating it every cycle_delay microseconds reproduces the requested wave frequency.
+        self.send_command(command=np.uint8(1), noblock=_BOOL_FALSE, repetition_delay=cycle_delay)
+
+    def stop_wave(self) -> None:
+        """Stops the sine wave output and resets the module's phase index."""
+        # Cancels the recurring kNextSample command queued by start_wave() before issuing the one-off kStop command.
+        self.reset_command_queue()
+        self.send_command(command=np.uint8(2), noblock=_BOOL_FALSE, repetition_delay=_ZERO_LONG)
+
+
 class AMCInterface:
     """Interfaces with all Ataraxis Micro Controller (AMC) interfaces used to acquire non-video behavior data.
 
@@ -572,28 +710,33 @@ class AMCInterface:
         # Module interfaces:
         self.left_valve = ValveInterface(
             module_id=np.uint8(1),
+            name="Left Valve",
             valve_calibration_data=_LEFT_VALVE_CALIBRATION_DATA,
             debug=False,
         )
 
         self.right_valve = ValveInterface(
             module_id=np.uint8(2),
+            name="Right Valve",
             valve_calibration_data=_RIGHT_VALVE_CALIBRATION_DATA,
             debug=False,
         )
 
         self.left_lick_sensor = LickInterface(
             module_id=np.uint8(1),
+            name="Left Lick Sensor",
             debug=False,
         )
 
         self.right_lick_sensor = LickInterface(
             module_id=np.uint8(2),
+            name="Right Lick Sensor",
             debug=False,
         )
 
-        self.analog_input = AnalogInterface(
+        self.sine_wave = SineInterface(
             module_id=np.uint8(1),
+            name="Sine Wave Generator",
             debug=False,
         )
 
@@ -602,12 +745,13 @@ class AMCInterface:
             self.right_valve,
             self.left_lick_sensor,
             self.right_lick_sensor,
-            self.analog_input,
+            self.sine_wave,
         )
 
         # Main interface:
         self._controller: MicroControllerInterface = MicroControllerInterface(
             controller_id=_CONTROLLED_ID,
+            name=_CONTROLLER_NAME,
             buffer_size=_CONTROLLER_BUFFER_SIZE,
             port=_CONTROLLER_PORT,
             data_logger=data_logger,

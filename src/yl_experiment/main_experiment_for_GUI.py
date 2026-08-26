@@ -46,7 +46,7 @@ def run_experiment(output_dir: Path, reward_volume: np.float64, control: Experim
 
         mc.left_lick_sensor.check_state()
         mc.right_lick_sensor.check_state()
-        mc.analog_input.check_state()
+        mc.sine_wave.start_wave()
 
         acclimation_timer = PrecisionTimer("s")
         cycle_timer = PrecisionTimer("ms")
@@ -137,7 +137,7 @@ def run_experiment(output_dir: Path, reward_volume: np.float64, control: Experim
                 console.echo("Stopping the experiment.")
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                mc.analog_input.reset_command_queue()
+                mc.sine_wave.stop_wave()
                 break
 
     finally:

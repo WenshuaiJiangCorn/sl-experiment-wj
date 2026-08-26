@@ -39,6 +39,7 @@ if __name__ == "__main__":
     left_camera = VideoSystem(
         system_id=np.uint8(101),
         data_logger=logger,
+        name="Left Camera",
         output_directory=output_directory,
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=0,  # Uses the default system webcam
@@ -55,6 +56,7 @@ if __name__ == "__main__":
     right_camera = VideoSystem(
         system_id=np.uint8(103),
         data_logger=logger,
+        name="Right Camera",
         output_directory=output_directory,
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=1,  # Uses the default system webcam
@@ -71,6 +73,7 @@ if __name__ == "__main__":
     top_camera = VideoSystem(
         system_id=np.uint8(102),
         data_logger=logger,
+        name="Top Camera",
         output_directory=output_directory,
         camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
         camera_index=2,  # Uses the default system webcam
