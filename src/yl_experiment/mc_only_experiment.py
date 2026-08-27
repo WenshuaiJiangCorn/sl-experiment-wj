@@ -116,14 +116,23 @@ def run_test_experiment() -> None:
                 # Stops monitoring lick sensors before entering the termination clause
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                mc.sine_wave.stop_wave()
                 break
 
     finally:
-        total_volume = mc.dispensed_volume()  # Store total dispensed volume before stopping the microcontroller
-        console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+        # The microcontroller assets below only exist once the interface has started. Guarding on this keeps
+        # a failure raised during startup from triggering a second, unrelated exception here, which would
+        # bury the original error under the traceback of the cleanup that followed it.
+        if mc.started:
+            # Stops the sine wave on every exit path, not just the 'q' key press. The falling edge this
+            # emits marks the end of the wave in both this runtime's log and any external recording of the
+            # wave, which allows the alignment between the two to be cross-checked end to end.
+            mc.sine_wave.stop_wave()
 
-        mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
+            total_volume = mc.dispensed_volume()  # Store dispensed volume before stopping the microcontroller
+            console.echo(f"Total dispensed volume: {total_volume:.2f} uL", level=LogLevel.SUCCESS)
+
+            mc.disconnect_to_smh()  # Disconnects from SharedMemoryArray for all modules
+
         mc.stop()
         visualizer.close()
         data_logger.stop()  # Data logger needs to be stopped last

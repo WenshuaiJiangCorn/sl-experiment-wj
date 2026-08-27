@@ -99,8 +99,11 @@ _ANALOG_POLLING_DELAY = np.uint32(16600)
 
 # Sine module output parameters
 # The number of lookup-table samples used to reconstruct one period of the wave. Higher values produce a smoother
-# wave, at the cost of requiring a proportionally shorter per-sample delay for the same frequency.
-_SINE_DEFAULT_SAMPLE_COUNT = np.uint16(200)
+# wave, at the cost of requiring a proportionally shorter per-sample delay for the same frequency. The Doric console
+# decimates its analog inputs without an anti-aliasing filter, so the spurs the DAC's stepwise output generates at
+# (k * sample_count +/- 1) * frequency fold back into the recorded band. This value is chosen to keep the nearest
+# folded spur ~2.4 Hz away from the wave's fundamental, at 0.83% of its amplitude.
+_SINE_DEFAULT_SAMPLE_COUNT = np.uint16(40)
 
 # In 12-bit DAC units (0-4095). The peak deviation from the offset.
 _SINE_DEFAULT_AMPLITUDE = np.uint16(2047)
@@ -108,8 +111,15 @@ _SINE_DEFAULT_AMPLITUDE = np.uint16(2047)
 # In 12-bit DAC units (0-4095). The DAC value that corresponds to the sine wave's zero level.
 _SINE_DEFAULT_OFFSET = np.uint16(2048)
 
-# The frequency, in Hz, of the sine wave output by the SineModule during experiment runtimes.
-_SINE_FREQUENCY = np.float64(5.0)
+# The number of wave periods between the blanking gaps used to make the emitted wave aperiodic. At the frequency
+# used below, this places a gap roughly every 3 minutes, which yields ~14 gaps over a 42-minute session.
+_SINE_DEFAULT_GAP_INTERVAL = np.uint16(1278)
+
+# The frequency, in Hz, of the sine wave output by the SineModule during experiment runtimes. The Doric console
+# samples its analog inputs at 60.2410 Hz and drives its LEDs with square waves at 208.616 and 572.205 Hz, whose
+# harmonics fold into the recorded band because the console's anti-aliasing filter is disabled. This value sits in
+# the widest gap in that folded comb (between the 5.619 and 8.909 Hz folds), leaving 8.5 samples per wave period.
+_SINE_FREQUENCY = np.float64(7.1)
 
 
 class ModuleTypeCodes(IntEnum):
@@ -648,24 +658,33 @@ class SineInterface(ModuleInterface):
         amplitude: np.uint16 = _SINE_DEFAULT_AMPLITUDE,
         offset: np.uint16 = _SINE_DEFAULT_OFFSET,
         sample_count: np.uint16 = _SINE_DEFAULT_SAMPLE_COUNT,
+        gap_interval: np.uint16 = _SINE_DEFAULT_GAP_INTERVAL,
     ) -> None:
         """Configures and starts outputting a sine wave at the requested frequency.
 
+        Notes:
+            Unless gap insertion is disabled, the module periodically holds its output at the wave's zero level for
+            a whole number of periods. Each of these blanking gaps runs one period longer than the gap before it, so
+            every gap can be identified from its own duration, which makes the emitted wave aperiodic and allows a
+            separate recording of the wave to be aligned to this module's log without period ambiguity.
+
         Args:
             frequency: The desired wave frequency, in Hz. Defaults to the project-wide sine output frequency
-                (currently 5 Hz).
+                (currently 7.1 Hz).
             amplitude: The peak deviation from offset, in 12-bit DAC units (0-4095).
             offset: The DAC value that corresponds to the sine wave's zero level, in 12-bit DAC units (0-4095).
             sample_count: The number of lookup-table samples used to reconstruct one wave period. Higher values
                 produce a smoother wave, at the cost of requiring a proportionally shorter per-sample delay to
                 maintain the same frequency.
+            gap_interval: The number of wave periods between blanking gaps. Set to 0 to emit an uninterrupted wave.
         """
         if frequency <= 0:
             message = f"Unable to start the SineModule {self._module_id} wave: frequency must be positive."
             console.error(message=message, error=ValueError)
 
-        # Configures the wave shape (sample_count, amplitude, offset) before starting the wave.
-        self.send_parameters(parameter_data=(sample_count, amplitude, offset))
+        # Configures the wave shape (sample_count, amplitude, offset) and the blanking-gap schedule (gap_interval)
+        # before starting the wave.
+        self.send_parameters(parameter_data=(sample_count, amplitude, offset, gap_interval))
 
         # Computes the per-sample delay, in microseconds, needed to reproduce the requested frequency, given the
         # number of samples used to represent one period.
@@ -676,7 +695,7 @@ class SineInterface(ModuleInterface):
         self.send_command(command=np.uint8(1), noblock=_BOOL_FALSE, repetition_delay=cycle_delay)
 
     def stop_wave(self) -> None:
-        """Stops the sine wave output and resets the module's phase index."""
+        """Stops the sine wave output and resets the module's phase index and blanking-gap schedule."""
         # Cancels the recurring kNextSample command queued by start_wave() before issuing the one-off kStop command.
         self.reset_command_queue()
         self.send_command(command=np.uint8(2), noblock=_BOOL_FALSE, repetition_delay=_ZERO_LONG)
@@ -828,6 +847,18 @@ class AMCInterface:
         total_volume = left_volume + right_volume
 
         return total_volume
+
+    @property
+    def started(self) -> bool:
+        """Returns True if the microcontroller communication process is currently running.
+
+        Notes:
+            All module interface methods require the communication process to be running. Runtimes that tear down
+            this class from a 'finally' clause use this property to skip the teardown when the class failed to
+            start, as calling into the module interfaces at that point raises an exception that masks the error
+            that caused the runtime to terminate.
+        """
+        return self._started
 
     @property
     def controller_id(self) -> int:

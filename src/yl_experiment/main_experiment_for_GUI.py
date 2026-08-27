@@ -137,14 +137,29 @@ def run_experiment(output_dir: Path, reward_volume: np.float64, control: Experim
                 console.echo("Stopping the experiment.")
                 mc.left_lick_sensor.reset_command_queue()
                 mc.right_lick_sensor.reset_command_queue()
-                mc.sine_wave.stop_wave()
                 break
 
     finally:
-        total_volume = mc.dispensed_volume()
+        # The microcontroller assets below only exist once the interface has started. Guarding on this keeps
+        # a failure raised during startup from triggering a second, unrelated exception here, which would
+        # bury the original error under the traceback of the cleanup that followed it.
+        mc_started = mc.started
+
+        if mc_started:
+            # Stops the sine wave on every exit path, not just the 'q' key press. The falling edge this
+            # emits marks the end of the wave in both this runtime's log and any external recording of the
+            # wave, which allows the alignment between the two to be cross-checked end to end.
+            mc.sine_wave.stop_wave()
+
+            total_volume = mc.dispensed_volume()
+        else:
+            total_volume = np.float64(0)
 
         vs.stop()
-        mc.disconnect_to_smh()
+
+        if mc_started:
+            mc.disconnect_to_smh()
+
         mc.stop()
         visualizer.close()
         data_logger.stop()
