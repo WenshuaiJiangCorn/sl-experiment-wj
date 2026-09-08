@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 from numpy.typing import NDArray
-from .microcontroller import AMCInterface, ModuleTypeCodes, _SineStateCodes
+from microcontroller import AMCInterface, ModuleTypeCodes, _SineStateCodes
 from ataraxis_data_structures import DataLogger
 from ataraxis_communication_interface import (
     EXTRACTION_CONFIGURATION_FILENAME,

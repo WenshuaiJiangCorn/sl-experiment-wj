@@ -4,9 +4,9 @@ import tempfile
 import numpy as np
 import polars as pl
 import keyboard
-from .visualizers import BehaviorVisualizer
+from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from .microcontroller import AMCInterface, _VALVE_CALIBRAZTION_COUNT
+from microcontroller import AMCInterface, _VALVE_CALIBRAZTION_COUNT
 from ataraxis_video_system import (
     VideoSystem,
     VideoEncoders,

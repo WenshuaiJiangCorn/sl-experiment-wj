@@ -3,11 +3,11 @@ from datetime import datetime
 
 import numpy as np
 import keyboard
-from .visualizers import BehaviorVisualizer
+from visualizers import BehaviorVisualizer
 from ataraxis_time import PrecisionTimer
-from .binding_classes import VideoSystems
-from .data_processing import process_microcontroller_log
-from .microcontroller import AMCInterface
+from binding_classes import VideoSystems
+from data_processing import process_microcontroller_log
+from microcontroller import AMCInterface
 from ataraxis_base_utilities import LogLevel, console, ensure_directory_exists
 from ataraxis_data_structures import DataLogger, assemble_log_archives
 
