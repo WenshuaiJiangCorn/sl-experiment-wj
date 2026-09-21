@@ -23,8 +23,8 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from .data_processing import _parse_lick_data, _parse_valve_data, _parse_analog_data, _read_module_partition
-from .microcontroller import (
+from ..data_processing import _parse_lick_data, _parse_valve_data, _parse_analog_data, _read_module_partition
+from ..microcontroller import (
     _CONTROLLED_ID,
     _CONTROLLER_NAME,
     _LICK_DETECTION_THRESHOLD,
