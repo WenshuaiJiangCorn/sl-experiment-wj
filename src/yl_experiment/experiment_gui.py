@@ -13,7 +13,7 @@ from main_experiment_for_GUI import ExperimentControl, run_experiment
 
 
 
-DEFAULT_EXPERIMENT_DIR = "C:\\Users\\yapici\\Desktop\\lineartrack_data\\batch_2\\ensure\\2026Sept_DAT_FoodRestricted\\raw_data"
+DEFAULT_EXPERIMENT_DIR = "C:\\Users\\yapici\\Desktop\\lineartrack_data\\batch_2\\ensure\\2026Sept_DAT_adlib\\raw_data"
 DEFAULT_REWARD_VOLUME = "10"
 DEFAULT_CALIBRATION_PULSE = "15000"
 
