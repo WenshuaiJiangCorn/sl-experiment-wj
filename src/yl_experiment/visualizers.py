@@ -191,7 +191,7 @@ class BehaviorVisualizer:
         self._figure, axes = plt.subplots(
             2,
             2,
-            figsize=(12, 6),
+            figsize=(10, 4),
             sharex=True,
             num="Runtime Behavior Visualizer",
             gridspec_kw={"hspace": 0.3, "left": 0.15, "height_ratios": [1, 1]},
