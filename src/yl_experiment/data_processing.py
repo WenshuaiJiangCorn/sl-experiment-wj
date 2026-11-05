@@ -2,12 +2,13 @@
 
 from typing import Any
 from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
 from numpy.typing import NDArray
-from microcontroller import AMCInterface, ModuleTypeCodes, _SineStateCodes
-from ataraxis_data_structures import DataLogger
+from microcontroller import AMCInterface, ModuleTypeCodes, _SineStateCodes, fit_valve_calibration
+from ataraxis_data_structures import DataLogger, YamlConfig
 from ataraxis_communication_interface import (
     EXTRACTION_CONFIGURATION_FILENAME,
     OutputLayout,
@@ -20,6 +21,80 @@ from ataraxis_communication_interface import (
     get_event_timestamps,
     run_log_processing_pipeline,
 )
+
+
+VALVE_CALIBRATION_FILENAME = "valve_calibration.yaml"
+"""The name of the file that stores the valve calibration used during the runtime."""
+
+
+@dataclass
+class ValveCalibration:
+    """Stores the calibration of a single valve.
+
+    Notes:
+        The fitted power law is dispensed_volume_uL = scale_coefficient * pulse_duration_us ** nonlinearity_exponent.
+    """
+
+    pulse_durations_us: tuple[int, ...]
+    """The calibrated valve pulse durations, in microseconds."""
+    dispensed_volumes_uL: tuple[float, ...]
+    """The fluid volume, in microliters, dispensed by each calibrated pulse duration."""
+    scale_coefficient: float
+    """The scale coefficient (A) of the fitted power law."""
+    nonlinearity_exponent: float
+    """The nonlinearity exponent (B) of the fitted power law."""
+
+
+@dataclass
+class ValveCalibrationRecord(YamlConfig):
+    """Stores the calibration of both valves used during a runtime as a .yaml file."""
+
+    left_valve: ValveCalibration
+    """The calibration of the left valve."""
+    right_valve: ValveCalibration
+    """The calibration of the right valve."""
+
+
+def _build_valve_calibration(calibration_data: tuple[tuple[int | float, int | float], ...]) -> ValveCalibration:
+    """Packages the raw calibration data of a valve together with the power law fitted to it.
+
+    Args:
+        calibration_data: The (pulse duration in microseconds, dispensed volume in microliters) calibration pairs.
+
+    Returns:
+        The ValveCalibration instance that stores the input data and the fitted power law parameters.
+    """
+    scale_coefficient, nonlinearity_exponent = fit_valve_calibration(valve_calibration_data=calibration_data)
+    return ValveCalibration(
+        pulse_durations_us=tuple(int(pulse) for pulse, _ in calibration_data),
+        dispensed_volumes_uL=tuple(float(volume) for _, volume in calibration_data),
+        scale_coefficient=float(scale_coefficient),
+        nonlinearity_exponent=float(nonlinearity_exponent),
+    )
+
+
+def save_valve_calibration(
+    left_calibration_data: tuple[tuple[int | float, int | float], ...],
+    right_calibration_data: tuple[tuple[int | float, int | float], ...],
+    output_directory: Path,
+) -> None:
+    """Saves the calibration data of both valves, together with the power law fitted to each, as a .yaml file.
+
+    Notes:
+        The archived logs only record valve pulse durations, so the calibration is the only way to recover the
+        dispensed volumes after the calibration constants are updated for a different experiment condition.
+
+    Args:
+        left_calibration_data: The (pulse duration in microseconds, dispensed volume in microliters) calibration pairs
+            of the left valve.
+        right_calibration_data: The calibration pairs of the right valve.
+        output_directory: The path to the directory where to save the valve_calibration.yaml file.
+    """
+    record = ValveCalibrationRecord(
+        left_valve=_build_valve_calibration(calibration_data=left_calibration_data),
+        right_valve=_build_valve_calibration(calibration_data=right_calibration_data),
+    )
+    record.to_yaml(file_path=output_directory.joinpath(VALVE_CALIBRATION_FILENAME))
 
 
 def _read_module_partition(
@@ -398,6 +473,13 @@ def process_microcontroller_log(data_logger: DataLogger, microcontroller: AMCInt
     )
     config_path = output_directory.joinpath(EXTRACTION_CONFIGURATION_FILENAME)
     extraction_config.to_yaml(file_path=config_path)
+
+    # Saves the valve calibration in a separate file, as the extraction configuration is consumed by the pipeline.
+    save_valve_calibration(
+        left_calibration_data=microcontroller.left_valve.calibration_data,
+        right_calibration_data=microcontroller.right_valve.calibration_data,
+        output_directory=output_directory,
+    )
 
     # Extracts the messages of every configured module into feather files stored under the pipeline's output
     # subdirectory.

@@ -207,6 +207,7 @@ class ValveInterface(ModuleInterface):
             the terminal. This is used during debugging and system calibration and should be disabled for most runtimes.
 
     Attributes:
+        _calibration_data: Stores the raw calibration data used to fit the power law model.
         _scale_coefficient: Stores the power law scale coefficient derived from the calibration data.
         _nonlinearity_exponent: The intercept of the valve calibration curve. This is used to account for the fact that
             some valves may have a minimum open time or dispensed fluid volume, which is captured by the intercept.
@@ -249,6 +250,9 @@ class ValveInterface(ModuleInterface):
             data_codes=data_codes,
             error_codes=error_codes,
         )
+
+        # Keeps the raw calibration table so that it can be saved alongside the session data.
+        self._calibration_data: tuple[tuple[int | float, int | float], ...] = valve_calibration_data
 
         # Fits the power-law model that translates valve pulse durations into dispensed fluid volumes.
         self._scale_coefficient, self._nonlinearity_exponent = fit_valve_calibration(
@@ -367,6 +371,13 @@ class ValveInterface(ModuleInterface):
         """
         self.send_parameters(parameter_data=(pulse_duration, _VALVE_CALIBRAZTION_COUNT))
         self.send_command(command=np.uint8(4), noblock=_BOOL_FALSE, repetition_delay=_ZERO_LONG)
+
+    @property
+    def calibration_data(self) -> tuple[tuple[int | float, int | float], ...]:
+        """Returns the raw calibration data used to fit the power law model, as (pulse duration in microseconds,
+        dispensed volume in microliters) pairs.
+        """
+        return self._calibration_data
 
     @property
     def scale_coefficient(self) -> np.float64:
