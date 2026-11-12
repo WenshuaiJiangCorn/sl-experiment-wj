@@ -11,7 +11,9 @@ from ataraxis_base_utilities import ensure_directory_exists
 from main_experiment_for_GUI import ExperimentControl, run_experiment
 
 
-DEFAULT_EXPERIMENT_DIR = "C:\\Users\\yapici\\Desktop\\lineartrack_data\\05mm_acek\\2026July_DAT_Sated\\raw_data"
+
+
+DEFAULT_EXPERIMENT_DIR = "C:\\Users\\yapici\\Desktop\\lineartrack_data\\batch_2\\ensure_n_water\\2026Nov_DAT_adlib\\raw_data"
 DEFAULT_REWARD_VOLUME = "10"
 DEFAULT_CALIBRATION_PULSE = "15000"
 

@@ -38,6 +38,7 @@ class VideoSystems:
         self._left_camera = VideoSystem(
             system_id=np.uint8(101),
             data_logger=data_logger,
+            name="left_camera",
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=0,  # Uses the default system webcam
@@ -54,6 +55,7 @@ class VideoSystems:
         self._right_camera = VideoSystem(
             system_id=np.uint8(103),
             data_logger=data_logger,
+            name="right_camera",
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=1,  # Uses the default system webcam
@@ -70,6 +72,7 @@ class VideoSystems:
         self._top_camera = VideoSystem(
             system_id=np.uint8(102),
             data_logger=data_logger,
+            name="top_camera",
             output_directory=output_directory,
             camera_interface=CameraInterfaces.OPENCV,  # OpenCV interface for webcameras
             camera_index=2,  # Uses the default system webcam

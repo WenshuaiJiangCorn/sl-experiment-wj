@@ -4,10 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-target = Path(r"C:\Users\Changwoo\Dropbox\Research_projects\dopamine\mazes\linear_track\water_reward\test\test_day_20251126\processed\right_lick_sensor.feather")
+target = Path(r"C:\Users\wj76\Dropbox\Research_projects\dopamine\mazes\linear_track\ensure\2026May_DAT_FoodRestricted\raw_data\DATM14\day_3_20260527\processed\left_valve_data.feather")
 
 df = pl.read_ipc(target)
-print(df.columns)
-v = df.filter(pl.col("lick_state") == 1)
+print(df)
+#v = df.filter(pl.col("lick_state") == 1)
 
-print(v)
+#print(v)

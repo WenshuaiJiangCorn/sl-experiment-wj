@@ -35,14 +35,14 @@ classifiers = [
 
 # Runtime project dependencies. This overlaps with the 'condarun' optional list.
 dependencies = [
-    "ataraxis-video-system==2.0.0",
-    "numpy==2.2.6",
+    "ataraxis-video-system==5.1.1",
+    "numpy==2.5.2",
     "intel-cmplr-lib-rt==2025.2.0",
     "scipy==1.16.1",
-    "ataraxis-time==5.0.0",
-    "ataraxis-base-utilities==5.0.0",
-    "ataraxis-data-structures==5.0.0",
-    "ataraxis-communication-interface==4.0.1rc3",
+    "ataraxis-time==7.0.0",
+    "ataraxis-base-utilities==7.0.0",
+    "ataraxis-data-structures==7.1.0",
+    "ataraxis-communication-interface==7.1.1",
     "tqdm==4.67.1",
     "keyboard>=0,<1",
     "polars>=1,<2",
